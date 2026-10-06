@@ -1,0 +1,91 @@
+# ---- Build output ----------------------------------------------------------------------------
+build/
+.gradle/
+.cxx/
+.externalNativeBuild
+out/
+bin/
+gen/
+*.apk
+*.aab
+*.aar
+*.ap_
+*.dex
+*.class
+*.hprof
+captures/
+lint/intermediates/
+lint/generated/
+lint/outputs/
+lint/tmp/
+
+# ---- Signing and local configuration (never commit) --------------------------------------------
+*.jks
+*.keystore
+keystore.properties
+local.properties
+
+# ---- Credentials and personal files (never commit) ------------------------------------------------
+*.pem
+*.p12
+*.pfx
+*.key
+*.keys
+.env
+.env.*
+secrets.*
+google-services.json
+signing.properties
+*.psd
+report.txt
+*trace*.txt
+*trace*.state
+crash_log*
+*.bak
+*.orig
+*.rej
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- IDE and tool state --------------------------------------------------------------------------
+.idea/
+*.iml
+.vscode/
+.navigation/
+*.log
+
+# ---- Local scratch / assistant tooling -----------------------------------------------------------
+.claude/
+CLAUDE.md
+.cursor/
+.windsurf/
+.aider*
+.continue/
+.github/copilot-instructions.md
+
+# ---- Never part of this repo -----------------------------------------------------------------------
+# Game data, ROMs, saves and anything generated from them: copyrighted, never ours to distribute.
+*.gba
+*.gb
+*.gbc
+*.nds
+*.sav
+*.srm
+*.state
+*.ss[0-9]
+*.ips
+*.ups
+*.bps
+*.zip
+*.7z
+*.rar
+*.iso
+*.bin
+!gradle/wrapper/*
+gsrandroid/src/main/cpp/gsr_generated/
+# Reference art kept locally.
+icon_source/
+# Python scratch.
+__pycache__/
+*.pyc

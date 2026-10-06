@@ -1,0 +1,81 @@
+apply plugin: 'com.android.application'
+
+// Release signing: reads from keystore.properties (NOT checked into git -- see .gitignore)
+// so the actual keystore file and passwords never touch source control. Generate the keystore
+// once with keytool, create keystore.properties from keystore.properties.example, and every
+// release build type build (assembleRelease / bundleRelease) will pick it up automatically.
+// Until that file exists, release builds fall back to the debug key so local `assembleRelease`
+// test builds still work -- but a build meant to be distributed/published MUST use the real key,
+// or users won't be able to install future updates over an earlier release.
+def keystorePropertiesFile = rootProject.file("keystore.properties")
+def keystoreProperties = new Properties()
+def hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    compileSdkVersion 31
+    buildToolsVersion "31.0.0"
+    defaultConfig {
+        minSdkVersion 21
+        targetSdkVersion 31
+        // Bump versionCode by 1 (and versionName to match) for every release you publish --
+        // Android refuses to install an "update" over an existing install unless versionCode
+        // is strictly higher than what's currently installed, and Obtainium/users rely on
+        // versionName to see what's new.
+        versionCode 1
+        versionName "0.1"
+        // The translated game code is 64-bit only and enormous: build arm64 only (no armeabi-v7a,
+        // x86 or x86_64), so the APK holds one copy and the native build compiles it once.
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                cFlags "-DANDROID_NDK", "-DGSR_ANDROID"
+                cppFlags "-std=c++17", "-DANDROID_NDK", "-DGSR_ANDROID"
+                // gsrhost and gsrengine share C++ types across libraries, so they must share one libc++.
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+    signingConfigs {
+        release {
+            if (hasReleaseKeystore) {
+                // keystore.properties and the keystore live at the project root, hence rootProject.file().
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig hasReleaseKeystore ? signingConfigs.release : debug.signingConfig
+            externalNativeBuild {
+                cmake {
+                    cFlags.addAll("-DNDEBUG", "-DRELEASE")
+                }
+            }
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.10.2"
+        }
+    }
+    // arm64-v8a only (see the ndk block above): one APK, one native library.
+    namespace 'wootbeer.gsrandroid'
+    lint {
+        // ExpiredTargetSdkVersion is a Google Play submission requirement -- irrelevant here
+        // since this app is distributed via GitHub/Obtainium, not the Play Store. Bumping
+        // targetSdkVersion for real is a separate, deliberate task (it can change runtime
+        // permission/behavior on newer Android versions) -- not something to do just to
+        // silence a lint check on an old native app that hasn't been tested against it.
+        disable 'ExpiredTargetSdkVersion'
+    }
+}

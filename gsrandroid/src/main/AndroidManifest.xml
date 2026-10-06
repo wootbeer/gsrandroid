@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:tools="http://schemas.android.com/tools"
+	package="wootbeer.gsrandroid"
+	android:installLocation="auto">
+
+	<!-- Keeps the first-run build (translating the ROM on the device) alive if the player leaves the app. -->
+	<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+	<uses-permission android:name="android.permission.WAKE_LOCK" />
+
+	<!-- The recompiled game's GPU renderer (widescreen view) needs OpenGL ES 3. -->
+	<uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
+	<application
+		android:allowBackup="false"
+		android:icon="@mipmap/ic_launcher"
+		android:label="@string/app_name"
+		android:appCategory="game"
+		android:largeHeap="true"
+		tools:targetApi="o">
+
+		<!-- Launcher: the shared descore asset picker (wootbeer.descore.DescoreLauncherActivity),
+			 configured for Golden Sun Recompiled by GsrConfig. -->
+		<activity
+			android:name="wootbeer.gsrandroid.GsrLauncherActivity"
+			android:label="@string/app_name"
+			android:launchMode="singleTask"
+			android:screenOrientation="sensorLandscape"
+			android:theme="@style/DescoreFullscreenTheme"
+			android:windowSoftInputMode="adjustNothing"
+			android:hardwareAccelerated="false"
+			android:exported="true"
+			android:configChanges="orientation|screenSize|screenLayout|keyboardHidden">
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="android.intent.category.LAUNCHER" />
+			</intent-filter>
+		</activity>
+
+		<!-- Game screen. android:configChanges is load-bearing, not decoration: this activity is
+			 sensor-landscape, and a lock/unlock can report a different landscape reading (regular vs
+			 upside-down) or touch screenSize/screenLayout. Without configChanges Android would destroy
+			 and recreate the Activity, building a second DescoreView and starting a SECOND native game
+			 thread on top of the original one parked in its pause handshake. Every descore game
+			 activity needs this exact set. -->
+		<activity
+			android:name="wootbeer.gsrandroid.GsrGameActivity"
+			android:label="@string/app_name"
+			android:launchMode="singleTask"
+			android:screenOrientation="sensorLandscape"
+			android:theme="@style/DescoreFullscreenTheme"
+			android:windowSoftInputMode="adjustNothing"
+			android:hardwareAccelerated="false"
+			android:exported="false"
+			android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
+
+		<service
+			android:name="wootbeer.gsrandroid.GsrBuildService"
+			android:exported="false" />
+	</application>
+</manifest>
