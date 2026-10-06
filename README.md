@@ -11,7 +11,7 @@ You will need the game file from a licensed copy in order to play it.
 
 Game Files
 -------
-Make sure to have 800mb free on your device.
+Make sure to have 800mb free on your device for processing.  
 Place files onto your device in an accessible folder.  
 Your own legally obtained Golden Sun GBA ROM (USA/Europe).  
 SHA-1:  
