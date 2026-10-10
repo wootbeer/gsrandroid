@@ -89,3 +89,6 @@ icon_source/
 # Python scratch.
 __pycache__/
 *.pyc
+
+# Android Studio "Generate Signed APK" wizard output (release builds come from gradlew assembleRelease)
+gsrandroid/release/
