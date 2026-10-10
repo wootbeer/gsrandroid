@@ -125,6 +125,20 @@ void descore_touch_draw(void);
 typedef void (*DescoreTouchStickFn)(int stick_index, float x, float y);
 /* Circle at (cx, cy) with radius in screen pixels. A touch starting within 1.3x radius grabs it. */
 void descore_touch_set_stick(int index, float cx, float cy, float radius, DescoreTouchStickFn fn);
+/* How a stick looks and reads. ANALOG (the default): a disc with a thumb that follows the finger. DPAD: a
+ * cross-shaped digital pad for 2D games; the same finger tracking (slide between directions without lifting),
+ * drawn as a cross with the pressed arm(s) lit. The callback still gets x, y; decode them with
+ * descore_touch_dpad_dirs so the drawing and the game agree. */
+#define DESCORE_TOUCH_STICK_ANALOG 0
+#define DESCORE_TOUCH_STICK_DPAD 1
+void descore_touch_set_stick_style(int index, int style);
+/* 8-way D-pad reading of a stick value: bit 0 left, 1 right, 2 up, 3 down. A small centre dead zone; the
+ * diagonals cover 45 degrees each, like a real pad's corners. */
+#define DESCORE_DPAD_LEFT 1u
+#define DESCORE_DPAD_RIGHT 2u
+#define DESCORE_DPAD_UP 4u
+#define DESCORE_DPAD_DOWN 8u
+unsigned descore_touch_dpad_dirs(float x, float y);
 /* Rectangle in which a dragging finger reports per-event pixel deltas (camera look). Buttons and sticks win over it. */
 typedef void (*DescoreTouchLookFn)(float dx_pixels, float dy_pixels);
 void descore_touch_set_lookpad(float x, float y, float w, float h, DescoreTouchLookFn fn);

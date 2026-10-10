@@ -38,7 +38,8 @@ final class GsrMenu {
 	private static final String[] SCALE = { "Fit", "Whole pixels", "Stretch", "Zoom to fill" };
 	private static final String[] FLICKER = { "Off", "Light", "Medium", "Strong" };
 	private static final String[] FILTER = { "Sharp", "Smooth" };
-	private static final String[] SCREEN = { "Raw", "Unlit", "Frontlit", "Backlit", "Classic" };
+	private static final String[] SCREEN = { "Raw", "Unlit", "Frontlit", "Backlit", "Classic", "Handheld",
+			"Handheld (lighter)", "Soft", "Natural", "Warm", "Deep" };
 	private static final String[] OFF_ON = { "Off", "On" };
 	private static final String[] HOLD_TOGGLE = { "Hold", "Toggle" };
 	private static final int[] FF_VALUES = { 15, 20, 30, 40, 60, 80, 100, 160 };
@@ -54,7 +55,7 @@ final class GsrMenu {
 	private TextView title;
 	private ScrollView scroll;
 	private boolean open;
-	private int page; // 0 main, 1 gamepad buttons, 2 credits, 3 cheats
+	private int page; // 0 main, 1 gamepad buttons, 2 credits, 3 cheats, 4 save states
 
 	GsrMenu(Activity activity) {
 		this.activity = activity;
@@ -356,6 +357,9 @@ final class GsrMenu {
 		choice("Scaling", GsrNative.SCALE_MODE, SCALE);
 		choice("Pixels", GsrNative.FILTER, FILTER);
 		choice("Screen color", GsrNative.SCREEN, SCREEN);
+		// Listed in this order; the stored values are 0 off, 1 LCD, 2 CRT, 4 scanlines, 3 xBR.
+		choice("Screen filter", GsrNative.SCREEN_FILTER, new int[] { 0, 1, 2, 4, 3 },
+				new String[] { "Off", "LCD", "CRT", "Scanlines", "Smooth (xBR)" });
 		choice("Flicker reduction", GsrNative.BLEND, FLICKER);
 		interpolation();
 		highRes();
@@ -387,6 +391,7 @@ final class GsrMenu {
 		});
 		int[] sizes = new int[9];
 		for (int i = 0; i < 9; i++) sizes[i] = i;
+		choice("Touch pad", GsrNative.TOUCH_DPAD, new String[] { "Joystick", "D-pad" });
 		choice("Touch controls size", GsrNative.TOUCH_SCALE, sizes, TOUCH_SIZE);
 		int[] ops = new int[8];
 		String[] opLabels = new String[8];
@@ -394,6 +399,9 @@ final class GsrMenu {
 		choice("Touch controls opacity", GsrNative.TOUCH_OPACITY, ops, opLabels);
 
 		section("Game");
+		action("Save states", ">", new Runnable() {
+			@Override public void run() { showStates(); }
+		});
 		action("Cheats", ">", new Runnable() {
 			@Override public void run() { showCheats(); }
 		});
@@ -405,6 +413,9 @@ final class GsrMenu {
 				activity.finishAffinity();
 				Process.killProcess(Process.myPid());
 			}
+		});
+		action("Change ROM", "", new Runnable() {
+			@Override public void run() { confirmChangeRom(); }
 		});
 
 		section("About");
@@ -463,6 +474,110 @@ final class GsrMenu {
 		focusFirst();
 	}
 
+	private static final int STATE_SLOTS = 3;
+
+	/** The engine writes slot n beside the ROM as golden_sun.state<n> (runtime.cpp slot_path). */
+	private java.io.File stateFile(int slot) {
+		String base = GsrConfig.ROM_NAME.substring(0, GsrConfig.ROM_NAME.lastIndexOf('.'));
+		return new java.io.File(activity.getFilesDir(), "gsr/game/" + base + ".state" + slot);
+	}
+
+	private String stateLabel(int slot) {
+		java.io.File f = stateFile(slot);
+		if (!f.isFile()) return "empty";
+		return java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+				.format(new java.util.Date(f.lastModified()));
+	}
+
+	/** Save states: the game's in-game saves are separate and untouched; these are instant snapshots. */
+	private void showStates() {
+		clear("Save states", 4);
+		for (int i = 1; i <= STATE_SLOTS; i++) {
+			final int slot = i;
+			section("Slot " + slot + "  (" + stateLabel(slot) + ")");
+			action("Save to slot " + slot, "", new Runnable() {
+				@Override public void run() {
+					if (stateFile(slot).isFile()) {
+						new AlertDialog.Builder(activity)
+								.setTitle("Overwrite slot " + slot + "?")
+								.setMessage("The state saved there is replaced.")
+								.setNegativeButton("Cancel", null)
+								.setPositiveButton("Save", new DialogInterface.OnClickListener() {
+									@Override public void onClick(DialogInterface d, int w) { saveState(slot); }
+								})
+								.show();
+					} else {
+						saveState(slot);
+					}
+				}
+			});
+			Row load = action("Load slot " + slot, "", new Runnable() {
+				@Override public void run() {
+					if (!stateFile(slot).isFile()) return;
+					new AlertDialog.Builder(activity)
+							.setTitle("Load slot " + slot + "?")
+							.setMessage("Progress since your last save is lost.")
+							.setNegativeButton("Cancel", null)
+							.setPositiveButton("Load", new DialogInterface.OnClickListener() {
+								@Override public void onClick(DialogInterface d, int w) {
+									GsrNative.requestState(slot, false);
+									// The engine takes the request while the menu still holds the game paused.
+									list.postDelayed(new Runnable() {
+										@Override public void run() { close(); }
+									}, 300);
+								}
+							})
+							.show();
+				}
+			});
+			if (!stateFile(slot).isFile()) load.setAlpha(0.45f);
+		}
+		info("Save states are separate from the game's own saves and may not load after an app update.", DIM, 13);
+		section("");
+		backRow();
+		focusFirst();
+	}
+
+	private void saveState(final int slot) {
+		final long before = stateFile(slot).isFile() ? stateFile(slot).lastModified() : 0L;
+		GsrNative.requestState(slot, true);
+		// The engine writes the file at its next input pump (a frame or so, even while the menu pauses the game).
+		list.postDelayed(new Runnable() {
+			@Override public void run() {
+				final boolean saved = stateFile(slot).isFile() && stateFile(slot).lastModified() != before;
+				if (open && page == 4) showStates();
+				Toast.makeText(activity, saved ? "Saved to slot " + slot : "Saving to slot " + slot + "...",
+						Toast.LENGTH_SHORT).show();
+			}
+		}, 500);
+	}
+
+	/**
+	 * Change ROM: after a confirmation, removes only the stored ROM file and closes the app, so the next start
+	 * shows the ROM picker. The save (golden_sun.sav, beside the ROM) and the compiled game are kept: the only
+	 * ROM this release accepts always compiles to the same game, so picking it again does not rebuild.
+	 */
+	private void confirmChangeRom() {
+		new AlertDialog.Builder(activity)
+				.setTitle("Change ROM?")
+				.setMessage("This removes the stored ROM and closes the game. Your save is kept.\n\n"
+						+ "Open the app again to pick a new ROM file.")
+				.setNegativeButton("Cancel", null)
+				.setPositiveButton("Change ROM", new DialogInterface.OnClickListener() {
+					@Override public void onClick(DialogInterface d, int which) {
+						java.io.File rom = new java.io.File(activity.getFilesDir(), "gsr/game/" + GsrConfig.ROM_NAME);
+						if (rom.exists() && !rom.delete()) {
+							Toast.makeText(activity, "Could not remove the ROM", Toast.LENGTH_LONG).show();
+							return;
+						}
+						Toast.makeText(activity, "ROM removed. Open the app again to pick one.", Toast.LENGTH_LONG).show();
+						activity.finishAffinity();
+						Process.killProcess(Process.myPid());
+					}
+				})
+				.show();
+	}
+
 	private void showCredits() {
 		clear("Credits", 2);
 
@@ -482,6 +597,11 @@ final class GsrMenu {
 				Color.LTGRAY, 13);
 		info("Built with mGBA and JRickey/gba-recomp (via gbarecomp) and TinyCC (LGPL). Full credits and licences "
 				+ "are in the COPYING file of the source.", Color.LTGRAY, 13);
+
+		section("Screen filters");
+		info("LCD3x by Gigaherz and CRT Lottes by Timothy Lottes (public domain), and xBR-lv2 by Hyllian, ported "
+				+ "by Golden Sun Recompiled from libretro's glsl-shaders.", Color.LTGRAY, 13);
+		info("Hyllian's xBR-lv2 Shader\n\nCopyright (C) 2011-2016 Hyllian - sergiogdb@gmail.com\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in\nall copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\nTHE SOFTWARE.\n\nIncorporates some of the ideas from SABR shader. Thanks to Joshua Street.", Color.GRAY, 11);
 		section("");
 		backRow();
 		focusFirst();

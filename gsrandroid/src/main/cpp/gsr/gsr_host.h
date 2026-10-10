@@ -40,6 +40,11 @@ void gsr_host_render(int surface_w, int surface_h);
 void gsr_host_request_quit(void);
 /* The settings menu is open over the game: the guest is paused while it is. */
 void gsr_host_set_menu_open(int open);
+/* Save states (side menu): ask the engine to save (save != 0) or load slot 1..9 at its next input pump. The engine
+ * keeps them beside the ROM as golden_sun.state<slot> (runtime.cpp slot_path). */
+void gsr_host_request_state(int slot, int save);
+/* Engine side: the pending request, then cleared. >0 save that slot, <0 load slot -n, 0 none. */
+int gsr_host_take_state_request(void);
 /* The display's current refresh rate, set by the Java side (changes when the 120 Hz mode is requested). */
 void gsr_host_set_display_hz(float hz);
 void gsr_host_set_debug(int on);  /* diagnostics (logcat statistics, engine log forwarding): debuggable builds only */

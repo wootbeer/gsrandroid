@@ -144,7 +144,7 @@ final class GsrBuildOverlay {
 		} else if ("rom_wrong".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
 			set(title, "This is not the supported ROM");
-			set(detail, "Golden Sun (USA or Europe) is required. Clear the app's storage to pick another file.");
+			set(detail, "Golden Sun (USA or Europe) is required. Press Back to open the menu and choose Change ROM.");
 		} else if ("failed".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
 			set(title, "Building the game failed");

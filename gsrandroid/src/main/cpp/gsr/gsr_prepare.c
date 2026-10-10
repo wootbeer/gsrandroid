@@ -152,7 +152,7 @@ static int derive_dirs(const char *data_dir) {
 
 /* ---- builder output -> progress ------------------------------------------------------------ */
 
-typedef struct { long off; int stage; char partial[600]; size_t plen; } Poll;
+typedef struct { long off; int stage; int said_last; char partial[600]; size_t plen; } Poll;
 
 static void poll_line(Poll *p, const char *line) {
 	if (!strncmp(line, "@stage ", 7)) {
@@ -162,7 +162,15 @@ static void poll_line(Poll *p, const char *line) {
 	} else if (!strncmp(line, "@progress ", 10)) {
 		int done = 0, total = 0, v = -1;
 		if (sscanf(line + 10, "%d %d", &done, &total) == 2 && total > 0) {
-			if (p->stage == 1) v = done * 600 / total;
+			if (p->stage == 1) {
+				v = done * 600 / total;
+				/* The main program is by far the largest piece and finishes last, so the bar sits near
+				 * 59% while it does. Say so, or it looks stuck. */
+				if (total >= 10 && done < total && done * 100 >= total * 97 && !p->said_last) {
+					p->said_last = 1;
+					set_msg("Translating the main game code. This is the longest step and can take a while on slower devices.");
+				}
+			}
 			else if (p->stage == 3) v = 650 + done * 330 / total;
 		}
 		if (v > atomic_load(&g_progress)) atomic_store(&g_progress, v);

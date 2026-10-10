@@ -2,6 +2,7 @@
 #include "gsr_host.h"
 #include "gsr_controls.h"
 #include "gsr_settings.h"
+#include "gsr_screen_filter.h"
 #include "gsr_text.h"
 #include "descore.h"
 
@@ -47,6 +48,7 @@ std::atomic<int> g_running{0};
 std::atomic<int> g_quit{0};
 std::atomic<int> g_frames{0};
 std::atomic<int> g_menu_open{0};
+std::atomic<int> g_state_request{0};  // gsr_host_request_state
 
 // ---- GL ------------------------------------------------------------------------------------------------
 GLuint g_prog = 0, g_tex = 0;
@@ -250,6 +252,13 @@ void gsr_host_engine_state(int running) {
 int gsr_host_frame_count(void) { return g_frames.load(); }
 void gsr_host_request_quit(void) { g_quit.store(1); }
 void gsr_host_set_menu_open(int open) { g_menu_open.store(open ? 1 : 0); }
+
+void gsr_host_request_state(int slot, int save) {
+    if (slot < 1 || slot > 9) return;
+    g_state_request.store(save ? slot : -slot);
+}
+
+int gsr_host_take_state_request(void) { return g_state_request.exchange(0); }
 void gsr_host_set_debug(int on) { g_debug.store(on ? 1 : 0); }
 int gsr_host_debug(void) { return g_debug.load(); }
 void gsr_host_set_display_hz(float hz) { g_display_hz.store(hz > 1.0f ? hz : 60.0f); }
@@ -323,7 +332,9 @@ void gsr_host_render(int sw, int sh) {
         }
         fw = g_fw; fh = g_fh;
     }
-    int filter = gsr_settings_get(GSR_S_FILTER);
+    // A screen filter reads exact source pixels itself, so the texture is sampled sharp while one is on.
+    const int screen_filter = gsr_settings_get(GSR_S_SCREEN_FILTER);
+    int filter = screen_filter ? 0 : gsr_settings_get(GSR_S_FILTER);
     if (filter != g_tex_filter) {
         GLint f = filter ? GL_LINEAR : GL_NEAREST;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
@@ -333,12 +344,20 @@ void gsr_host_render(int sw, int sh) {
 
     Layout L = compute_layout(sw, sh, fw, fh, gsr_settings_get(GSR_S_SCALE_MODE));
     glBindVertexArray(0);
-    glUseProgram(g_prog);
-    glUniform4f(g_u_rect, L.x / sw * 2.0f - 1.0f, (sh - (L.y + L.h)) / sh * 2.0f - 1.0f,
-                (L.x + L.w) / sw * 2.0f - 1.0f, (sh - L.y) / sh * 2.0f - 1.0f);
-    glUniform4f(g_u_uv, L.u0, L.v0, L.u1, L.v1);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-    glUseProgram(0);
+    const float rect[4] = {L.x / sw * 2.0f - 1.0f, (sh - (L.y + L.h)) / sh * 2.0f - 1.0f,
+                           (L.x + L.w) / sw * 2.0f - 1.0f, (sh - L.y) / sh * 2.0f - 1.0f};
+    const float uvr[4] = {L.u0, L.v0, L.u1, L.v1};
+    // The filters work in original pixels: High-res rendering hands over a whole-number enlargement of the
+    // 240x160 (Native) or 360x240 (Expanded) picture, so divide that back out.
+    const int base_w = gsr_settings_get(GSR_S_VIEW_MODE) ? 360 : 240;
+    const int k = (fw >= base_w && fw % base_w == 0 && fh % (fw / base_w) == 0) ? fw / base_w : 1;
+    if (!gsr_screen_filter_draw(screen_filter, rect, uvr, (float)(fw / k), (float)(fh / k), L.w, L.h)) {
+        glUseProgram(g_prog);
+        glUniform4f(g_u_rect, rect[0], rect[1], rect[2], rect[3]);
+        glUniform4f(g_u_uv, uvr[0], uvr[1], uvr[2], uvr[3]);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glUseProgram(0);
+    }
 
     // Frames per second counter (Settings > Display), drawn over the corner of the picture.
     if (gsr_settings_get(GSR_S_SHOW_FPS)) {

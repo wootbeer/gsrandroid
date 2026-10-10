@@ -29,7 +29,7 @@ static DescoreTouchKeyFn s_key_fn = NULL;
 static DescoreTouchTapFn s_tap_fn = NULL;
 
 /* analog sticks + look pad */
-typedef struct { float cx, cy, r, vx, vy; DescoreTouchStickFn fn; bool set; int pointer; } StickState;
+typedef struct { float cx, cy, r, vx, vy; DescoreTouchStickFn fn; bool set; int pointer; int style; } StickState;
 static StickState s_sticks[DESCORE_TOUCH_MAX_STICKS];
 static float s_look_x, s_look_y, s_look_w, s_look_h;
 static DescoreTouchLookFn s_look_fn = NULL;
@@ -79,6 +79,21 @@ static bool sticks_or_pad_active(void) {
     if (!s_sticks_visible) return false;
     for (i = 0; i < DESCORE_TOUCH_MAX_STICKS; ++i) if (s_sticks[i].set) return true;
     return s_look_fn != NULL;
+}
+
+void descore_touch_set_stick_style(int index, int style) {
+    if (index < 0 || index >= DESCORE_TOUCH_MAX_STICKS) return;
+    s_sticks[index].style = style == DESCORE_TOUCH_STICK_DPAD ? DESCORE_TOUCH_STICK_DPAD : DESCORE_TOUCH_STICK_ANALOG;
+}
+
+unsigned descore_touch_dpad_dirs(float x, float y) {
+    const float ax = fabsf(x), ay = fabsf(y);
+    unsigned d = 0;
+    if (ax * ax + ay * ay < 0.2f * 0.2f) return 0;       /* centre dead zone */
+    /* tan(22.5 deg) = 0.414: inside that angle of an axis is a straight direction, outside is a diagonal */
+    if (ax > ay * 0.414f) d |= x < 0 ? DESCORE_DPAD_LEFT : DESCORE_DPAD_RIGHT;
+    if (ay > ax * 0.414f) d |= y < 0 ? DESCORE_DPAD_UP : DESCORE_DPAD_DOWN;
+    return d;
 }
 
 static void stick_update(int i, float x, float y) {
@@ -478,6 +493,38 @@ void descore_touch_draw(void) {
                 const StickState *st = &s_sticks[k];
                 int seg, ring;
                 if (!st->set) continue;
+                if (st->style == DESCORE_TOUCH_STICK_DPAD) {
+                    /* A cross: the vertical bar, then the left and right arms (no overlap, so the centre is
+                     * not drawn twice). Pressed arms are drawn again on top at full strength. */
+                    const float r = st->r, hw = st->r * 0.31f;
+                    const unsigned on = st->pointer != -1 ? descore_touch_dpad_dirs(st->vx, st->vy) : 0u;
+                    float rects[7][4] = {
+                        { st->cx - hw, st->cy - r, hw * 2, r * 2 },     /* vertical bar */
+                        { st->cx - r, st->cy - hw, r - hw, hw * 2 },     /* left arm */
+                        { st->cx + hw, st->cy - hw, r - hw, hw * 2 },    /* right arm */
+                        { st->cx - r, st->cy - hw, r - hw, hw * 2 },     /* lit: left */
+                        { st->cx + hw, st->cy - hw, r - hw, hw * 2 },    /* lit: right */
+                        { st->cx - hw, st->cy - r, hw * 2, r - hw },     /* lit: up */
+                        { st->cx - hw, st->cy + hw, hw * 2, r - hw },    /* lit: down */
+                    };
+                    int q;
+                    for (q = 0; q < 7; ++q) {
+                        GLfloat v[8];
+                        if (q == 3 && !(on & DESCORE_DPAD_LEFT)) continue;
+                        if (q == 4 && !(on & DESCORE_DPAD_RIGHT)) continue;
+                        if (q == 5 && !(on & DESCORE_DPAD_UP)) continue;
+                        if (q == 6 && !(on & DESCORE_DPAD_DOWN)) continue;
+                        v[0] = rects[q][0];                v[1] = rects[q][1];
+                        v[2] = rects[q][0] + rects[q][2];  v[3] = rects[q][1];
+                        v[4] = rects[q][0];                v[5] = rects[q][1] + rects[q][3];
+                        v[6] = rects[q][0] + rects[q][2];  v[7] = rects[q][1] + rects[q][3];
+                        glUniform4f(u_color, 0.7f, 0.7f, 0.7f, q < 3 ? s_opacity * 0.6f : s_opacity);
+                        glBufferData(GL_ARRAY_BUFFER, sizeof v, v, GL_STREAM_DRAW);
+                        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, (const void *) 0);
+                        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+                    }
+                    continue;
+                }
                 /* base disc (faint) then thumb disc (stronger), as triangle fans */
                 for (ring = 0; ring < 2; ++ring) {
                     GLfloat fan[(34) * 2];

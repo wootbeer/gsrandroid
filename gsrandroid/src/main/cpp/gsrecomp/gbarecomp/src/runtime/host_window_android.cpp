@@ -14,10 +14,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <memory>
 #include <vector>
+
+extern "C" bool g_frame_present_in_progress;  // runtime_arm.cpp; true while runtime_bus_bridge.cpp runs the present-in-place hook
 
 namespace gbarecomp {
 
@@ -30,6 +33,7 @@ struct State {
     int view_mode_count = 0;
     int last_view_reported = 0;
     bool last_paused = false;
+    std::chrono::steady_clock::time_point paused_since{};  // when the menu/background pause began
     bool turbo_muted = false;
     bool native_available = false;
     bool interp_available = false;
@@ -49,7 +53,7 @@ void refresh_lut() {
     const int kind = gsr_settings_get(GSR_S_SCREEN);
     if (kind == g.lut_kind && g.lut) return;
     runtime::ColorSettings cs;
-    cs.screen = static_cast<runtime::ScreenKind>(std::clamp(kind, 0, 4));
+    cs.screen = static_cast<runtime::ScreenKind>(std::clamp(kind, 0, 10));  // Raw..Deep (Custom needs sliders)
     g.lut = std::make_unique<runtime::ColorLut>(cs);
     g.lut_kind = kind;
 }
@@ -261,6 +265,21 @@ HostWindow::Events HostWindow::pump() {
     if (paused != g.last_paused) {
         ev.toggle_pause = true;
         g.last_paused = paused;
+        g.paused_since = std::chrono::steady_clock::now();
+    }
+
+    // Save states from the side menu (the engine's own slot files, as the PC hotkeys use). This pump is called
+    // from two places: the frame hook inside the running guest (present-in-place, g_frame_present_in_progress
+    // set), and the runner's paused loop, which the guest only reaches after it unwinds at its next HALT, a clean
+    // frame boundary. A request is taken only from the paused loop, so a state is never saved or loaded with the
+    // guest mid-frame (the PC launchers avoid that case by turning present-in-place off). Until then it waits.
+    if (paused && !g_frame_present_in_progress &&
+        std::chrono::steady_clock::now() - g.paused_since > std::chrono::milliseconds(150)) {
+        if (const int req = gsr_host_take_state_request()) {
+            if (req > 0) ev.save_slot = req; else ev.load_slot = -req;
+        }
+    } else if (!paused) {
+        gsr_host_take_state_request();  // not taken before the game resumed: drop it rather than act on it later
     }
     return ev;
 }

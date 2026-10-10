@@ -30,6 +30,13 @@ WHAT IS WHOSE
       gsrandroid/src/main/cpp/tcc/COPYING and its source is included in this project.
       gsrandroid/src/main/cpp/tcc/tccelf.c has been modified for this port.
 
+  Screen filters (Display > Screen filter), as ported by Golden Sun Recompiled from libretro's glsl-shaders
+      LCD3x by Gigaherz -- public domain.
+      CRT Lottes by Timothy Lottes -- public domain.
+      xBR-lv2, Copyright (C) 2011-2016 Hyllian -- MIT licence; the full notice is in
+      licenses/xBR-lv2-MIT.txt and gsrandroid/src/main/cpp/gsr/gsr_screen_filter_shaders.inc, and is shown in
+      the app's Credits screen.
+
 THIS PROJECT IS NONCOMMERCIAL. The engine it cannot run without is licensed for noncommercial use only,
 so this app may not be sold, and it carries no ads or paid features.
 

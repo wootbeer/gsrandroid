@@ -6,7 +6,8 @@ final class GsrNative {
 			ENH_TIMING = 6, NATIVE_RENDER = 7, NATIVE_SCALE = 8, VOLUME = 9, MUTE = 10,
 			FF_MULT10 = 11, FF_MODE = 12, FF_UNCAPPED = 13, FF_MUTE = 14, SHOW_FPS = 15,
 			TOUCH_SCALE = 16, TOUCH_OPACITY = 17, RENDERER = 18, AUTO_CPU = 19,
-			CHEAT_HP = 20, CHEAT_PP = 21, CHEAT_EXP = 22, CHEAT_COIN = 23, CHEAT_DROP = 24;
+			TOUCH_DPAD = 20, SCREEN_FILTER = 21,
+			CHEAT_HP = 22, CHEAT_PP = 23, CHEAT_EXP = 24, CHEAT_COIN = 25, CHEAT_DROP = 26;
 
 	/** GsrAction in gsr_controls.h: the GBA buttons first, then these. */
 	static final String[] ACTIONS = { "A", "B", "Select", "Start", "Right", "Left", "Up", "Down", "R", "L",
@@ -28,4 +29,6 @@ final class GsrNative {
 	static native String[] buildInfo();
 	/** 1 if the last frame was drawn by the GPU renderer. */
 	static native int gpuActive();
+	/** Save (save=true) or load save-state slot 1..9; done by the engine at its next input pump. */
+	static native void requestState(int slot, boolean save);
 }

@@ -198,6 +198,19 @@ The on-device C compiler. LGPL 2.1; full text in `gsrandroid/src/main/cpp/tcc/CO
 
 ---
 
+## Screen filters
+
+The optional screen filters (Display > Screen filter) are the single-pass filters Golden Sun Recompiled ported
+from libretro's glsl-shaders (`gbarecomp/src/runtime/screen_filter.cpp`), copied verbatim with their notices
+into `gsrandroid/src/main/cpp/gsr/gsr_screen_filter_shaders.inc`:
+
+- **LCD3x** by Gigaherz: public domain.
+- **CRT Lottes** by Timothy Lottes: public domain ("Please take and use, change, or whatever.").
+- **xBR-lv2** by Hyllian, Copyright (C) 2011-2016: MIT licence. The full notice is in `licenses/xBR-lv2-MIT.txt`
+  and is shown in the app's Credits screen.
+
+---
+
 ## Licence texts
 
 Full texts are in the `licenses/` folder:
@@ -206,3 +219,4 @@ Full texts are in the `licenses/` folder:
 - `mGBA-MPL-2.0.txt`: mGBA, for the BIOS routines derived from it.
 - `JRickey-gba-recomp-MIT.txt` and `JRickey-gba-recomp-Apache-2.0.txt`: JRickey/gba-recomp (MIT OR Apache-2.0).
 - `TinyCC-LGPL-2.1.txt`: TinyCC.
+- `xBR-lv2-MIT.txt`: Hyllian's xBR-lv2 screen filter (MIT).

@@ -225,6 +225,15 @@ static void touch_key(unsigned char act, int down) {
 static void touch_stick(int idx, float x, float y) {
 	unsigned d = 0;
 	(void) idx;
+	if (gsr_settings_get(GSR_S_TOUCH_DPAD)) {
+		unsigned p = descore_touch_dpad_dirs(x, y);
+		if (p & DESCORE_DPAD_LEFT) d |= 1u << GSR_ACT_LEFT;
+		if (p & DESCORE_DPAD_RIGHT) d |= 1u << GSR_ACT_RIGHT;
+		if (p & DESCORE_DPAD_UP) d |= 1u << GSR_ACT_UP;
+		if (p & DESCORE_DPAD_DOWN) d |= 1u << GSR_ACT_DOWN;
+		atomic_store(&g_touch_dirs, d);
+		return;
+	}
 	if (x < -0.35f) d |= 1u << GSR_ACT_LEFT;
 	if (x > 0.35f) d |= 1u << GSR_ACT_RIGHT;
 	if (y < -0.35f) d |= 1u << GSR_ACT_UP;
@@ -243,6 +252,7 @@ void gsr_controls_layout(int w, int h) {
 	r = cell * 1.45f;
 	sb = cell * 1.25f;
 	descore_touch_set_stick(0, m + r * 1.05f, h - m - r * 1.05f, r, touch_stick);
+	descore_touch_set_stick_style(0, gsr_settings_get(GSR_S_TOUCH_DPAD) ? DESCORE_TOUCH_STICK_DPAD : DESCORE_TOUCH_STICK_ANALOG);
 	{
 		float rx = w - m - sb * 2.4f, ry = h - m - sb * 1.9f;
 		float *a = g_tb_rect[TB_A], *b = g_tb_rect[TB_B], *l = g_tb_rect[TB_L], *rr = g_tb_rect[TB_R];

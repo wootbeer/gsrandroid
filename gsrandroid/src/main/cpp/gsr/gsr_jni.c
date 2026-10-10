@@ -115,3 +115,9 @@ JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_setMenuOpen(JNIEnv *en
 	if (open) gsr_controls_release_all();
 	gsr_host_set_menu_open(open ? 1 : 0);
 }
+
+JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_requestState(JNIEnv *env, jclass c, jint slot, jboolean save)
+{
+	(void) env; (void) c;
+	gsr_host_request_state(slot, save ? 1 : 0);
+}
