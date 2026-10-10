@@ -172,6 +172,20 @@ struct GpuSurface::SavedState {
     GLint blend_src_alpha = GL_ONE, blend_dst_alpha = GL_ZERO;
 };
 
+// Two pixel-pack buffers used in turn by begin/finish_texture_readback (GSRecomp 0.4.3's asynchronous
+// readback). GLES 3.0 has pack buffers and fences but not glGetTexImage or glGetBufferSubData, so the copy
+// is queued with glReadPixels through the read framebuffer and fetched with glMapBufferRange.
+struct GpuSurface::Readback {
+    struct Slot {
+        GLuint buffer = 0;
+        std::size_t capacity = 0;
+        GLsync fence = nullptr;
+        int width = 0, height = 0;
+    };
+    Slot slots[2];
+    int last = -1;  // slot of the most recent begin, -1 when none is queued
+};
+
 GpuSurface::~GpuSurface() { release(); }
 
 bool GpuSurface::load_entry_points() { return true; }  // linked directly
@@ -185,6 +199,7 @@ bool GpuSurface::init() {
         return false;
     }
     saved_ = new SavedState();
+    readback_ = new Readback();
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
     glGenFramebuffers(1, &fbo_);
@@ -215,7 +230,15 @@ void GpuSurface::release() {
         if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
         if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
         if (g_read_fbo) { glDeleteFramebuffers(1, &g_read_fbo); g_read_fbo = 0; }
+        if (readback_) {
+            for (Readback::Slot& slot : readback_->slots) {
+                if (slot.fence) glDeleteSync(slot.fence);
+                if (slot.buffer) glDeleteBuffers(1, &slot.buffer);
+            }
+        }
     }
+    delete readback_;
+    readback_ = nullptr;
     delete saved_;
     saved_ = nullptr;
     ready_ = false;
@@ -690,6 +713,99 @@ void GpuSurface::read_texture_rgb(GpuTexture texture, int width, int height, std
             dst[x * 3 + 2] = src[x * 4 + 2];
         }
     }
+}
+
+// ---- asynchronous readback (one frame behind) -------------------------------------------------------
+
+bool GpuSurface::begin_texture_readback(GpuTexture texture, int width, int height) {
+    if (!ready_ || !readback_ || !texture || width <= 0 || height <= 0) return false;
+    const int index = readback_->last == 0 ? 1 : 0;
+    Readback::Slot& slot = readback_->slots[index];
+    if (slot.fence) { glDeleteSync(slot.fence); slot.fence = nullptr; }
+    const std::size_t bytes = static_cast<std::size_t>(width) * height * 4u;
+
+    GLint prev_fbo = 0, prev_alignment = 4, prev_row_length = 0, prev_skip_rows = 0, prev_skip_pixels = 0;
+    GLint prev_pack_buffer = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_fbo);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &prev_alignment);
+    glGetIntegerv(GL_PACK_ROW_LENGTH, &prev_row_length);
+    glGetIntegerv(GL_PACK_SKIP_ROWS, &prev_skip_rows);
+    glGetIntegerv(GL_PACK_SKIP_PIXELS, &prev_skip_pixels);
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prev_pack_buffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+
+    if (!slot.buffer) glGenBuffers(1, &slot.buffer);
+    bool queued = false;
+    if (slot.buffer) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, slot.buffer);
+        if (slot.capacity != bytes) {
+            glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(bytes), nullptr, GL_STREAM_READ);
+            slot.capacity = bytes;
+        }
+        if (!g_read_fbo) glGenFramebuffers(1, &g_read_fbo);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, g_read_fbo);
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+        if (glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+            // With a pack buffer bound the pointer is an offset into it: the copy is queued on the GPU
+            // and nothing here waits for it.
+            glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            queued = true;
+        }
+        glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prev_fbo));
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prev_pack_buffer));
+    glPixelStorei(GL_PACK_ALIGNMENT, prev_alignment);
+    glPixelStorei(GL_PACK_ROW_LENGTH, prev_row_length);
+    glPixelStorei(GL_PACK_SKIP_ROWS, prev_skip_rows);
+    glPixelStorei(GL_PACK_SKIP_PIXELS, prev_skip_pixels);
+
+    if (queued) {
+        slot.fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();  // make sure the copy is actually submitted before the next frame
+    }
+    slot.width = width;
+    slot.height = height;
+    readback_->last = slot.fence ? index : -1;
+    return slot.fence != nullptr;
+}
+
+bool GpuSurface::finish_texture_readback(int width, int height, std::uint8_t* out_rgb) {
+    if (!ready_ || !readback_ || readback_->last < 0 || !out_rgb) return false;
+    Readback::Slot& slot = readback_->slots[readback_->last];
+    readback_->last = -1;
+    if (!slot.fence || slot.width != width || slot.height != height) return false;
+    // Queued a frame ago, so normally already done. A GPU still busy after 50 ms gets the caller's
+    // synchronous read instead.
+    const GLenum waited = glClientWaitSync(slot.fence, GL_SYNC_FLUSH_COMMANDS_BIT, 50000000ull);
+    glDeleteSync(slot.fence);
+    slot.fence = nullptr;
+    if (waited != GL_ALREADY_SIGNALED && waited != GL_CONDITION_SATISFIED) return false;
+
+    const std::size_t bytes = static_cast<std::size_t>(width) * height * 4u;
+    GLint prev_pack_buffer = 0;
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &prev_pack_buffer);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, slot.buffer);
+    const void* mapped = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(bytes), GL_MAP_READ_BIT);
+    bool ok = false;
+    if (mapped) {
+        const std::uint8_t* rgba = static_cast<const std::uint8_t*>(mapped);
+        for (int y = 0; y < height; ++y) {  // GL's row 0 is the bottom of the picture
+            const std::uint8_t* src = rgba + static_cast<std::size_t>(height - 1 - y) * width * 4u;
+            std::uint8_t* dst = out_rgb + static_cast<std::size_t>(y) * width * 3u;
+            for (int x = 0; x < width; ++x) {
+                dst[x * 3 + 0] = src[x * 4 + 0];
+                dst[x * 3 + 1] = src[x * 4 + 1];
+                dst[x * 3 + 2] = src[x * 4 + 2];
+            }
+        }
+        ok = glUnmapBuffer(GL_PIXEL_PACK_BUFFER) == GL_TRUE;
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prev_pack_buffer));
+    return ok;
 }
 
 }  // namespace gbarecomp

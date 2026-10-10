@@ -268,6 +268,8 @@ static void start_engine(const char *data_dir)
 	setenv("GSR_ROOM_BUFFER_RENDER", "1", 0);
 	setenv("GSR_HOST_EFFECTS", "1", 0);
 	setenv("GBARECOMP_EXPERIMENTAL_FIXES", "1", 0);
+	/* The GBA's own left/right sound channels instead of the old mono route (the PC launcher sets this too). */
+	setenv("GBARECOMP_AUDIO_STEREO", "1", 0);
 	snprintf(g_rom_path, sizeof g_rom_path, "%s/%s", data_dir, GSR_ROM_NAME);
 	snprintf(g_run_dir, sizeof g_run_dir, "%s/../run", data_dir);
 	mkdir(g_run_dir, 0755);

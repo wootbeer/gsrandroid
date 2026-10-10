@@ -49,34 +49,26 @@
 #include <unistd.h>
 
 #include "crash_handler.h"
+#include "launcher_common.h"
 #include "launcher_logo.h"
 #include "launcher_online.h"
 #include "sha1.h"
 
 namespace fs = std::filesystem;
+using namespace gsr_launcher;
 
 namespace {
 
-constexpr const char* kExpectedRomSha1 = "5c4695205413df7db52b9a184815a07783999971";
-constexpr const char* kBuilderVersion = "2";  // tools/gsr_builder kBuilderVersion
 constexpr const char* kTitle = "Golden Sun Recompiled";
 // Where players can still upload a report by hand when sending fails: the
 // Google Form the project page links; only the developer sees the answers.
 constexpr const char* kBugReportUrl =
     "https://docs.google.com/forms/d/e/"
     "1FAIpQLScTmnmH6_BXYsYVfIKtjDsN-gLx59mv4pVjYx4ITbH2YGktBw/viewform";
-constexpr int kKeepLogCount = 20;
 
 fs::path g_root;
 
 // ---------------------------------------------------------------- files
-
-std::string read_text(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    std::ostringstream text;
-    text << in.rdbuf();
-    return text.str();
-}
 
 void write_text(const fs::path& path, const std::string& text) {
     std::error_code ec;
@@ -111,6 +103,9 @@ void open_launcher_log() {
                  __DATE__ + " " + __TIME__ + ") in " + g_root.string());
 }
 
+}  // namespace
+namespace gsr_launcher {
+
 bool sha1_file(const fs::path& path, std::string* out) {
     std::ifstream in(path, std::ios::binary);
     if (!in) return false;
@@ -119,6 +114,9 @@ bool sha1_file(const fs::path& path, std::string* out) {
     *out = gba::sha1(bytes.data(), bytes.size()).hex();
     return true;
 }
+
+}  // namespace gsr_launcher
+namespace {
 
 fs::path exe_dir() {
     std::error_code ec;
@@ -212,26 +210,6 @@ bool decode_png(const unsigned char* data, std::size_t size,
 
 // ---------------------------------------------------------------- the ROM
 
-bool validate_rom(const std::string& path, std::string* error) {
-    std::error_code ec;
-    if (!fs::is_regular_file(path, ec)) {
-        *error = "That file could not be opened.";
-        return false;
-    }
-    std::string actual;
-    if (!sha1_file(path, &actual)) {
-        *error = "The ROM could not be read.";
-        return false;
-    }
-    if (actual != kExpectedRomSha1) {
-        *error = std::string("That is not the required Golden Sun USA/Europe ROM.\n\n"
-                             "Expected SHA-1:\n") + kExpectedRomSha1 +
-                 "\n\nFound SHA-1:\n" + actual;
-        return false;
-    }
-    return true;
-}
-
 fs::path rom_cache_path() { return g_root / "local" / "launcher-rom.txt"; }
 fs::path auto_start_path() { return g_root / "local" / "launcher-autostart.txt"; }
 constexpr Uint32 kAutoStartMaxWaitMs = 10000;  // for the update check
@@ -293,50 +271,6 @@ std::string pick_rom_with_dialog(const std::string& start_dir, bool* no_dialog) 
 }
 
 // ---------------------------------------------------------------- game code
-
-// Whether libGoldenSunGame.so beside the game was built from the supported
-// ROM by this release's builder against this release's engine (the same
-// test as the Windows launcher's game_code_ready).
-std::string release_fingerprint() {
-    std::vector<fs::path> files = {g_root / "GoldenSunRecomp",
-                                   g_root / "builder" / "gsr_builder",
-                                   g_root / "builder" / "gba_recompile"};
-    std::error_code ec;
-    for (const char* dir : {"data", "engine"}) {
-        std::vector<fs::path> found;
-        for (const auto& entry :
-             fs::recursive_directory_iterator(g_root / "builder" / dir, ec)) {
-            if (entry.is_regular_file(ec)) found.push_back(entry.path());
-        }
-        std::sort(found.begin(), found.end());
-        files.insert(files.end(), found.begin(), found.end());
-    }
-    std::string text;
-    for (const fs::path& file : files) {
-        std::string digest;
-        if (!sha1_file(file, &digest)) digest = "missing";
-        text += fs::relative(file, g_root, ec).generic_string() + " " + digest + "\n";
-    }
-    return text;
-}
-
-bool game_code_ready() {
-    std::error_code ec;
-    if (!fs::is_regular_file(g_root / "libGoldenSunGame.so", ec)) return false;
-    if (read_text(g_root / "GoldenSunGame.release.txt") != release_fingerprint())
-        return false;
-    std::istringstream in(read_text(g_root / "GoldenSunGame.build.txt"));
-    std::string line, rom, builder, engine;
-    while (std::getline(in, line)) {
-        if (line.rfind("rom_sha1=", 0) == 0) rom = line.substr(9);
-        else if (line.rfind("builder=", 0) == 0) builder = line.substr(8);
-        else if (line.rfind("engine_sha1=", 0) == 0) engine = line.substr(12);
-    }
-    std::string engine_now;
-    if (!sha1_file(g_root / "GoldenSunRecomp", &engine_now)) return false;
-    return rom == kExpectedRomSha1 && builder == kBuilderVersion &&
-           engine == engine_now;
-}
 
 // The builder runs in the background; the window shows its progress lines.
 struct BuildState {
@@ -465,32 +399,6 @@ std::string make_session_log_name() {
     return name;
 }
 
-void prune_old_logs(const fs::path& logs_dir) {
-    std::error_code ec;
-    std::vector<fs::path> logs;
-    for (const auto& entry : fs::directory_iterator(logs_dir, ec)) {
-        const std::string name = entry.path().filename().string();
-        if (entry.is_regular_file(ec) && name.rfind("session_", 0) == 0 &&
-            entry.path().extension() == ".log")
-            logs.push_back(entry.path());
-    }
-    if (logs.size() < static_cast<std::size_t>(kKeepLogCount)) return;
-    std::sort(logs.begin(), logs.end());
-    const std::size_t remove = logs.size() - (kKeepLogCount - 1);
-    for (std::size_t i = 0; i < remove; ++i) fs::remove(logs[i], ec);
-}
-
-std::set<std::string> rewind_dirs(const fs::path& logs_dir) {
-    std::set<std::string> dirs;
-    std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(logs_dir, ec)) {
-        const std::string name = entry.path().filename().string();
-        if (entry.is_directory(ec) && name.rfind("gpu_rewind_", 0) == 0)
-            dirs.insert(name);
-    }
-    return dirs;
-}
-
 // Tags each line of one of the game's output streams and appends it to the
 // session log, flushed line by line so a hang or kill keeps everything.
 struct SessionLog {
@@ -525,6 +433,9 @@ void pump(int read_fd, const char* tag, SessionLog* log) {
 struct GameResult {
     bool started = false;
     bool crashed = false;
+    // The unpacker guard caught its crash (unpacker_recovered.txt,
+    // src/unpacker_guard.h).
+    bool unpacker = false;
     int exit_code = 0;
     std::string rom;
     std::string log_path;
@@ -542,6 +453,15 @@ GameResult run_game(const std::string& rom) {
     prune_old_logs(logs_dir);
     result.log_path = (logs_dir / make_session_log_name()).string();
     const std::set<std::string> rewinds_before = rewind_dirs(logs_dir);
+    // A crash file left by an earlier run must not end up in this run's report.
+    fs::remove(g_root / "crash_memory.bin", ec);
+    fs::remove(g_root / "crash_trail.csv", ec);
+    // The unpacker catcher's pair (src/unpacker_catch.h): only this run's.
+    fs::remove(g_root / "unpacker_catch.txt", ec);
+    fs::remove(g_root / "unpacker_catch.bin", ec);
+    // The unpacker guard's pair, the same way.
+    fs::remove(g_root / "unpacker_recovered.txt", ec);
+    fs::remove(g_root / "unpacker_recovered.bin", ec);
     const auto launch_time = fs::file_time_type::clock::now();
 
     std::vector<std::pair<std::string, std::string>> env = {
@@ -550,13 +470,39 @@ GameResult run_game(const std::string& rom) {
         {"GBARECOMP_TURBO_AUDIO", "0"},
         {"GBARECOMP_AUDIO_STEREO", "1"},
         {"GBARECOMP_HEAL_CACHE", (g_root / "recomp_cache").string()},
-        {"GSR_FRAME_REWIND", "1"},
         {"GBARECOMP_EXPERIMENTAL_FIXES", "1"},
         {"GSR_ROOM_BUFFER_RENDER", "1"},
         {"GSR_HOST_EFFECTS", "1"},
         {"GSR_GPU_FIELD", "1"},
-        {"GSR_GPU_FIELD_ONLY", "0"},
+        // Graphics card only, as the Windows player launcher: the console
+        // compositor's fallback picture made widescreen slow on the Deck.
+        {"GSR_GPU_FIELD_ONLY", "1"},
+        // Mutable-RAM native healing is enabled for both player and dev
+        // launchers; the dev-only extras below remain conditional.
+        {"GBARECOMP_SELFHEAL_RAM", "1"},
+        // F1 > Video's experimental screen filters, as the Windows launcher.
+        {"GSR_SCREEN_FILTERS", "1"},
+        // Saves the moment the data unpacker is entered wrongly (the Sol
+        // Sanctum crash); nothing until then.
+        {"GSR_UNPACKER_CATCH", "1"},
+#ifdef GSR_LINUX_DEV_LAUNCHER
+        // The Windows developer launcher's extras (make_release_linux.sh
+        // --dev): per-frame timing CSVs beside the session log. Rewind stays
+        // on, as for players, so F12 on the Deck saves the last 2 seconds.
+        {"GSR_FRAME_REWIND", "1"},
+        {"GBARECOMP_FRAME_EVENTS",
+         fs::path(result.log_path).replace_extension(".events.csv").string()},
+        {"GBARECOMP_FRAME_PHASE",
+         fs::path(result.log_path).replace_extension(".phase.csv").string()},
+#else
+        {"GSR_FRAME_REWIND", "1"},
+#endif
     };
+    // Release: point the game's self-heal at the bundled g++ (absent on dev).
+    if (fs::exists(g_root / "builder" / "toolchain" / "bin" / "g++")) {
+        env.push_back({"GBARECOMP_HEAL_TOOLCHAIN",
+                       (g_root / "builder" / "toolchain").string()});
+    }
     for (const char* name : {"GBARECOMP_SWI_LOG", "GBARECOMP_BIOS_PC_LOG",
                              "GBARECOMP_BIOS_READ_LOG"})
         unsetenv(name);
@@ -564,7 +510,11 @@ GameResult run_game(const std::string& rom) {
 
     SessionLog log;
     log.fd = open(result.log_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    log.line("[launcher] ", "test_variables=OFF set=GSR_FRAME_REWIND");
+#ifdef GSR_LINUX_DEV_LAUNCHER
+    log.line("[launcher] ", "dev launcher: test_variables=ON set=GBARECOMP_SELFHEAL_RAM,GSR_FRAME_REWIND,GSR_UNPACKER_CATCH gpu_field_only=1");
+#else
+    log.line("[launcher] ", "test_variables=OFF set=GBARECOMP_SELFHEAL_RAM,GSR_FRAME_REWIND,GSR_UNPACKER_CATCH gpu_field_only=1");
+#endif
 
     const std::string game = (g_root / "GoldenSunRecomp").string();
     const std::string root_s = g_root.string();
@@ -611,9 +561,11 @@ GameResult run_game(const std::string& rom) {
     const fs::path crash_report = g_root / "crash_report.txt";
     result.crashed = fs::is_regular_file(crash_report, ec) &&
                      fs::last_write_time(crash_report, ec) >= launch_time;
+    result.unpacker = fs::is_regular_file(g_root / "unpacker_recovered.txt", ec);
     launcher_log("Game ended: exit code " + std::to_string(result.exit_code) +
                  (result.exit_code == 127 ? " (GoldenSunRecomp could not be run)" : "") +
                  (result.crashed ? ", crashed (crash_report.txt written)" : "") +
+                 (result.unpacker ? ", unpacker crash caught (unpacker_recovered.txt)" : "") +
                  ", rewind captures " + std::to_string(result.new_rewinds.size()) + ".");
     return result;
 }
@@ -633,6 +585,9 @@ std::string os_release_name() {
     return "?";
 }
 
+}  // namespace
+namespace gsr_launcher {
+
 // The text in a report with the player's home folder taken out of paths
 // (/home/name/... becomes /home/<user>/...), so a report never shows who
 // sent it.
@@ -642,43 +597,11 @@ std::string scrub_user_name(std::string text) {
         swaps.emplace_back(home, "/home/<user>");
     if (const char* user = std::getenv("USER"); user && *user)
         swaps.emplace_back(std::string("/home/") + user, "/home/<user>");
-    for (const auto& [needle, replacement] : swaps) {
-        std::size_t at = 0;
-        while ((at = text.find(needle, at)) != std::string::npos) {
-            const std::size_t after = at + needle.size();
-            // Only the whole folder name: /home/jim must not match /home/jimmy.
-            if (after < text.size() && text[after] != '/' && text[after] != '"' &&
-                text[after] != '\'' && text[after] != ' ' && text[after] != '\n') {
-                at = after;
-                continue;
-            }
-            text.replace(at, needle.size(), replacement);
-            at += replacement.size();
-        }
-    }
-    return text;
+    return scrub_paths(std::move(text), swaps);
 }
 
-// Copies a log or settings file into the report, user name taken out. A
-// very long session log keeps its first 256 KB and its last 3 MB.
-void copy_into_report(const fs::path& from, const fs::path& staging) {
-    std::error_code ec;
-    if (!fs::is_regular_file(from, ec)) return;
-    const std::string ext = from.extension().string();
-    if (ext != ".log" && ext != ".txt" && ext != ".ini" && ext != ".csv") {
-        fs::copy_file(from, staging / from.filename(),
-                      fs::copy_options::overwrite_existing, ec);
-        return;
-    }
-    std::string content = read_text(from);
-    constexpr std::size_t kHead = 256 * 1024, kTail = 3 * 1024 * 1024;
-    if (content.size() > kHead + kTail) {
-        content = content.substr(0, kHead) +
-                  "\n\n[... the middle of this log was left out of the bug report ...]\n\n" +
-                  content.substr(content.size() - kTail);
-    }
-    write_text(staging / from.filename(), scrub_user_name(content));
-}
+}  // namespace gsr_launcher
+namespace {
 
 // The Windows launcher's make_bug_report: the session log, the settings
 // files and the crash files in every archive, plus at most ONE F12 capture
@@ -708,13 +631,22 @@ std::vector<fs::path> make_bug_report(const GameResult& game) {
     // .sav), so the problem can be played again from the same place.
     if (!game.rom.empty())
         copy_into_report(fs::path(game.rom).replace_extension(".sav"), staging);
-    if (game.crashed) copy_into_report(g_root / "crash_report.txt", staging);
+    if (game.crashed) {
+        copy_into_report(g_root / "crash_report.txt", staging);
+        copy_into_report(g_root / "crash_memory.bin", staging);
+        copy_into_report(g_root / "crash_trail.csv", staging);
+    }
+    copy_into_report(g_root / "unpacker_catch.txt", staging);
+    copy_into_report(g_root / "unpacker_catch.bin", staging);
+    copy_into_report(g_root / "unpacker_recovered.txt", staging);
+    copy_into_report(g_root / "unpacker_recovered.bin", staging);
     write_text(staging / "report_info.txt",
                std::string("Golden Sun Recompiled bug report\n") +
                "Launcher built: " + __DATE__ + " " + __TIME__ + "\n" +
                "System: Linux, " + os_release_name() + "\n" +
                "F12 captures: " + std::to_string(game.new_rewinds.size()) + "\n" +
                "Game crashed: " + (game.crashed ? "yes" : "no") + "\n" +
+               "Unpacker crash caught: " + (game.unpacker ? "yes" : "no") + "\n" +
                "Game exit code: " + std::to_string(game.exit_code) + "\n");
 
     std::vector<fs::path> archives;
@@ -782,6 +714,9 @@ int run_capture(const std::vector<std::string>& args, std::string* out) {
 std::mutex g_update_mutex;
 gsr_online::Release g_update;
 std::atomic<bool> g_update_found{false};
+// The newest release's notes, shown over the logo whether or not it is newer.
+std::string g_release_notes;  // title line + plain text; under g_update_mutex
+std::atomic<bool> g_release_notes_ready{false};
 // Set however the update check ends; the automatic start waits for it.
 std::atomic<bool> g_update_check_done{false};
 
@@ -813,6 +748,16 @@ void check_for_update() {
         if (!gsr_online::parse_newest_release(reply, true, &release, &error)) {
             launcher_log("Update check: " + error);
             return;
+        }
+        {
+            const std::string notes = gsr_online::notes_to_plain_text(release.notes);
+            if (!notes.empty()) {
+                {
+                    std::lock_guard<std::mutex> lock(g_update_mutex);
+                    g_release_notes = "What's new in " + release.tag + "\n\n" + notes;
+                }
+                g_release_notes_ready = true;
+            }
         }
         if (!gsr_online::is_newer_release(release)) {
             launcher_log("Update check: " + release.tag + " is the newest.");
@@ -867,7 +812,8 @@ void open_with_desktop(const std::string& target) {
 
 // ---------------------------------------------------------------- window
 
-enum class Dialog { None, Message, TypePath, BugReport, Update, AskAutoStart };
+enum class Dialog { None, Message, TypePath, BugReport, Update, AskAutoStart,
+                  AskStartOrNotes };
 
 struct Ui {
     Dialog dialog = Dialog::None;
@@ -976,7 +922,7 @@ void use_rom(const std::string& rom) {
     write_text(rom_cache_path(), rom + "\n");
     g_ui.remembered_rom = rom;
     g_ui.pending_rom.clear();
-    if (!game_code_ready()) {
+    if (!game_code_ready(g_root)) {
         launcher_log("The game is not built yet (or is out of date): building it.");
         start_game_build(rom);
         return;
@@ -1038,8 +984,9 @@ int main(int, char**) {
         }
     }
 
-    bool ready = game_code_ready();
+    bool ready = game_code_ready(g_root);
     bool running = true;
+    std::string release_notes;  // empty until the update check has them
     if (g_ui.auto_start && ready && !g_ui.remembered_rom.empty()) {
         launcher_log("Start automatically: waiting for the update check.");
         g_ui.auto_start_began = std::max<Uint32>(1, SDL_GetTicks());
@@ -1068,17 +1015,19 @@ int main(int, char**) {
         }
         if (build_finished) {
             if (g_build_thread.joinable()) g_build_thread.join();
-            if (build_ok) write_text(g_root / "GoldenSunGame.release.txt", release_fingerprint());
-            ready = build_ok && game_code_ready();
+            if (build_ok) write_text(g_root / "GoldenSunGame.release.txt", release_fingerprint(g_root));
+            ready = build_ok && game_code_ready(g_root);
             launcher_log(ready      ? std::string("Build: finished, the game is ready.")
                          : build_ok ? std::string("Build: finished, but the game files do "
                                                   "not match this release.")
                                     : "Build: failed: " + build_error);
             if (ready) {
-                g_ui.pending_rom = "@play:" + g_build_rom;
+                // The game starts only after the player answers the questions.
                 std::error_code exists_ec;
                 if (!fs::exists(auto_start_path(), exists_ec))
                     g_ui.dialog = Dialog::AskAutoStart;
+                else
+                    g_ui.dialog = Dialog::AskStartOrNotes;
             } else {
                 show_message("The game could not be prepared",
                              build_error + "\n\nThe full log is builder/work/build-log.txt.",
@@ -1105,6 +1054,23 @@ int main(int, char**) {
         }
 
         const float bottom = size.y - 40.0f;
+        if (g_release_notes_ready.exchange(false)) {
+            std::lock_guard<std::mutex> lock(g_update_mutex);
+            release_notes = g_release_notes;
+        }
+        // Over the logo, from y 40 down to just above the status text.
+        if (!release_notes.empty()) {
+            ImGui::SetCursorPos(ImVec2(40.0f, 40.0f));
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.03f, 0.02f, 0.08f, 0.88f));
+            if (ImGui::BeginChild("##notes", ImVec2(size.x - 80.0f, bottom - 170.0f - 5.0f - 40.0f),
+                                  true)) {
+                ImGui::PushTextWrapPos(0.0f);
+                ImGui::TextUnformatted(release_notes.c_str());
+                ImGui::PopTextWrapPos();
+            }
+            ImGui::EndChild();
+            ImGui::PopStyleColor();
+        }
         std::string text, note;
         if (build_running) {
             const bool step_two = stage.find("Compiling") != std::string::npos ||
@@ -1328,6 +1294,25 @@ int main(int, char**) {
                     write_text(auto_start_path(), yes ? "1\n" : "0\n");
                     launcher_log(yes ? "Start automatically: on (asked after the build)."
                                      : "Start automatically: off (asked after the build).");
+                    g_ui.dialog = Dialog::AskStartOrNotes;
+                    ImGui::CloseCurrentPopup();
+                }
+            } else if (g_ui.dialog == Dialog::AskStartOrNotes) {
+                ImGui::TextUnformatted("The game is ready");
+                ImGui::Separator();
+                ImGui::TextUnformatted(
+                    "The game is ready.\n\nStart it now, or read what's new in this version "
+                    "first? The Play button starts it whenever you are ready.");
+                const bool start = ImGui::Button("Start now", ImVec2(120, 0));
+                ImGui::SameLine();
+                const bool notes = ImGui::Button("What's new", ImVec2(120, 0));
+                if (start || notes) {
+                    if (start) {
+                        launcher_log("Build: finished; the player chose to start now.");
+                        g_ui.pending_rom = "@play:" + g_build_rom;
+                    } else {
+                        launcher_log("Build: finished; the player chose to read what's new first.");
+                    }
                     g_ui.dialog = Dialog::None;
                     ImGui::CloseCurrentPopup();
                 }
@@ -1347,13 +1332,32 @@ int main(int, char**) {
             const std::string pending = g_ui.pending_rom;
             if (pending.rfind("@play:", 0) == 0) {
                 g_ui.pending_rom.clear();
+                // Golden Sun's flash save is 64 KiB; the engine refuses a larger
+                // .sav (runtime.cpp "save file too large"), so say why.
+                constexpr std::uintmax_t kGameSaveBytes = 0x10000;
+                const fs::path save = fs::path(pending.substr(6)).replace_extension(".sav");
+                std::error_code save_ec;
+                const std::uintmax_t save_size = fs::file_size(save, save_ec);
+                if (!save_ec && save_size > kGameSaveBytes) {
+                    launcher_log("Start game: save file " + save.string() + " is " +
+                                 std::to_string(save_size) +
+                                 " bytes, larger than 65536: not started.");
+                    show_message("This save file can't be used",
+                                 "The save file next to your ROM was made by an emulator "
+                                 "or another program, and Golden Sun Recompiled can't "
+                                 "read it.\n\n" + save.string() +
+                                 "\n\nMove it to another folder or delete it, then start "
+                                 "the game again. The game will make a new save there.",
+                                 true);
+                    continue;
+                }
                 SDL_HideWindow(window);
                 const GameResult game = run_game(pending.substr(6));
                 SDL_ShowWindow(window);
                 if (!game.started) {
                     show_message("The game could not start",
                                  "GoldenSunRecomp could not be started.", true);
-                } else if (!game.new_rewinds.empty() || game.crashed) {
+                } else if (!game.new_rewinds.empty() || game.crashed || game.unpacker) {
                     g_ui.reports = make_bug_report(game);
                     if (g_ui.reports.empty()) {
                         running = false;
@@ -1363,9 +1367,18 @@ int main(int, char**) {
                     g_ui.reports_packed = packed;
                     g_ui.send_state = 0;
                     g_ui.description[0] = '\0';
-                    g_ui.title = game.crashed
-                        ? "The game closed unexpectedly. A bug report was saved."
-                        : "Your bug report was saved.";
+                    g_ui.title =
+                        game.unpacker && game.crashed
+                            ? "The game's data unpacker hit a crash and could not recover.\n"
+                              "A bug report was saved; sending it helps a lot in finding\n"
+                              "the proper fix."
+                        : game.unpacker
+                            ? "The game's data unpacker hit a crash. It was caught and the\n"
+                              "game kept running, and a bug report was saved. Sending it\n"
+                              "helps a lot in finding the proper fix."
+                        : game.crashed
+                            ? "The game closed unexpectedly. A bug report was saved."
+                            : "Your bug report was saved.";
                     std::error_code size_ec;
                     std::uintmax_t bytes = 0;
                     for (const fs::path& report : g_ui.reports)

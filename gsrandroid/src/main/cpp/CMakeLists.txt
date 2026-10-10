@@ -99,6 +99,7 @@ add_library(gsrecomp_core STATIC
 		${GSRC_GB}/src/runtime/host_platform.cpp
 		${GSRC_GB}/src/runtime/host_window.cpp
 		${GSRC_GB}/src/runtime/host_window_android.cpp
+		${GSRC_GB}/src/runtime/screen_filter.cpp
 		${GSRC_GB}/src/runtime/no_bios_dispatch_table.cpp
 		${GSRC_GB}/src/runtime/overlay_compile.cpp
 		${GSRC_GB}/src/runtime/overlay_emit.cpp
@@ -187,6 +188,8 @@ add_library(gsrengine SHARED
 		gsrecomp/src/mod_loader.cpp
 		gsrecomp/src/gs_text_encode.cpp
 		gsrecomp/src/move_probe.cpp
+		gsrecomp/src/unpacker_catch.cpp
+		gsrecomp/src/unpacker_guard.cpp
 		gsrecomp/src/earth_surge.cpp
 		gsrecomp/src/effect_burst.cpp)
 set_source_files_properties(gsrecomp/src/runner_main.cpp PROPERTIES COMPILE_DEFINITIONS "main=gsr_engine_main_cpp")

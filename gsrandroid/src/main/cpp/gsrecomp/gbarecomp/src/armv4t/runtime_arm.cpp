@@ -9,6 +9,7 @@
 
 #include "runtime_arm.h"
 #include "symbol_lookup.h"
+#include "env_flag.h"
 
 #include <algorithm>
 #include <atomic>
@@ -144,6 +145,7 @@ extern "C" RuntimeRamDispatchHook g_runtime_ram_dispatch_hook = nullptr;
 extern "C" RuntimeRamIdentityConfirmedHook
     g_runtime_ram_identity_confirmed_hook = nullptr;
 extern "C" RuntimeCallReturnHook g_runtime_call_return_hook = nullptr;
+extern "C" RuntimeUnmatchedReturnHook g_runtime_unmatched_return_hook = nullptr;
 extern "C" RuntimeGuestStepBoundaryHook
     g_runtime_guest_step_boundary_hook = nullptr;
 extern "C" RuntimeMp2kWriteHook g_runtime_mp2k_write_hook = nullptr;
@@ -800,6 +802,8 @@ uint64_t g_unpacker_cpu_total = 0;
 uint64_t g_unpacker_seq = 0;
 // Last dispatch targets (pc | thumb bit), oldest at index next.
 uint32_t g_recent_dispatch[kRecentDispatchDepth];
+// Per entry above: 1 when that dispatch was a scheduler-yield resume.
+uint8_t g_recent_dispatch_resume[kRecentDispatchDepth];
 uint32_t g_recent_dispatch_next = 0;
 // Set by runtime_yield_restore_pc() when it put a resume pc back; the next
 // dispatch reads and clears it.
@@ -1035,6 +1039,22 @@ extern "C" void runtime_unpacker_slot_dump(const char* why) {
     }
     std::fprintf(stderr, "\n");
     unpacker_dump_live_ret();
+}
+
+// The last dispatch targets, oldest first (pc | thumb bit), with whether each
+// was a scheduler-yield resume. Returns how many were written (at most max).
+extern "C" uint32_t runtime_recent_dispatch_copy(uint32_t* pcs,
+                                                 uint8_t* resumes,
+                                                 uint32_t max) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < kRecentDispatchDepth && n < max; ++i) {
+        const uint32_t slot = (g_recent_dispatch_next + i) % kRecentDispatchDepth;
+        if (g_recent_dispatch[slot] == 0u) continue;
+        pcs[n] = g_recent_dispatch[slot];
+        resumes[n] = g_recent_dispatch_resume[slot];
+        ++n;
+    }
+    return n;
 }
 
 extern "C" void runtime_iwram_code_write_dump(const char* why) {
@@ -1372,10 +1392,9 @@ extern "C" void runtime_trace_event(uint32_t kind, uint32_t pc,
     // explicit native/shadow request; faithful runs remain untouched.
     static int mp2k_watch = -1;
     if (mp2k_watch < 0) {
-        const char* native = std::getenv("GBARECOMP_AUDIO_NATIVE");
         const char* shadow = std::getenv("GBARECOMP_AUDIO_SHADOW");
         const bool requested =
-            (native && native[0] && native[0] != '0') ||
+            gbarecomp::env_flag("GBARECOMP_AUDIO_NATIVE") ||
             (shadow && shadow[0] && !(shadow[0] == '0' && shadow[1] == '\0'));
         mp2k_watch = requested ? 1 : 0;
     }
@@ -1663,8 +1682,7 @@ extern "C" void runtime_trace_reset(void) {
     // compact mode/address set instead of allocating the large fingerprint
     // ring. Its nonzero value still arms the generated call site; runtime_fp
     // distinguishes the lightweight mode below.
-    const char* bpc = std::getenv("GBARECOMP_BIOS_PC_LOG");
-    g_bios_pc_log_armed = bpc && bpc[0] && bpc[0] != '0';
+    g_bios_pc_log_armed = gbarecomp::env_flag("GBARECOMP_BIOS_PC_LOG");
     if (g_bios_pc_log_armed) {
         g_bios_pc_seen.assign(static_cast<std::size_t>(kBiosPcRegionEnd), 0u);
         g_bios_pc_samples = 0;
@@ -1673,8 +1691,7 @@ extern "C" void runtime_trace_reset(void) {
         g_bios_pc_samples = 0;
     }
     g_bios_pc_handed_off = false;
-    const char* it = std::getenv("GBARECOMP_INSN_TRACE");
-    g_insn_trace_from_env = it && it[0] && it[0] != '0';
+    g_insn_trace_from_env = gbarecomp::env_flag("GBARECOMP_INSN_TRACE");
     g_runtime_insn_trace = g_bios_pc_log_armed
         ? 2u : ((g_insn_trace_from_env || g_crash_log) ? 1u : 0u);
     runtime_fp_reset();
@@ -2361,10 +2378,11 @@ void runtime_dispatch(uint32_t target_pc) {
 
     bool thumb = (g_cpu.cpsr & CPSR_T_BIT) != 0;
     runtime_pool_dispatch_history_record(pc, thumb ? 1 : 0);
-    g_recent_dispatch[g_recent_dispatch_next] = pc | (thumb ? 1u : 0u);
-    g_recent_dispatch_next = (g_recent_dispatch_next + 1u) % kRecentDispatchDepth;
     const bool yield_resume = g_dispatch_is_yield_resume;
     g_dispatch_is_yield_resume = false;
+    g_recent_dispatch[g_recent_dispatch_next] = pc | (thumb ? 1u : 0u);
+    g_recent_dispatch_resume[g_recent_dispatch_next] = yield_resume ? 1u : 0u;
+    g_recent_dispatch_next = (g_recent_dispatch_next + 1u) % kRecentDispatchDepth;
     if (pc == 0x03002000u && !thumb)
         runtime_unpacker_slot_note_dispatch(yield_resume);
     if (g_runtime_ram_image_dispatch_probe) {
@@ -2545,6 +2563,8 @@ extern "C" int runtime_call_should_return(uint32_t target_pc) {
         g_runtime_call_return_hook(pc, g_call_return_depth);
     if (g_runtime_ram_image_boundary_probe)
         g_runtime_ram_image_boundary_probe(0u, pc, g_call_return_depth);
+    if (g_runtime_unmatched_return_hook && g_runtime_unmatched_return_hook(pc))
+        return 1;
     // An unmatched return normally dispatches its target nested inside the
     // returning C frame. A callee that rewrites its own return address
     // (`sub lr, pc, #imm` before `bx lr`) and is called in a loop therefore

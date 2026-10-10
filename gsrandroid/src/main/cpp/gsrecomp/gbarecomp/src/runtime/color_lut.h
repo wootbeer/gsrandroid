@@ -6,7 +6,8 @@
 // 32768-entry table applied to a COPY of the frame at SDL-upload time, and
 // it defaults to Raw (exact passthrough), so default behavior and every
 // hashed/verified frame are byte-identical unless a screen model is opted in
-// via GBARECOMP_SCREEN={raw,unlit,frontlit,backlit,classic}.
+// via GBARECOMP_SCREEN={raw,unlit,frontlit,backlit,classic,handheld,
+// handheld_light,soft,natural,warm,deep}.
 //
 // The math is first-principles CIE colorimetry (xyY→XYZ, primaries→matrix,
 // Bradford adaptation, sRGB OETF) over published colorimeter measurements;
@@ -34,18 +35,36 @@ enum class ScreenKind {
     Frontlit,  // reflective panel, lit
     Backlit,   // late near-sRGB panel, clean blacks
     Classic,   // community-canonical gamma-4.0 model
+    Handheld,  // muted, warm: fitted to an Analogue Pocket photo (2026-10-06)
+    // Kinds from Handheld on share one colour-mix path (color_lut.cpp).
+    HandheldLight,  // Handheld, 40% back toward the game's own colours
+    Soft,      // 35% Handheld
+    Natural,   // less saturated, slightly darker
+    Warm,      // less saturated, greens toward yellow
+    Deep,      // a little less saturated, darker
+    Custom,    // the player's own saturation and hue (ColorSettings)
 };
+constexpr int kScreenKindCount = static_cast<int>(ScreenKind::Custom) + 1;
 
 // Display colorspace the emitted bytes are interpreted in.
 enum class DisplayTarget { Srgb, DisplayP3 };
 
 // Parse a config/env token; returns false if unrecognized.
 bool screen_kind_from_name(std::string_view name, ScreenKind& out);
+// The config/env token for a kind; nullptr when out of range.
+const char* screen_kind_name(ScreenKind kind);
 
 struct ColorSettings {
     ScreenKind    screen = ScreenKind::Raw;
     double        darken = -1.0;  // <0 = per-screen default
     DisplayTarget target = DisplayTarget::Srgb;
+    // Custom only: 1.0 = the game's own saturation, 0 = grey; hue turned
+    // around the grey axis in degrees.
+    double        saturation = 1.0;
+    double        hue_degrees = 0.0;
+    double        brightness = 1.0;  // Custom only: gain, 1 = unchanged
+    double        warmth = 0.0;  // 0..1, share of the Warm tint
+    double        curve = 1.0;  // darkening exponent, 1 = none
 };
 
 // A baked BGR555 → RGB888 table. Build once per settings change; apply per

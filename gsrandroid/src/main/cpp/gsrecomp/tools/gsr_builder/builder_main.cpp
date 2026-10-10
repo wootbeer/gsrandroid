@@ -338,8 +338,15 @@ int run_process(const fs::path& exe, const std::vector<std::string>& args,
                 emit("@log watchdog: child CPU time not readable, using the long limit only");
             }
             const auto now = std::chrono::steady_clock::now();
+            // A working child keeps using CPU, so when CPU time can be read only the 30 s
+            // no-progress rule decides and the wall-clock limit is just a last resort. (It was
+            // 25 minutes for everyone, which killed and retried the main program's translation
+            // on slow phones while it was still working: a long stall at 59%, then a failure.)
+            // When CPU time cannot be read, a frozen child looks the same as a slow one, so the
+            // original 25 minutes stays.
+            const auto wall_limit = known ? std::chrono::minutes(180) : std::chrono::minutes(25);
             if ((known && now - last_change > std::chrono::seconds(30)) ||
-                now - t_start > std::chrono::minutes(25)) {
+                now - t_start > wall_limit) {
                 kill(pid, SIGKILL);
                 waitpid(pid, &status, 0);
                 timed_out = true;

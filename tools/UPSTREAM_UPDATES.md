@@ -44,12 +44,16 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `tools/gsr_builder/builder_main.cpp` | `GSR_ANDROID_INPROCESS` (in-process entry) |
 | `crash_handler.cpp` | Android crash handling |
 | `tcc/tccelf.c` (line ~3920) | on-device linking change (LGPL: keep notice) |
+| `gsr/gsr_screen_filter_shaders.inc` (ours, copied) | verbatim copy of `screen_filter.cpp`'s shared fragment header and the LCD3x, xBR-lv2 and CRT Lottes shaders with their notices; copy it again when upstream changes them |
+| `src/unpacker_catch.cpp` | `GSR_ANDROID`: no `<execinfo.h>`/`backtrace()` (API 33+), the host call chain is left out of the diagnostic |
+| `src/runner_main.cpp` (cheats) | `GSR_ANDROID_CHEATS`: the side menu's Cheats page owns the reward multipliers |
 | `src/room_buffer.cpp` | `GSR_ANDROID_ENGINE`: map numbers 0/1 and the title's BGCNT set are not rooms; `room_buffer_row_is_room()` |
 | `src/runner_main.cpp` (more) | `GSR_ANDROID_ENGINE`: margin policy pillarboxes non-room rows; GPU hands boot/title/intro frames to CPU; camera inset skipped for the title; boot/title/intro picture scaled to fill the canvas |
 | `CMakeLists.txt` | source lists, include dirs, `GSR_ANDROID_*` defines, `gpu_surface_android.cpp` instead of upstream `gpu_surface.cpp` |
 
 Files we replace rather than patch: upstream `gpu_surface.cpp` (desktop GL + SDL) is not built; its
-GLES3 replacement must keep the `gpu_surface.h` interface. After an update, diff `gpu_surface.h` and
+GLES3 replacement must keep the `gpu_surface.h` interface. (0.4.3 added `begin/finish_texture_readback`;
+ours queues the copy with `glReadPixels` into a pixel-pack buffer and maps it a frame later.) After an update, diff `gpu_surface.h` and
 `gpu_surface.cpp` for new methods and mirror them in `gpu_surface_android.cpp`. Also re-check that all
 shaders in `field_scene_renderer.cpp` still validate as GLSL ES 3.00 after the `#version 130` rewrite
 (`glslangValidator` on the rewritten source catches this offline).
@@ -64,4 +68,12 @@ shaders in `field_scene_renderer.cpp` still validate as GLSL ES 3.00 after the `
 6. Test: boot, field, battle, world map, Expanded view, fast-forward, menu, save/load.
 7. Update the vendored engine version recorded here.
 
-Vendored engine version: 0.3.1 (pre-release), updated 2026-10-06 from https://github.com/Shmargus/GSRecomp (previously 0.2.3).
+Vendored engine version: 0.4.3 (upstream commit 53d2eeb), updated 2026-10-09 from https://github.com/Shmargus/GSRecomp
+(previously 0.3.1 = commit ddde2e2; before that 0.2.3).
+
+How the 0.4.3 update was done (repeat this next time): a three-way git merge with base = the upstream commit we
+were on (only the files we vendor), ours = the vendored folder, theirs = the new upstream commit. Only files we
+patched can conflict. Then copy changed `config/usa` files into `assets/gsr_builder_data`, mirror any
+`runtime_arm.h` change into `gsr/hdr/runtime_arm.h` (C-only copy) and run `tools/embed_headers.py`, validate the
+`field_scene_renderer.cpp` shaders as GLSL ES 3.00, check the player launcher's environment variables
+(`src/launcher_main.cpp`) against `gsr/gsr_main.c`, and bump `GSR_BUILD_VERSION`.

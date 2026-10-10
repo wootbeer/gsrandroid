@@ -39,6 +39,7 @@ extern "C" unsigned long long g_cost_irq_handler_ns;
 extern "C" unsigned long long g_cost_irq_handler_calls;
 
 #include "asset_picker.h"
+#include "env_flag.h"
 #include "bios_hle.h"
 #include "gba_bios.h"
 #include "gba_bus.h"
@@ -142,6 +143,7 @@ struct Args {
     std::string rom_sha1;
     std::uint32_t rom_crc32 = 0;  // 0 = no CRC check (per-game TOML fills)
     std::string save_path;
+    std::string user_directory; // explicit config and save-state isolation
     std::size_t save_size = 0;
     int steps = 16;
     int frames = -1;
@@ -584,7 +586,7 @@ void find_config_arg(int argc, char** argv, Args* args) {
              s == "--dump-png" || s == "--load-state" ||
               s == "--view-width" || s == "--view-height" ||
               s == "--widescreen" ||
-             s == "--save" || s == "--save-path") &&
+             s == "--save" || s == "--save-path" || s == "--user-directory") &&
             i + 1 < argc) {
             ++i;
             continue;
@@ -763,6 +765,12 @@ bool parse_cli(int argc, char** argv, Args* args, std::string* err) {
                 if (err) *err = "invalid --widescreen value (expected >= 0)";
                 return false;
             }
+            continue;
+        }
+        if (s == "--user-directory") {
+            const char* v = need_value("--user-directory"); if (!v) return false;
+            args->user_directory = v;
+            if (!std::filesystem::path(v).is_absolute()) { if (err) *err = "--user-directory must be absolute"; return false; }
             continue;
         }
         if (s == "--save" || s == "--save-path") {
@@ -969,8 +977,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     }
 
     if (opts.no_bios_by_default && !args.bios_from_cli) args.no_bios = true;
-    if (const char* e = std::getenv("GBARECOMP_NO_BIOS"))
-        args.no_bios = (e[0] && e[0] != '0');
+    args.no_bios = gbarecomp::env_flag("GBARECOMP_NO_BIOS", args.no_bios);
 #if !defined(GBARECOMP_HAVE_BIOS_RECOMP)
     // This build carries no recompiled BIOS, so a BIOS-backed run cannot
     // execute. Say so instead of starting one that would stop at boot.
@@ -1126,10 +1133,9 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // (0 forces LLE, any other value forces HLE). Installs the runtime_swi hook.
     // The boot-skip decision (below, after reset_recomp_cpu) reads args.bios_hle
     // + args.bios_hle_keep_intro, so resolve the env overrides into args here.
-    if (const char* e = std::getenv("GBARECOMP_BIOS_HLE"))
-        args.bios_hle = (e[0] && e[0] != '0');
-    if (const char* e = std::getenv("GBARECOMP_BIOS_HLE_KEEP_INTRO"))
-        args.bios_hle_keep_intro = (e[0] && e[0] != '0');
+    args.bios_hle = gbarecomp::env_flag("GBARECOMP_BIOS_HLE", args.bios_hle);
+    args.bios_hle_keep_intro = gbarecomp::env_flag(
+        "GBARECOMP_BIOS_HLE_KEEP_INTRO", args.bios_hle_keep_intro);
     // No-BIOS mode needs the HLE SWIs and has no intro to keep.
     if (args.no_bios) {
         args.bios_hle = true;
@@ -1151,11 +1157,8 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // the interp side of the recomp-vs-interp first-divergence oracle; the recomp
     // side is the same binary with the flag unset. See COSIM_ORACLE.md §1.
     g_force_interp = 0;
-    if (const char* fi = std::getenv("GBARECOMP_FORCE_INTERP"))
-        g_force_interp = (fi[0] && fi[0] != '0') ? 1 : 0;
-    const char* strict_env = std::getenv("GBARECOMP_STRICT_STATIC");
-    const bool strict_requested =
-        strict_env && strict_env[0] != '\0' && strict_env[0] != '0';
+    if (gbarecomp::env_flag("GBARECOMP_FORCE_INTERP")) g_force_interp = 1;
+    const bool strict_requested = gbarecomp::env_flag("GBARECOMP_STRICT_STATIC");
     const char* frame_capture_env = std::getenv("GBARECOMP_FRAMEDUMP_DIR");
     const bool explicit_capture = !args.dump_bmp.empty() ||
                                   !args.dump_png.empty();
@@ -1183,12 +1186,9 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     cosim_init();
 #endif
 
-    const char* ws_wip_env = std::getenv("GBARECOMP_WS_WIP");
-    const bool ws_wip_enabled =
-        ws_wip_env && ws_wip_env[0] && ws_wip_env[0] != '0';
+    const bool ws_wip_enabled = gbarecomp::env_flag("GBARECOMP_WS_WIP");
 
-    if (const char* e = std::getenv("GBARECOMP_RESIZE_VIEW"))
-        args.resize_view = e[0] && e[0] != '0';
+    args.resize_view = gbarecomp::env_flag("GBARECOMP_RESIZE_VIEW", args.resize_view);
     const bool resize_view_enabled =
         args.resize_view && opts.resize_driven_view &&
         (opts.max_resize_view_width > 240 ||
@@ -1323,17 +1323,21 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 static_cast<unsigned>(ppu.view_extra_right()));
         }
     }
-    const char* native_audio_env = std::getenv("GBARECOMP_AUDIO_NATIVE");
+    const bool native_audio_env_on = gbarecomp::env_flag("GBARECOMP_AUDIO_NATIVE");
     const bool native_audio_requested =
-        native_audio_env && native_audio_env[0] && native_audio_env[0] != '0' &&
-        !strict_requested;
-    if (native_audio_env && native_audio_env[0] && native_audio_env[0] != '0' &&
-        strict_requested) {
+        native_audio_env_on && !strict_requested;
+    if (native_audio_env_on && strict_requested) {
         std::fprintf(stderr,
                      "[audio] native output forced OFF by strict-static acceptance\n");
     }
     bus.request_native_audio(native_audio_requested);
-    if (opts.rom_patch) opts.rom_patch(&rom);
+    try { if (opts.rom_patch) opts.rom_patch(&rom); }
+    catch (const std::exception& error) {
+        std::fprintf(stderr,"[gbarecomp:runtime] ROM data patch rejected: %s\n",error.what());
+        gbarecomp::overlay_loader_shutdown();
+        runtime_shutdown();
+        return 1;
+    }
     bus.set_rom(rom.data(), rom.size());
     if (header.save_type == gba::SaveType::SRAM) {
         std::size_t sram_bytes = args.save_size ? args.save_size : (32 * 1024);
@@ -2790,7 +2794,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 std::filesystem::path p(argv[0]);
                 if (p.has_parent_path()) exe_dir = p.parent_path().string();
             }
-            win.load_input_config(exe_dir.c_str());
+            win.load_input_config(args.user_directory.empty() ? exe_dir.c_str() : args.user_directory.c_str());
         }
         const int active_view_mode = fixed_mode_for_dimensions(
             ppu.render_width(), ppu.render_height());
@@ -2841,7 +2845,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // Host-window save-state slots: the ROM path with a .stateN
     // extension (N = 1..9). Shift+Fn writes slot N, Fn restores it.
     auto slot_path = [&](int slot) -> std::string {
-        std::filesystem::path p(args.rom);
+        std::filesystem::path p = args.user_directory.empty() ? std::filesystem::path(args.rom) : std::filesystem::path(args.user_directory) / "game";
         p.replace_extension(".state" + std::to_string(slot));
         return p.string();
     };

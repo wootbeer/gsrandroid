@@ -12,16 +12,20 @@ bool (*g_config_ui_extra_wants_keyboard)() = nullptr;
 #ifdef GBARECOMP_HAVE_IMGUI
 
 #include <SDL.h>
+#include <SDL_opengl.h>
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 #include "imgui_impl_opengl3.h"
+#include "color_lut.h"
 #include "frame_timing.h"
 #include "temporal_blend.h"
 
@@ -46,6 +50,19 @@ SDL_GLContext g_gl_context = nullptr;
 // config_ui_draw()/config_ui_shutdown() between imgui_impl_opengl3 (real
 // multi-viewport) and imgui_impl_sdlrenderer2 (docking only).
 bool g_use_opengl = false;
+SDL_Texture* g_badge_sdl_texture = nullptr;
+GLuint g_badge_gl_texture = 0;
+ImVec2 g_badge_size;
+char g_badge_caption[256] = {};
+char g_badge_flourish[256] = {};
+
+void clear_edition_badge() {
+    if (g_badge_gl_texture) glDeleteTextures(1, &g_badge_gl_texture);
+    if (g_badge_sdl_texture) SDL_DestroyTexture(g_badge_sdl_texture);
+    g_badge_gl_texture = 0;
+    g_badge_sdl_texture = nullptr;
+    g_badge_caption[0] = g_badge_flourish[0] = '\0';
+}
 
 // Which bind box is armed, if any. Exactly one capture can be live at a time,
 // and while it is, every key/pad press is swallowed and consumed as the bind.
@@ -83,13 +100,12 @@ static_assert(kPadTriggerLeftValue == static_cast<int>(SDL_CONTROLLER_BUTTON_MAX
 
 const char* pad_label(int button) {
     if (button < 0) return "(unset)";
-    // UI-02b: L2/R2 are synthetic ids, not a real SDL_GameControllerButton —
-    // label them with SDL's own axis-name strings ("lefttrigger"/
-    // "righttrigger"), matching the lowercase-no-separator convention every
-    // other row in this column already uses (SDL_GameControllerGetStringForButton
-    // output, e.g. "leftshoulder", "dpup").
-    if (button == kPadTriggerLeft)  return "lefttrigger";
-    if (button == kPadTriggerRight) return "righttrigger";
+    // UI-02b: L2/R2 and the stick directions are synthetic ids, not a real
+    // SDL_GameControllerButton — label them from the shared name table
+    // ("lefttrigger", "leftstickup", ...), matching the lowercase-no-separator
+    // convention every other row in this column already uses
+    // (SDL_GameControllerGetStringForButton output, e.g. "leftshoulder", "dpup").
+    if (const char* s = pad_synth_name(button)) return s;
     const char* n = SDL_GameControllerGetStringForButton(
         static_cast<SDL_GameControllerButton>(button));
     return (n && *n) ? n : "(unset)";
@@ -169,14 +185,61 @@ bool bind_row(const char* label, const char* value, bool armed,
     return clicked;
 }
 
+// D-pad Left/Right change a nav-focused (not yet activated) slider directly.
+// Call right after the slider. Returns -1 / +1 per press (with key repeat),
+// else 0. The keys are claimed so nav does not also move focus sideways.
+int dpad_slider_step() {
+    if (!ImGui::IsItemFocused() || ImGui::IsItemActive()) return 0;
+    const ImGuiID id = ImGui::GetItemID();
+    ImGui::SetKeyOwner(ImGuiKey_GamepadDpadLeft, id);
+    ImGui::SetKeyOwner(ImGuiKey_GamepadDpadRight, id);
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, ImGuiInputFlags_Repeat, id))
+        return -1;
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, ImGuiInputFlags_Repeat, id))
+        return 1;
+    return 0;
+}
+
+// What a slider did this frame: `changed` on any new value (drag or D-pad),
+// `committed` when the player let go of a drag or stepped with the D-pad.
+struct SliderEdit {
+    bool changed = false;
+    bool committed = false;
+};
+
+// The D-pad half of a slider; call right after the ImGui slider.
+template <typename T>
+SliderEdit finish_slider(bool dragged, T* value, T lo, T hi, T step) {
+    SliderEdit edit{dragged, ImGui::IsItemDeactivatedAfterEdit()};
+    if (const int dir = dpad_slider_step()) {
+        const T v = std::clamp(static_cast<T>(*value + step * dir), lo, hi);
+        if (v != *value) {
+            *value = v;
+            edit.changed = edit.committed = true;
+        }
+    }
+    return edit;
+}
+
+SliderEdit slider_int(const char* label, int* value, int lo, int hi, const char* format) {
+    ImGui::SetNextItemWidth(220.0f);
+    return finish_slider(ImGui::SliderInt(label, value, lo, hi, format), value, lo, hi, 1);
+}
+
+SliderEdit slider_float(const char* label, float* value, float lo, float hi, float step, const char* format) {
+    ImGui::SetNextItemWidth(220.0f);
+    return finish_slider(ImGui::SliderFloat(label, value, lo, hi, format), value, lo, hi, step);
+}
+
 void draw_controls_page(ConfigUiState* st) {
     section("Buttons");
-    caption("Click a box, then press the key or controller button to use. "
+    caption("Click a box, then press the key, controller button or stick direction to use. "
             "Esc cancels.");
 
     ImGui::BeginChild("controls_bindings_scroll",
                       ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing() * 1.5f),
-                      false, ImGuiWindowFlags_HorizontalScrollbar);
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_HorizontalScrollbar);
     if (ImGui::BeginTable("binds", 5,
                           ImGuiTableFlags_SizingFixedFit |
                           ImGuiTableFlags_RowBg)) {
@@ -273,7 +336,8 @@ void draw_hotkeys_page(ConfigUiState* st) {
             "while held.");
     ImGui::BeginChild("hotkeys_scroll",
                       ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing()),
-                      false, ImGuiWindowFlags_HorizontalScrollbar);
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_HorizontalScrollbar);
     if (ImGui::BeginTable("hotkeys", 5,
                           ImGuiTableFlags_SizingFixedFit |
                           ImGuiTableFlags_RowBg)) {
@@ -336,6 +400,16 @@ void draw_video_page(ConfigUiState* st) {
     if (st->fullscreen) ImGui::BeginDisabled();
     ImGui::SetNextItemWidth(220.0f);
     ImGui::SliderInt("Window size", &pending_scale, 1, max_scale, "%dx");
+    if (!st->fullscreen) {
+        const int dir = dpad_slider_step();
+        if (dir != 0) {
+            pending_scale = std::clamp(pending_scale + dir, 1, max_scale);
+            if (pending_scale != st->scale) {
+                st->scale = pending_scale;
+                st->video_changed = true;
+            }
+        }
+    }
     scale_active = ImGui::IsItemActive();
     if (ImGui::IsItemDeactivatedAfterEdit() && pending_scale != st->scale) {
         st->scale = pending_scale;
@@ -354,6 +428,109 @@ void draw_video_page(ConfigUiState* st) {
             "fill the window.");
     if (ImGui::Checkbox("V-Sync", &st->vsync)) st->video_changed = true;
     caption("Matches the monitor's refresh to prevent tearing.");
+    // The menu lists only these; screen_kind is a runtime::ScreenKind
+    // (color_lut.h). The GBA screen models stay reachable through
+    // GBARECOMP_SCREEN but are not offered here.
+    struct ScreenChoice {
+        runtime::ScreenKind kind;
+        const char* label;
+    };
+    static constexpr ScreenChoice kScreenChoices[] = {
+        {runtime::ScreenKind::Raw, "Raw (as the game draws it)"},
+        {runtime::ScreenKind::Handheld, "Handheld (muted, warm)"},
+        {runtime::ScreenKind::HandheldLight, "Handheld (lighter)"},
+        {runtime::ScreenKind::Soft, "Soft"},
+        {runtime::ScreenKind::Natural, "Natural"},
+        {runtime::ScreenKind::Warm, "Warm"},
+        {runtime::ScreenKind::Deep, "Deep"},
+        {runtime::ScreenKind::Custom, "Custom"},
+    };
+    int choice = 0;
+    for (int i = 0; i < static_cast<int>(std::size(kScreenChoices)); ++i)
+        if (static_cast<int>(kScreenChoices[i].kind) == st->screen_kind) choice = i;
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("Colours", kScreenChoices[choice].label)) {
+        for (int i = 0; i < static_cast<int>(std::size(kScreenChoices)); ++i) {
+            if (ImGui::Selectable(kScreenChoices[i].label, i == choice)) {
+                st->screen_kind = static_cast<int>(kScreenChoices[i].kind);
+                st->video_changed = true;
+            }
+            if (i == choice) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    caption("The game's colours were made bright for the dark original GBA "
+            "screen. Handheld tones them down like a modern handheld's GBA "
+            "mode; Soft, Natural, Warm and Deep calm them less. Custom lets "
+            "you set them yourself.");
+    if (st->screen_kind == static_cast<int>(runtime::ScreenKind::Custom)) {
+        const SliderEdit sat =
+            slider_int("Saturation", &st->color_saturation, 0, 200, "%d%%");
+        if (sat.changed) st->video_changed = true;
+        if (sat.committed) st->color_save = true;
+        caption("100% is the game's own colours, 0% is black and white.");
+        const SliderEdit hue = slider_int("Hue", &st->color_hue, -180, 180, "%d");
+        if (hue.changed) st->video_changed = true;
+        if (hue.committed) st->color_save = true;
+        caption("Turns every colour around the colour wheel. 0 is the "
+                "game's own.");
+        const SliderEdit bri =
+            slider_int("Brightness", &st->color_brightness, 50, 150, "%d%%");
+        if (bri.changed) st->video_changed = true;
+        if (bri.committed) st->color_save = true;
+        caption("100% is the game's own brightness.");
+        const SliderEdit warm =
+            slider_int("Warmth", &st->color_warmth, 0, 100, "%d%%");
+        if (warm.changed) st->video_changed = true;
+        if (warm.committed) st->color_save = true;
+        caption("Pulls greens toward yellow, like the Warm profile (100%).");
+        const SliderEdit dark =
+            slider_int("Darkening", &st->color_darken, 0, 50, "%d%%");
+        if (dark.changed) st->video_changed = true;
+        if (dark.committed) st->color_save = true;
+        caption("Deepens the darker colours. Natural uses 10%, Deep 25%.");
+    }
+    // Only changes the picture in Expanded View (a wider-than-3:2 view).
+    const bool aspect_active = st->widescreen_available && st->widescreen;
+    static constexpr const char* kAspectLabels[] = {"3:2 (original)", "4:3"};
+    const int aspect_choice = st->aspect == 1 ? 1 : 0;
+    if (!aspect_active) ImGui::BeginDisabled();
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("Aspect ratio", kAspectLabels[aspect_choice])) {
+        for (int i = 0; i < 2; ++i) {
+            if (ImGui::Selectable(kAspectLabels[i], i == aspect_choice)) {
+                st->aspect = i;
+                st->video_changed = true;
+            }
+            if (i == aspect_choice) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    if (!aspect_active) ImGui::EndDisabled();
+    caption(aspect_active
+        ? "4:3 shows the middle of the wide picture, for 4:3 screens. 3:2 is "
+          "the full width."
+        : "Only with Expanded View.");
+    if (st->screen_filters_available) {
+        static constexpr const char* kFilterLabels[] = {"Off", "LCD3x", "xBR",
+                                                       "CRT Lottes", "ScaleFX"};
+        const int filter_choice =
+            st->screen_filter >= 1 && st->screen_filter <= 4
+                ? st->screen_filter : 0;
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::BeginCombo("Filter (test)", kFilterLabels[filter_choice])) {
+            for (int i = 0; i < 5; ++i) {
+                if (ImGui::Selectable(kFilterLabels[i], i == filter_choice)) {
+                    st->screen_filter = i;
+                    st->video_changed = true;
+                }
+                if (i == filter_choice) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        caption("Test option. LCD3x imitates the GBA screen's grid, CRT Lottes "
+                "an old TV; xBR and ScaleFX smooth the pixel art.");
+    }
 
     section("Performance counter");
     if (ImGui::Checkbox("Show FPS", &st->show_fps)) st->video_changed = true;
@@ -363,8 +540,7 @@ void draw_video_page(ConfigUiState* st) {
 
 void draw_audio_page(ConfigUiState* st) {
     section("Sound");
-    ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::SliderInt("Volume", &st->volume, 0, 100, "%d%%"))
+    if (slider_int("Volume", &st->volume, 0, 100, "%d%%").changed)
         st->audio_changed = true;
     if (ImGui::Checkbox("Mute", &st->mute)) st->audio_changed = true;
 }
@@ -373,10 +549,11 @@ void draw_turbo_page(ConfigUiState* st) {
     section("Fast Forward");
     caption("Set the Fast Forward buttons on the Hotkeys page. Hold runs "
             "fast while pressed; Toggle switches it on and off.");
-    ImGui::SetNextItemWidth(220.0f);
-    ImGui::SliderFloat("Speed", &st->turbo_multiplier, 1.0f,
-                       kMaxTurboMultiplier, "%.1fx");
-    if (ImGui::IsItemDeactivatedAfterEdit()) st->speed_changed = true;
+    // 0.1 is ImGui's own controller step for a "%.1f" float slider.
+    if (slider_float("Speed", &st->turbo_multiplier, 1.0f,
+                     static_cast<float>(kMaxTurboMultiplier), 0.1f, "%.1fx")
+            .committed)
+        st->speed_changed = true;
     if (ImGui::Checkbox("As fast as possible", &st->uncapped))
         st->speed_changed = true;
     caption("Ignores the speed above and runs as fast as your PC allows.");
@@ -629,6 +806,11 @@ bool config_ui_init(SDL_Window* window, SDL_Renderer* renderer,
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable |
                       ImGuiConfigFlags_NavEnableKeyboard |
                       ImGuiConfigFlags_NavEnableGamepad;
+    // A press beside a slider (on its label or the window's empty space)
+    // used to start dragging the whole menu, so the menu shifted and the
+    // slider seemed to snap away from the mouse (Jimmy, 2026-10-05). Windows
+    // move by their title bar only.
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
     if (use_opengl) {
         // Real multi-viewport: torn-off panels become their own OS windows,
         // each an SDL window + GL context ImGui creates/destroys itself via
@@ -676,11 +858,13 @@ void config_ui_shutdown() {
         if (g_window && g_gl_context) {
             SDL_GL_MakeCurrent(g_window, g_gl_context);
         }
+        clear_edition_badge();
         if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
             ImGui::DestroyPlatformWindows();
         }
         ImGui_ImplOpenGL3_Shutdown();
     } else {
+        clear_edition_badge();
         ImGui_ImplSDLRenderer2_Shutdown();
     }
     ImGui_ImplSDL2_Shutdown();
@@ -691,6 +875,46 @@ void config_ui_shutdown() {
     g_use_opengl = false;
     g_config_window_recover = false;
     g_ready = false;
+}
+
+void config_ui_set_edition_badge(const char* bitmap_path, const char* caption,
+                                 const char* flourish) {
+    if (!g_ready) return;
+    clear_edition_badge();
+    if (!bitmap_path || !caption || !*caption) return;
+    SDL_Surface* bitmap = SDL_LoadBMP(bitmap_path);
+    if (!bitmap) return;
+    SDL_Surface* rgba = SDL_ConvertSurfaceFormat(bitmap, SDL_PIXELFORMAT_RGBA32, 0);
+    SDL_FreeSurface(bitmap);
+    if (!rgba) return;
+    if (g_use_opengl) {
+        GLint old_texture = 0, old_alignment = 0, old_row_length = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &old_texture);
+        glGetIntegerv(GL_UNPACK_ALIGNMENT, &old_alignment);
+        glGetIntegerv(GL_UNPACK_ROW_LENGTH, &old_row_length);
+        glGenTextures(1, &g_badge_gl_texture);
+        glBindTexture(GL_TEXTURE_2D, g_badge_gl_texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, rgba->w, rgba->h, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, rgba->pixels);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, old_alignment);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, old_row_length);
+        glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(old_texture));
+    } else {
+        g_badge_sdl_texture = SDL_CreateTextureFromSurface(g_renderer, rgba);
+        if (g_badge_sdl_texture)
+            SDL_SetTextureBlendMode(g_badge_sdl_texture, SDL_BLENDMODE_BLEND);
+    }
+    // Half the supplied bitmap's native size keeps the footer compact.
+    g_badge_size = ImVec2(rgba->w / 2.0f, rgba->h / 2.0f);
+    SDL_FreeSurface(rgba);
+    if (!g_badge_gl_texture && !g_badge_sdl_texture) return;
+    std::snprintf(g_badge_caption, sizeof(g_badge_caption), "%s", caption);
+    std::snprintf(g_badge_flourish, sizeof(g_badge_flourish), "%s",
+                  flourish ? flourish : "");
 }
 
 bool config_ui_visible() { return g_ready && g_visible; }
@@ -715,7 +939,22 @@ bool config_ui_handle_event(const SDL_Event* e) {
         if (e->type == SDL_CONTROLLERBUTTONDOWN) return true;
     }
 
-    ImGui_ImplSDL2_ProcessEvent(const_cast<SDL_Event*>(e));
+    // SDL_Renderer rewrites the game window's mouse motion into its logical
+    // coordinates whenever a logical size is set (the 240x160 view sets
+    // one). ImGui reads the real desktop position while no button is held
+    // but only these events during a drag, so a dragged slider saw the
+    // pointer jump left by the window scale and snapped toward 0% (Jimmy,
+    // 2026-10-05). Hand ImGui the same real position it reads between drags.
+    SDL_Event event = *e;
+    if (event.type == SDL_MOUSEMOTION && g_window &&
+        event.motion.windowID == SDL_GetWindowID(g_window)) {
+        int global_x = 0, global_y = 0, window_x = 0, window_y = 0;
+        SDL_GetGlobalMouseState(&global_x, &global_y);
+        SDL_GetWindowPosition(g_window, &window_x, &window_y);
+        event.motion.x = global_x - window_x;
+        event.motion.y = global_y - window_y;
+    }
+    ImGui_ImplSDL2_ProcessEvent(&event);
 
     if (!g_visible) {
         // The F1 menu itself is closed, but game-owned extra content (e.g. a
@@ -777,7 +1016,8 @@ bool config_ui_capture_pad(ConfigUiState* st, int button) {
     // gameplay input — see UI-02b task notes). A trigger pull while the
     // Controller tab's gameplay pad box is armed is simply not consumed,
     // same as pressing an unrelated key would be; gameplay binding stays
-    // exactly as before this change.
+    // exactly as before this change. Stick directions (also synthetic ids)
+    // are accepted for both gameplay and hotkey boxes.
     const bool is_trigger = (button == kPadTriggerLeft || button == kPadTriggerRight);
     if (g_capture == Capture::Pad) {
         if (is_trigger) return false;
@@ -839,6 +1079,20 @@ void config_ui_draw(ConfigUiState* st) {
         ImGui::SetNextWindowSizeConstraints(
             ImVec2(std::min(520.0f, max_w), std::min(360.0f, max_h)),
             ImVec2(FLT_MAX, FLT_MAX));
+        // Windowed, the menu is its own OS window from the moment it opens
+        // and never merges back, so it can be dragged off the game to see
+        // the picture behind it (Jimmy, 2026-10-07). Merging back was what
+        // made it jump and swallow a click (2026-10-05): a window lifted out
+        // only for the drag. Fullscreen (and without the OpenGL backend) it
+        // stays inside the game window: there is nowhere else to put it, and
+        // the Steam Deck shows one window only.
+        if (g_use_opengl && !st->fullscreen) {
+            ImGuiWindowClass own_window;
+            own_window.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+            ImGui::SetNextWindowClass(&own_window);
+        } else {
+            ImGui::SetNextWindowViewport(viewport->ID);
+        }
         bool window_open = true;
         if (ImGui::Begin("Settings###Configuration", &window_open,
                          ImGuiWindowFlags_NoCollapse)) {
@@ -896,8 +1150,13 @@ void config_ui_draw(ConfigUiState* st) {
             static int page = 0;
             page = std::clamp(page, 0, kPageCount - 1);
 
-            const float footer_h = ImGui::GetFrameHeightWithSpacing() + 8.0f;
-            ImGui::BeginChild("ConfigSidebar", ImVec2(150.0f, -footer_h), true);
+            const bool have_badge = g_badge_caption[0] != '\0';
+            const float badge_h = have_badge
+                ? std::max(g_badge_size.y, ImGui::GetTextLineHeightWithSpacing() * 2)
+                  + ImGui::GetStyle().ItemSpacing.y : 0.0f;
+            const float footer_h = ImGui::GetFrameHeightWithSpacing() + 8.0f + badge_h;
+            ImGui::BeginChild("ConfigSidebar", ImVec2(150.0f, -footer_h),
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened);
             for (int i = 0; i < kPageCount; ++i) {
                 const bool selected = page == i;
                 if (selected) ImGui::PushStyleColor(ImGuiCol_Text, kGold);
@@ -909,7 +1168,8 @@ void config_ui_draw(ConfigUiState* st) {
             ImGui::EndChild();
             ImGui::SameLine();
 
-            ImGui::BeginChild("ConfigContent", ImVec2(0.0f, -footer_h), true);
+            ImGui::BeginChild("ConfigContent", ImVec2(0.0f, -footer_h),
+                              ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened);
             ImGui::TextColored(kGold, "%s", kPages[page].name);
             ImGui::PushStyleColor(ImGuiCol_Text, kMutedText);
             ImGui::TextUnformatted(kPages[page].blurb);
@@ -937,6 +1197,27 @@ void config_ui_draw(ConfigUiState* st) {
                                  ImGui::GetStyle().FramePadding.x * 2.0f;
             ImGui::SameLine(ImGui::GetContentRegionMax().x - quit_w);
             if (ImGui::Button(quit_label)) st->request_quit = true;
+
+            if (have_badge) {
+                const float gap = ImGui::GetStyle().ItemSpacing.x;
+                const float text_w = std::max(ImGui::CalcTextSize(g_badge_caption).x,
+                                             ImGui::CalcTextSize(g_badge_flourish).x);
+                const float badge_w = text_w + gap + g_badge_size.x;
+                ImGui::SetCursorPosX(std::max(ImGui::GetStyle().WindowPadding.x,
+                    ImGui::GetContentRegionMax().x - badge_w));
+                ImGui::BeginGroup();
+                ImGui::Dummy(ImVec2(0, std::max(0.0f,
+                    (g_badge_size.y - ImGui::GetTextLineHeightWithSpacing() * 2) / 2)));
+                ImGui::TextColored(kGold, "%s", g_badge_caption);
+                ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.83f, 1.0f), "%s",
+                                   g_badge_flourish);
+                ImGui::EndGroup();
+                ImGui::SameLine();
+                const ImTextureID texture = g_use_opengl
+                    ? static_cast<ImTextureID>(g_badge_gl_texture)
+                    : static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(g_badge_sdl_texture));
+                ImGui::Image(texture, g_badge_size);
+            }
 
             // Esc closes the menu, unless it is cancelling a bind capture.
             if (g_capture == Capture::None &&
@@ -985,6 +1266,7 @@ void config_ui_draw(ConfigUiState* st) {
 namespace gbarecomp {
 bool config_ui_init(SDL_Window*, SDL_Renderer*, bool) { return false; }
 void config_ui_shutdown() {}
+void config_ui_set_edition_badge(const char*, const char*, const char*) {}
 bool config_ui_handle_event(const SDL_Event*) { return false; }
 bool config_ui_visible() { return false; }
 void config_ui_toggle() {}

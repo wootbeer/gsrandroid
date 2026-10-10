@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -14,11 +15,13 @@
 #include <vector>
 
 #include "color_lut.h"
+#include "env_flag.h"
 #include "host_config_ui.h"
 #include "host_overlay.h"
 #include "frame_timing.h"
 #include "host_prof_phase.h"
 #include "presentation_layout.h"
+#include "screen_filter.h"
 #include "player_walk_run_speed_config.h"
 #include "temporal_blend.h"
 // runtime_set_overclock_factor / runtime_get_overclock_factor (TURBO-B2-UI).
@@ -52,15 +55,6 @@ namespace gbarecomp {
 
 namespace {
 
-bool cached_env_flag(const char* name) {
-    const char* value = std::getenv(name);
-    if (!value || value[0] == '\0') return false;
-    return SDL_strcasecmp(value, "0") != 0 &&
-           SDL_strcasecmp(value, "false") != 0 &&
-           SDL_strcasecmp(value, "off") != 0 &&
-           SDL_strcasecmp(value, "no") != 0;
-}
-
 bool host_pump_timing_enabled() {
     static const bool enabled = [] {
         const char* phase = std::getenv("GBARECOMP_FRAME_PHASE");
@@ -88,6 +82,20 @@ bool write_enhancements_ini(const std::string& dir, bool enhanced_timing,
                             int view_mode);
 bool write_cheats_ini(const std::string& dir, bool infinite_hp,
                       bool infinite_pp, int player_speed_multiplier);
+// The Custom colour sliders (F1 > Video > Colours), as ints.
+struct CustomColors {
+    int saturation = 100, hue = 0, brightness = 100, warmth = 0, darken = 0;
+    bool operator==(const CustomColors& o) const {
+        return saturation == o.saturation && hue == o.hue &&
+               brightness == o.brightness && warmth == o.warmth &&
+               darken == o.darken;
+    }
+    bool operator!=(const CustomColors& o) const { return !(*this == o); }
+};
+bool write_picture_ini(const std::string& dir, int screen_kind,
+                       const CustomColors& custom, int aspect);
+struct Backend;
+bool write_video_ini(const Backend* b);
 
 // System hotkey ids (config.ini [KeyMap] rows this host implements). Reset,
 // PauseDimmed and ToggleRenderer are intentionally absent â€” gbarecomp has no
@@ -148,6 +156,15 @@ static_assert(kPadTriggerLeftValue == static_cast<int>(SDL_CONTROLLER_BUTTON_MAX
 constexpr Sint16 kTriggerPressThreshold   = 20000;  // ~61% of 32767 -> pressed
 constexpr Sint16 kTriggerReleaseThreshold = 12000;  // ~37% of 32767 -> released
 
+// A bound stick direction (stick_dir_held). 7849 is XInput's documented
+// XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE (the standard value for this exact
+// stick), not a tuned number.
+constexpr float kStickDeadZone = 7849.0f;
+// sin(22.5 deg): the geometry of eight equal 45-degree sectors centred on the
+// axes. A normalised axis past this value presses that direction, and a
+// diagonal presses two.
+constexpr float kStickSectorSin = 0.38268343f;
+
 // â”€â”€ MC-WS-002 present-cadence ring â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Always-on (Release too) ring recording EVERY SDL_RenderPresent from window
 // open: wall time blocked inside the call, entry-to-entry gap, and the DWM
@@ -186,8 +203,7 @@ struct PresentCadence {
     void init() {
         ring.resize(kCadenceRingSize);
         qpc_freq = SDL_GetPerformanceFrequency();
-        const char* e = std::getenv("GBARECOMP_PRESENT_CADENCE");
-        verbose = e && *e && *e != '0';
+        verbose = env_flag("GBARECOMP_PRESENT_CADENCE");
         const char* d = std::getenv("GBARECOMP_PRESENT_CADENCE_DUMP");
         dump_path = (d && *d) ? d : "_present_cadence.csv";
 #if defined(_WIN32)
@@ -368,6 +384,8 @@ struct Backend {
     // grading), so default behavior is byte-identical to upstream.
     std::unique_ptr<runtime::ColorLut> color_lut;
     runtime::ScreenKind screen_kind = runtime::ScreenKind::Raw;
+    // Custom colours as last built into color_lut (percent, degrees).
+    CustomColors applied_custom;
     std::vector<uint8_t> graded_fb;  // scratch RGB888 (base_w*base_h*3)
     // Diagnostic-only guest-frame marker. It is armed by the existing sprite
     // recorder switch so a video can be joined to stderr's guest-frame rows.
@@ -377,6 +395,13 @@ struct Backend {
     int base_w = 240;   // logical surface width  (240 faithful, wider if expanded)
     int base_h = 160;   // logical surface height (160 faithful, taller if expanded)
     bool expanded_view = false;  // native games retain the historical SDL path
+    bool aspect_4_3 = false;     // present only the middle 4:3 of a wider view
+    // Test-only screen filters (launcher "Screen filters" box). Off unless the
+    // box is on AND SDL really created the opengl renderer; Off never calls
+    // into screen_filter.cpp.
+    ScreenFilter screen_filter = ScreenFilter::Off;
+    ScreenFilter preferred_screen_filter = ScreenFilter::Off;
+    bool screen_filters_on = false;
     bool resize_driven_view = false;
     bool linear_filter = false;
     bool native_renderer = false;
@@ -437,6 +462,9 @@ struct Backend {
     // dispatch/capture and the level source for a Turbo-Held trigger bind.
     bool           trigger_left_down = false;
     bool           trigger_right_down = false;
+    // Same debounced state for the eight stick directions, indexed by
+    // synthetic id - kPadLeftStickRight (Right, Left, Up, Down per stick).
+    bool           stick_down[8] = {};
     int          scale = 3;             // current integer window scale
     bool         fullscreen = false;
     bool         vsync = true;          // as negotiated with the renderer
@@ -494,6 +522,23 @@ struct Backend {
     // MC-WS-002: always-on per-present timing/scanout ring (see above).
     PresentCadence cadence;
 };
+
+void apply_vsync(Backend* b, bool on) {
+    if (on == b->vsync) return;
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    if (SDL_RenderSetVSync(b->renderer, on ? 1 : 0) == 0) {
+        b->vsync = on;
+    } else {
+        std::fprintf(stderr, "host_window: SDL_RenderSetVSync failed: %s\n",
+                     SDL_GetError());
+    }
+#else
+    std::fprintf(stderr, "host_window: built against SDL %d.%d.%d; "
+                 "V-Sync cannot be changed after startup\n",
+                 SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_PATCHLEVEL);
+#endif
+    b->cfg.vsync = b->vsync;
+}
 
 void apply_audio_timing(Backend* b) {
     if (!b || !b->bridge_ready || !b->audio_mtx) return;
@@ -576,6 +621,28 @@ void set_native_window_mode(Backend* b, bool enabled) {
         SDL_RenderSetIntegerScale(
             b->renderer, b->integer_scale ? SDL_TRUE : SDL_FALSE);
     }
+}
+
+// The width actually shown for a w x h picture: with 4:3 chosen, the
+// Expanded View's middle h*4/3 columns (320 of 360); otherwise all of it.
+// Native 240x160 is never cropped.
+int shown_width(const Backend* b, int w, int h) {
+    if (!b->aspect_4_3 || !b->expanded_view || b->resize_driven_view ||
+        w * 3 <= h * 4)
+        return w;
+    return h * 4 / 3;
+}
+
+// Resize and re-centre the window to the current shown width at the current
+// scale. Fullscreen and resize-driven views own their geometry.
+void apply_aspect_window_size(Backend* b) {
+    if (b->resize_driven_view || b->fullscreen || !b->window) return;
+    if (SDL_GetWindowFlags(b->window) & SDL_WINDOW_MAXIMIZED)
+        SDL_RestoreWindow(b->window);
+    SDL_SetWindowSize(b->window, shown_width(b, b->base_w, b->base_h) * b->scale,
+                      b->base_h * b->scale);
+    SDL_SetWindowPosition(b->window, SDL_WINDOWPOS_CENTERED,
+                          SDL_WINDOWPOS_CENTERED);
 }
 
 void native_upscale_nearest(const uint8_t* src, int src_w, int src_h,
@@ -743,6 +810,29 @@ bool hotkey_mods_ok(const HotkeyBind& hb, Uint16 state_mods) {
            want(KMOD_SHIFT) == held(KMOD_SHIFT);
 }
 
+// True while the stick direction `id` (kPadLeftStickRight..kPadRightStickDown)
+// is held: stick magnitude past the dead zone and the direction's component
+// past the sector edge. One definition for the gameplay D-pad, the stick binds
+// and hold-type hotkeys, so they all agree on what "pushed up" means.
+bool stick_dir_held(SDL_GameController* pad, int id) {
+    const int slot = id - kPadLeftStickRight;   // 0..7: Right, Left, Up, Down per stick
+    const bool right_stick = slot >= 4;
+    const float sx = static_cast<float>(SDL_GameControllerGetAxis(
+        pad, right_stick ? SDL_CONTROLLER_AXIS_RIGHTX : SDL_CONTROLLER_AXIS_LEFTX));
+    const float sy = static_cast<float>(SDL_GameControllerGetAxis(
+        pad, right_stick ? SDL_CONTROLLER_AXIS_RIGHTY : SDL_CONTROLLER_AXIS_LEFTY));  // positive = down
+    const float mag = std::sqrt(sx * sx + sy * sy);
+    if (mag <= kStickDeadZone) return false;
+    const float nx = sx / mag;
+    const float ny = sy / mag;
+    switch (slot & 3) {
+    case 0:  return nx >  kStickSectorSin;   // Right
+    case 1:  return nx < -kStickSectorSin;   // Left
+    case 2:  return ny < -kStickSectorSin;   // Up
+    default: return ny >  kStickSectorSin;   // Down
+    }
+}
+
 // Level read of a hotkey binding: its key (with exactly its modifiers) or its
 // controller button is down right now. L2/R2 use the debounced trigger state
 // pump() maintains, since SDL never reports them as buttons (UI-02b).
@@ -756,6 +846,7 @@ bool hotkey_held(const Backend* b, const HotkeyBind& hb, const Uint8* ks) {
     if (!b->pad) return false;
     if (hb.pad_button == kPadTriggerLeft) return b->trigger_left_down;
     if (hb.pad_button == kPadTriggerRight) return b->trigger_right_down;
+    if (pad_is_stick(hb.pad_button)) return stick_dir_held(b->pad, hb.pad_button);
     return hb.pad_button >= 0 && hb.pad_button < SDL_CONTROLLER_BUTTON_MAX &&
            SDL_GameControllerGetButton(
                b->pad, static_cast<SDL_GameControllerButton>(hb.pad_button));
@@ -840,6 +931,32 @@ runtime::ColorSettings resolve_color_settings(const char* toml_screen) {
     return s;
 }
 
+CustomColors custom_colors_of(const ConfigUiState& cfg) {
+    return {cfg.color_saturation, cfg.color_hue, cfg.color_brightness,
+            cfg.color_warmth, cfg.color_darken};
+}
+
+// Rebuild the colour table from b->screen_kind and the Custom sliders
+// (F1 > Video > Colours), and size the graded frame buffers to match.
+void rebuild_color_lut(Backend* b) {
+    runtime::ColorSettings settings;
+    settings.screen = b->screen_kind;
+    settings.saturation = b->cfg.color_saturation / 100.0;
+    settings.hue_degrees = static_cast<double>(b->cfg.color_hue);
+    settings.brightness = b->cfg.color_brightness / 100.0;
+    settings.warmth = b->cfg.color_warmth / 100.0;
+    settings.curve = 1.0 + b->cfg.color_darken / 100.0;
+    b->color_lut = std::make_unique<runtime::ColorLut>(settings);
+    b->applied_custom = custom_colors_of(b->cfg);
+    if (b->color_lut->is_passthrough()) {
+        b->graded_fb.clear();
+        b->native_graded_fb.clear();
+    } else {
+        b->graded_fb.resize(static_cast<std::size_t>(b->base_w) *
+                            b->base_h * 3u);
+    }
+}
+
 // SDL audio pull callback: render exactly `len` bytes of device-rate mono S16
 // from the bridge ring. The bridge emits faded silence (not raw zeros) before
 // prime / on underrun, so a momentarily-starved producer no longer clicks.
@@ -897,9 +1014,8 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     b->linear_filter = linear_filter;
     b->scale = scale;
     b->native_scale = native_scale_from_env();
-    b->strict_static = cached_env_flag("GBARECOMP_STRICT_STATIC");
-    if (const char* e = std::getenv("GBARECOMP_NATIVE_RENDERER"))
-        b->native_renderer = e[0] && e[0] != '0';
+    b->strict_static = env_flag("GBARECOMP_STRICT_STATIC");
+    b->native_renderer = env_flag("GBARECOMP_NATIVE_RENDERER", b->native_renderer);
     b->title = title ? title : "gbarecomp";
     // Gamepad. A host-side convenience: if it fails to come up the emulator
     // runs exactly as before, just without pad input. (The config UI is
@@ -932,7 +1048,7 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
         b->hotkeys[h] = parse_hotkey(kHotkeyDefaults[h]);
     // Linear vs nearest scaling is a texture-creation-time hint.
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, linear_filter ? "linear" : "nearest");
-    const int win_w = base_w * scale;
+    const int win_w = shown_width(b, base_w, base_h) * scale;
     const int win_h = base_h * scale;
     // Keep the host window user-resizable for both canonical and enhanced
     // presentations. Canonical mode still preserves a 240x160 logical image;
@@ -972,9 +1088,7 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     // it by default on Windows; SDL_RENDER_DRIVER in the environment still
     // overrides. GBARECOMP_NO_VSYNC=1 restores the historical
     // unsynchronized present for A/B.
-    const char* no_vsync_env = std::getenv("GBARECOMP_NO_VSYNC");
-    const bool want_vsync =
-        !(no_vsync_env && *no_vsync_env && *no_vsync_env != '0');
+    const bool want_vsync = !env_flag("GBARECOMP_NO_VSYNC");
     const Uint32 renderer_flags = SDL_RENDERER_ACCELERATED |
         (want_vsync ? static_cast<Uint32>(SDL_RENDERER_PRESENTVSYNC)
                     : Uint32{0});
@@ -1046,13 +1160,15 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     // runtime/launcher. Cache their display values once at window bring-up;
     // the overlay never performs getenv during a frame.
     b->cfg.debug_overlay_state.self_heal_ram =
-        !b->strict_static && cached_env_flag("GBARECOMP_SELFHEAL_RAM");
+        !b->strict_static && env_flag("GBARECOMP_SELFHEAL_RAM");
     b->cfg.debug_overlay_state.cost_probe =
-        cached_env_flag("GBARECOMP_COST_PROBE");
+        env_flag("GBARECOMP_COST_PROBE");
     b->cfg.debug_overlay_state.present_cadence = b->cadence.verbose;
     b->cfg.debug_overlay_state.ram_churn_probe =
-        cached_env_flag("GSR_RAM_CHURN_PROBE");
-    b->obj_record_frame_marker = cached_env_flag("GSR_OBJ_RECORD");
+        env_flag("GSR_RAM_CHURN_PROBE");
+    b->obj_record_frame_marker = env_flag("GSR_OBJ_RECORD");
+    b->screen_filters_on =
+        env_flag("GSR_SCREEN_FILTERS") && b->renderer_is_opengl;
     if (b->expanded_view || b->resize_driven_view) {
         // The destination viewport is computed explicitly in present() so
         // resizing maximally fills the drawable at the selected widescreen
@@ -1173,8 +1289,7 @@ uint64_t overlay_game_thread_compile_ns();
 static void probe_stereo_audio_push(Backend* b, std::size_t count) {
     static int s_probe = -1;
     if (s_probe < 0) {
-        const char* e = std::getenv("GBARECOMP_AUDIO_PROBE");
-        s_probe = (e && *e && *e != '0') ? 1 : 0;
+        s_probe = env_flag("GBARECOMP_AUDIO_PROBE") ? 1 : 0;
     }
     if (!s_probe) return;
     static unsigned long long s_pushes = 0, s_samples = 0;
@@ -1248,7 +1363,7 @@ void HostWindow::push_audio_samples(const int16_t* samples, std::size_t count) {
     // (the post-fix equivalent of SDL queue underruns) so a before/after is
     // directly comparable. Expect ~0 underruns once primed.
     static int s_probe = -1;
-    if (s_probe < 0) { const char* e = std::getenv("GBARECOMP_AUDIO_PROBE"); s_probe = (e && *e && *e != '0') ? 1 : 0; }
+    if (s_probe < 0) { s_probe = env_flag("GBARECOMP_AUDIO_PROBE") ? 1 : 0; }
     if (s_probe) {
         static unsigned long long s_pushes = 0, s_samples = 0;
         s_pushes++; s_samples += count;
@@ -1299,6 +1414,7 @@ void HostWindow::close() {
     }
     if (b->texture)   SDL_DestroyTexture(b->texture);
     destroy_native_texture(b);
+    screen_filter_shutdown();
     if (b->renderer)  SDL_DestroyRenderer(b->renderer);
     if (b->window)    SDL_DestroyWindow(b->window);
     delete b;
@@ -1346,7 +1462,8 @@ bool HostWindow::set_surface_size(int base_w, int base_h) {
     // the old 240x160-sized window. Fullscreen and adaptive resizing own
     // their geometry and must not be changed here.
     if (!b->resize_driven_view && !b->fullscreen && b->window) {
-        SDL_SetWindowSize(b->window, b->base_w * b->scale,
+        SDL_SetWindowSize(b->window,
+                          shown_width(b, b->base_w, b->base_h) * b->scale,
                           b->base_h * b->scale);
         SDL_SetWindowPosition(b->window, SDL_WINDOWPOS_CENTERED,
                               SDL_WINDOWPOS_CENTERED);
@@ -1551,7 +1668,26 @@ void HostWindow::present(const uint8_t* rgb888) {
     }
     SDL_RenderClear(b->renderer);
     if (!b->expanded_view && !b->resize_driven_view && !use_native) {
-        SDL_RenderCopy(b->renderer, frame_texture, nullptr, nullptr);
+        // Native 240x160: SDL's logical size scales this copy. A filter draws
+        // with raw GL in output pixels, so it is placed by the same layout.
+        bool filtered = false;
+        if (b->screen_filter != ScreenFilter::Off) {
+            int out_w = 0, out_h = 0;
+            SDL_GetRendererOutputSize(b->renderer, &out_w, &out_h);
+            const PresentationLayout layout = compute_presentation_layout(
+                out_w, out_h, b->base_w, b->base_h,
+                b->integer_scale ? ScalingMode::IntegerLetterbox
+                                 : ScalingMode::AspectFill);
+            const SDL_Rect whole = {0, 0, b->base_w, b->base_h};
+            const SDL_Rect destination = {
+                layout.x, layout.y, layout.width, layout.height};
+            filtered = layout.width > 0 && layout.height > 0 &&
+                       screen_filter_draw(b->renderer, frame_texture,
+                                          b->screen_filter, whole, b->base_w,
+                                          b->base_h, destination);
+        }
+        if (!filtered)
+            SDL_RenderCopy(b->renderer, frame_texture, nullptr, nullptr);
     } else {
         int drawable_w = 0;
         int drawable_h = 0;
@@ -1575,8 +1711,9 @@ void HostWindow::present(const uint8_t* rgb888) {
         // it — before this, the checkbox was on by default and silently did
         // nothing on the path that actually presents the frame, so every
         // non-multiple window size got unevenly duplicated pixels.
+        const int shown_w = shown_width(b, frame_w, frame_h);
         const PresentationLayout layout = compute_presentation_layout(
-            drawable_w, drawable_h, frame_w, frame_h,
+            drawable_w, drawable_h, shown_w, frame_h,
             b->integer_scale ? ScalingMode::IntegerLetterbox
                              : ScalingMode::AspectFill);
         if (layout.width > 0 && layout.height > 0) {
@@ -1586,7 +1723,7 @@ void HostWindow::present(const uint8_t* rgb888) {
                 // factor above 1x: otherwise 2x-9x enlarge with nearest while
                 // 10x downsamples with linear, which makes the intermediate
                 // factors show hard scanline/edge artifacts.
-                const bool downsampling = layout.width < frame_w ||
+                const bool downsampling = layout.width < shown_w ||
                     layout.height < frame_h;
                 const bool native_filter = b->native_scale > 1;
                 SDL_SetTextureScaleMode(
@@ -1596,7 +1733,21 @@ void HostWindow::present(const uint8_t* rgb888) {
             }
             const SDL_Rect destination = {
                 layout.x, layout.y, layout.width, layout.height};
-            SDL_RenderCopy(b->renderer, frame_texture, nullptr, &destination);
+            const SDL_Rect source = {(frame_w - shown_w) / 2, 0, shown_w,
+                                     frame_h};
+            // Test-only screen filter; falls back to the plain copy below
+            // whenever it cannot draw.
+            const bool filtered =
+                b->screen_filter != ScreenFilter::Off &&
+                screen_filter_draw(b->renderer, frame_texture,
+                                   b->screen_filter, source,
+                                   shown_width(b, b->base_w, b->base_h),
+                                   b->base_h, destination);
+            // 3:2 copies the whole texture, exactly as before 4:3 existed.
+            if (!filtered)
+                SDL_RenderCopy(b->renderer, frame_texture,
+                               shown_w < frame_w ? &source : nullptr,
+                               &destination);
         }
     }
     // MC-WS-002: time the present itself (vsync blocks here â€” or doesn't)
@@ -1705,6 +1856,48 @@ void HostWindow::load_input_config(const char* dir) {
     // read from, rather than into whatever the process CWD happens to be.
     b->config_dir = dir;
 
+    // Only special release packages supply this decoration. Ordinary and
+    // developer packages have neither file and keep the existing F1 menu.
+    if (std::FILE* badge = std::fopen((base + "edition_badge.txt").c_str(), "rb")) {
+        char caption[256] = {}, flourish[256] = {};
+        if (std::fgets(caption, sizeof(caption), badge)) {
+            std::fgets(flourish, sizeof(flourish), badge);
+            caption[std::strcspn(caption, "\r\n")] = '\0';
+            flourish[std::strcspn(flourish, "\r\n")] = '\0';
+            config_ui_set_edition_badge((base + "edition_badge.bmp").c_str(),
+                                        caption, flourish);
+        }
+        std::fclose(badge);
+    }
+
+    // Missing video keys retain the window's startup defaults.
+    b->cfg.scale = b->scale;
+    b->cfg.fullscreen = b->fullscreen;
+    b->cfg.show_fps = b->fps_readout;
+    ini_scan_section((base + "config.ini").c_str(), "Video",
+                     [b](const char* key, const char* val) {
+        const bool on = SDL_strcasecmp(val, "true") == 0 ||
+                        std::strcmp(val, "1") == 0;
+        if (SDL_strcasecmp(key, "WindowScale") == 0) {
+            const long scale = std::strtol(val, nullptr, 10);
+            if (scale >= 1 && scale <= 8) b->cfg.scale = static_cast<int>(scale);
+        } else if (SDL_strcasecmp(key, "Fullscreen") == 0) {
+            b->cfg.fullscreen = on;
+        } else if (SDL_strcasecmp(key, "ShowFPS") == 0) {
+            b->cfg.show_fps = on;
+        } else if (SDL_strcasecmp(key, "VSync") == 0) {
+            b->cfg.vsync = on;
+        } else if (SDL_strcasecmp(key, "LinearFilter") == 0) {
+            b->cfg.linear_filter = on;
+        } else if (SDL_strcasecmp(key, "IntegerScale") == 0) {
+            b->cfg.integer_scale = on;
+        } else if (SDL_strcasecmp(key, "ScreenFilter") == 0) {
+            const long filter = std::strtol(val, nullptr, 10);
+            if (filter >= 0 && filter <= static_cast<int>(ScreenFilter::ScaleFx))
+                b->preferred_screen_filter = static_cast<ScreenFilter>(filter);
+        }
+    });
+
     // keybinds.ini [player1] (recomp-ui generic format, scancode names).
     ini_scan_section((base + "keybinds.ini").c_str(), "player1",
                      [b](const char* key, const char* val) {
@@ -1722,6 +1915,12 @@ void HostWindow::load_input_config(const char* dir) {
                      [b](const char* key, const char* val) {
         for (const auto& pk : kPadKeys) {
             if (SDL_strcasecmp(key, pk.name) != 0) continue;
+            // Stick directions are synthetic ids with their own names.
+            const int synth = pad_synth_from_name(val);
+            if (synth >= 0) {
+                b->pad_bind[pk.bit] = synth;
+                return;
+            }
             const SDL_GameControllerButton btn =
                 SDL_GameControllerGetButtonFromString(val);
             b->pad_bind[pk.bit] = (btn == SDL_CONTROLLER_BUTTON_INVALID)
@@ -1757,12 +1956,11 @@ void HostWindow::load_input_config(const char* dir) {
             // change never contained these strings, so old files are
             // unaffected and fall through to the button parse exactly as
             // before.
-            if (SDL_strcasecmp(val, "lefttrigger") == 0) {
-                b->hotkeys[h].pad_button = kPadTriggerLeft;
-                return;
-            }
-            if (SDL_strcasecmp(val, "righttrigger") == 0) {
-                b->hotkeys[h].pad_button = kPadTriggerRight;
+            // The stick direction names ("leftstickup", ...) come from the
+            // same shared table.
+            const int synth = pad_synth_from_name(val);
+            if (synth >= 0) {
+                b->hotkeys[h].pad_button = synth;
                 return;
             }
             const SDL_GameControllerButton btn =
@@ -1838,8 +2036,55 @@ void HostWindow::load_input_config(const char* dir) {
                     : static_cast<int>(parsed);
                 b->temporal_blend_needs_normalization = parsed >= 4;
             }
+        } else if (SDL_strcasecmp(key, "ColorProfile") == 0) {
+            // F1 > Video > Colours. GBARECOMP_SCREEN, read when the window
+            // opened, still wins for a launch that sets it.
+            runtime::ScreenKind k;
+            if (!std::getenv("GBARECOMP_SCREEN") &&
+                runtime::screen_kind_from_name(val, k) &&
+                k != b->screen_kind) {
+                b->screen_kind = k;
+                b->cfg.screen_kind = static_cast<int>(k);
+                rebuild_color_lut(b);
+            }
+        } else if (SDL_strcasecmp(key, "AspectRatio") == 0) {
+            // F1 > Video > Aspect ratio. Anything but 4:3 is the original 3:2.
+            b->aspect_4_3 = SDL_strcasecmp(val, "4:3") == 0;
+            b->cfg.aspect = b->aspect_4_3 ? 1 : 0;
+        } else if (SDL_strcasecmp(key, "ColorSaturation") == 0) {
+            b->cfg.color_saturation = std::clamp(
+                static_cast<int>(std::strtol(val, nullptr, 10)), 0, 200);
+        } else if (SDL_strcasecmp(key, "ColorHue") == 0) {
+            b->cfg.color_hue = std::clamp(
+                static_cast<int>(std::strtol(val, nullptr, 10)), -180, 180);
+        } else if (SDL_strcasecmp(key, "ColorBrightness") == 0) {
+            b->cfg.color_brightness = std::clamp(
+                static_cast<int>(std::strtol(val, nullptr, 10)), 50, 150);
+        } else if (SDL_strcasecmp(key, "ColorWarmth") == 0) {
+            b->cfg.color_warmth = std::clamp(
+                static_cast<int>(std::strtol(val, nullptr, 10)), 0, 100);
+        } else if (SDL_strcasecmp(key, "ColorDarken") == 0) {
+            b->cfg.color_darken = std::clamp(
+                static_cast<int>(std::strtol(val, nullptr, 10)), 0, 50);
         }
     });
+    // The Custom colour keys may follow ColorProfile in the file.
+    if (b->screen_kind == runtime::ScreenKind::Custom) rebuild_color_lut(b);
+    // The window opened before this file was read: size it for a saved 4:3.
+    // (A later set_surface_size sizes it the same way if the view changes.)
+    if (b->aspect_4_3) apply_aspect_window_size(b);
+    // Restore size before fullscreen; fullscreen owns the desktop geometry.
+    adjust_scale(b->cfg.scale - b->scale);
+    set_fullscreen(b->cfg.fullscreen);
+    set_fps_readout(b->cfg.show_fps);
+    apply_vsync(b, b->cfg.vsync);
+    b->linear_filter = b->cfg.linear_filter;
+    SDL_SetTextureScaleMode(b->texture, b->linear_filter ? SDL_ScaleModeLinear
+                                                      : SDL_ScaleModeNearest);
+    b->integer_scale = b->cfg.integer_scale;
+    SDL_RenderSetIntegerScale(b->renderer, b->integer_scale ? SDL_TRUE : SDL_FALSE);
+    b->screen_filter = b->screen_filters_on ? b->preferred_screen_filter
+                                          : ScreenFilter::Off;
     // Apply the resolved factor live and mirror it into the UI's combo index:
     // 0 (Off/1x) unless the resolved factor is the 50x ceiling.
     runtime_set_overclock_factor(b->overclock_factor);
@@ -1981,7 +2226,8 @@ void HostWindow::adjust_scale(int delta) {
     // chosen size actually takes.
     if (SDL_GetWindowFlags(b->window) & SDL_WINDOW_MAXIMIZED)
         SDL_RestoreWindow(b->window);
-    SDL_SetWindowSize(b->window, b->base_w * s, b->base_h * s);
+    SDL_SetWindowSize(b->window, shown_width(b, b->base_w, b->base_h) * s,
+                      b->base_h * s);
     SDL_SetWindowPosition(b->window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 }
 
@@ -2331,8 +2577,10 @@ bool write_keybinds_ini(const std::string& dir, const SDL_Scancode* bind_sc,
     for (const auto& pk : kPadKeys) {
         const int pb = pad_bind[pk.bit];
         const char* name = (pb < 0) ? nullptr
-            : SDL_GameControllerGetStringForButton(
-                  static_cast<SDL_GameControllerButton>(pb));
+            : pad_synth_name(pb);
+        if (pb >= 0 && !name)
+            name = SDL_GameControllerGetStringForButton(
+                static_cast<SDL_GameControllerButton>(pb));
         std::fprintf(f, "%s=%s\n", pk.name, (name && *name) ? name : "None");
     }
     std::fclose(f);
@@ -2416,12 +2664,11 @@ bool write_hotkeys_ini(const std::string& dir, const HotkeyBind* hotkeys) {
     };
     auto render_pad = [](const HotkeyBind& hb) -> std::string {
         if (hb.pad_button < 0) return "None";
-        // UI-02b: L2/R2 are synthetic ids (see host_config_ui.h), not real
-        // SDL_GameControllerButton values — persist them under SDL's own
-        // axis-name strings so the round-trip through parse_hotkey's
+        // UI-02b: L2/R2 and the stick directions are synthetic ids (see
+        // host_config_ui.h), not real SDL_GameControllerButton values —
+        // persist them under the shared names so the round-trip through the
         // [KeyMap.Pad] reader above is exact.
-        if (hb.pad_button == kPadTriggerLeft)  return "lefttrigger";
-        if (hb.pad_button == kPadTriggerRight) return "righttrigger";
+        if (const char* s = pad_synth_name(hb.pad_button)) return s;
         const char* n = SDL_GameControllerGetStringForButton(
             static_cast<SDL_GameControllerButton>(hb.pad_button));
         return (n && *n) ? n : "None";
@@ -2456,6 +2703,40 @@ bool write_hotkeys_ini(const std::string& dir, const HotkeyBind* hotkeys) {
     for (const std::string& l : lines) std::fprintf(f, "%s\n", l.c_str());
     std::fclose(f);
     return true;
+}
+
+// Update only [Video], preserving launcher settings and unknown sections.
+bool write_video_ini(const Backend* b) {
+    const std::string path = b->config_dir + "/config.ini";
+    std::vector<std::string> lines;
+    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
+        std::string cur;
+        int c;
+        while ((c = std::fgetc(in)) != EOF) {
+            if (c == '\n') { lines.push_back(cur); cur.clear(); }
+            else if (c != '\r') cur.push_back(static_cast<char>(c));
+        }
+        if (!cur.empty()) lines.push_back(cur);
+        std::fclose(in);
+    }
+    static const char* const names[] = {
+        "WindowScale", "Fullscreen", "VSync", "LinearFilter",
+        "IntegerScale", "ScreenFilter", "ShowFPS"
+    };
+    const std::string values[] = {
+        std::to_string(b->scale), b->fullscreen ? "true" : "false",
+        b->vsync ? "true" : "false", b->linear_filter ? "true" : "false",
+        b->integer_scale ? "true" : "false",
+        std::to_string(static_cast<int>(b->preferred_screen_filter)),
+        b->fps_readout ? "true" : "false"
+    };
+    rewrite_ini_section(lines, "Video", names, values, static_cast<int>(std::size(names)));
+    std::FILE* out = std::fopen(path.c_str(), "wb");
+    if (!out) return false;
+    bool ok = true;
+    for (const std::string& line : lines)
+        if (std::fprintf(out, "%s\n", line.c_str()) < 0) ok = false;
+    return std::fclose(out) == 0 && ok;
 }
 
 // Update only [Speed], preserving launcher settings and unknown sections.
@@ -2618,6 +2899,84 @@ bool write_enhancements_ini(const std::string& dir, bool enhanced_timing,
                      add.begin(), add.end());
     }
 
+    std::FILE* out = std::fopen(path.c_str(), "wb");
+    if (!out) return false;
+    for (const std::string& line : lines)
+        std::fprintf(out, "%s\n", line.c_str());
+    std::fclose(out);
+    return true;
+}
+
+// Update only [Enhancements] ColorProfile=, ColorSaturation=, ColorHue=,
+// ColorBrightness=, ColorWarmth=, ColorDarken= and AspectRatio=, preserving
+// everything else.
+bool write_picture_ini(const std::string& dir, int screen_kind,
+                       const CustomColors& custom, int aspect) {
+    if (screen_kind < 0 || screen_kind >= runtime::kScreenKindCount)
+        return false;
+    const std::string path = dir + "/config.ini";
+    const std::string keys[7] = {"ColorProfile", "ColorSaturation", "ColorHue",
+                                 "ColorBrightness", "ColorWarmth",
+                                 "ColorDarken", "AspectRatio"};
+    const std::string rows[7] = {
+        keys[0] + "=" +
+            runtime::screen_kind_name(static_cast<runtime::ScreenKind>(screen_kind)),
+        keys[1] + "=" + std::to_string(custom.saturation),
+        keys[2] + "=" + std::to_string(custom.hue),
+        keys[3] + "=" + std::to_string(custom.brightness),
+        keys[4] + "=" + std::to_string(custom.warmth),
+        keys[5] + "=" + std::to_string(custom.darken),
+        keys[6] + "=" + (aspect == 1 ? "4:3" : "3:2")};
+    std::vector<std::string> lines;
+    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
+        std::string cur;
+        int c;
+        while ((c = std::fgetc(in)) != EOF) {
+            if (c == '\n') { lines.push_back(cur); cur.clear(); }
+            else if (c != '\r') cur.push_back(static_cast<char>(c));
+        }
+        if (!cur.empty()) lines.push_back(cur);
+        std::fclose(in);
+    }
+    bool in_section = false;
+    bool seen_section = false;
+    bool written[7] = {false, false, false, false, false, false, false};
+    std::size_t section_end = 0;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        const std::string& t = lines[i];
+        const std::size_t a = t.find_first_not_of(" \t");
+        if (a == std::string::npos) continue;
+        if (t[a] == '[') {
+            in_section =
+                SDL_strncasecmp(t.c_str() + a, "[Enhancements]", 14) == 0;
+            if (in_section) { seen_section = true; section_end = i + 1; }
+            continue;
+        }
+        if (!in_section || t[a] == ';' || t[a] == '#') continue;
+        section_end = i + 1;
+        const std::size_t eq = t.find('=');
+        if (eq == std::string::npos) continue;
+        std::string key = t.substr(a, eq - a);
+        while (!key.empty() && (key.back() == ' ' || key.back() == '\t'))
+            key.pop_back();
+        for (int k = 0; k < 7; ++k) {
+            if (SDL_strcasecmp(key.c_str(), keys[k].c_str()) == 0) {
+                lines[i] = rows[k];
+                written[k] = true;
+            }
+        }
+    }
+    if (!seen_section) {
+        lines.push_back("");
+        lines.push_back("[Enhancements]");
+        section_end = lines.size();
+    }
+    for (int k = 0; k < 7; ++k) {
+        if (written[k]) continue;
+        lines.insert(lines.begin() + static_cast<std::ptrdiff_t>(section_end),
+                     rows[k]);
+        ++section_end;
+    }
     std::FILE* out = std::fopen(path.c_str(), "wb");
     if (!out) return false;
     for (const std::string& line : lines)
@@ -2898,7 +3257,8 @@ HostWindow::Events HostWindow::pump() {
         const int display = SDL_GetWindowDisplayIndex(b->window);
         if (display >= 0 && b->base_w > 0 && b->base_h > 0 &&
             SDL_GetDisplayUsableBounds(display, &usable) == 0) {
-            max_scale = std::clamp(std::min(usable.w / b->base_w,
+            max_scale = std::clamp(std::min(usable.w /
+                                                shown_width(b, b->base_w, b->base_h),
                                             usable.h / b->base_h), 1, 8);
         }
         b->cfg.max_scale = std::max(max_scale, b->scale);
@@ -2911,7 +3271,10 @@ HostWindow::Events HostWindow::pump() {
         b->cfg.linear_filter = b->linear_filter;
         b->cfg.integer_scale = b->integer_scale;
         b->cfg.screen_kind = static_cast<int>(b->screen_kind);
+        b->cfg.aspect = b->aspect_4_3 ? 1 : 0;
         b->cfg.native_scale = b->native_scale;
+        b->cfg.screen_filters_available = b->screen_filters_on;
+        b->cfg.screen_filter = static_cast<int>(b->preferred_screen_filter);
     }
     if (!b->cfg.audio_changed && !b->cfg.mute) {
         b->cfg.volume = b->volume;
@@ -3039,6 +3402,39 @@ HostWindow::Events HostWindow::pump() {
             } else if (down && e.caxis.value <= kTriggerReleaseThreshold) {
                 down = false;
             }
+        } else if (e.type == SDL_CONTROLLERAXISMOTION &&
+                   (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX ||
+                    e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTY ||
+                    e.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTX ||
+                    e.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY)) {
+            // Stick directions get the same treatment as the triggers. An
+            // axis event concerns one axis, so at most one direction presses.
+            // Slot order per stick: Right, Left, Up, Down (SDL Y is down-positive).
+            const bool is_x = (e.caxis.axis == SDL_CONTROLLER_AXIS_LEFTX ||
+                               e.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTX);
+            const bool is_right_stick = (e.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTX ||
+                                         e.caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY);
+            const int base_slot = (is_right_stick ? 4 : 0) + (is_x ? 0 : 2);
+            bool& pos_down = b->stick_down[base_slot];      // Right / Up slot
+            bool& neg_down = b->stick_down[base_slot + 1];  // Left / Down slot
+            // Slot meaning: X = {Right, Left}; Y = {Up, Down}. Y's positive
+            // value is Down, so swap which flag the value's sign drives.
+            bool& positive_flag = is_x ? pos_down : neg_down;
+            bool& negative_flag = is_x ? neg_down : pos_down;
+            const int positive_id = kPadLeftStickRight + base_slot + (is_x ? 0 : 1);
+            const int negative_id = kPadLeftStickRight + base_slot + (is_x ? 1 : 0);
+            const int v = e.caxis.value;
+            if (positive_flag && v <= kTriggerReleaseThreshold) positive_flag = false;
+            if (negative_flag && v >= -kTriggerReleaseThreshold) negative_flag = false;
+            if (!positive_flag && v >= kTriggerPressThreshold) {
+                positive_flag = true;
+                synth_pad_down = true;
+                synth_pad_button = positive_id;
+            } else if (!negative_flag && v <= -kTriggerPressThreshold) {
+                negative_flag = true;
+                synth_pad_down = true;
+                synth_pad_button = negative_id;
+            }
         }
 
         // The config UI gets first refusal on every event. When a bind box is
@@ -3165,10 +3561,19 @@ HostWindow::Events HostWindow::pump() {
         // Controller is additive with the keyboard: either source can press a
         // button, which is what every emulator does and what a second player
         // on the same pad would expect.
+        // The sticks move nothing by default: the D-pad is the default
+        // movement, and a stick direction works once it is bound on the
+        // Controls page (Jimmy, 2026-10-05).
         if (b->pad) {
             for (int bit = 0; bit < 10; ++bit) {
                 const int pb = b->pad_bind[bit];
                 if (pb < 0) continue;
+                if (pad_is_stick(pb)) {
+                    if (stick_dir_held(b->pad, pb))
+                        keys &= static_cast<uint16_t>(~(1u << bit));
+                    continue;
+                }
+                if (pb >= SDL_CONTROLLER_BUTTON_MAX) continue;  // trigger id: not a gameplay bind
                 if (SDL_GameControllerGetButton(
                         b->pad, static_cast<SDL_GameControllerButton>(pb)))
                     keys &= static_cast<uint16_t>(~(1u << bit));
@@ -3213,33 +3618,19 @@ HostWindow::Events HostWindow::pump() {
             }
             b->cfg.binds_changed = false;
         }
-        if (b->cfg.video_changed) {
+        if (b->cfg.video_changed || b->cfg.color_save) {
+            const bool video_settings_changed =
+                b->cfg.fullscreen != b->fullscreen || b->cfg.scale != b->scale ||
+                b->cfg.show_fps != b->fps_readout || b->cfg.vsync != b->vsync ||
+                b->cfg.linear_filter != b->linear_filter ||
+                b->cfg.integer_scale != b->integer_scale ||
+                b->cfg.screen_filter != static_cast<int>(b->preferred_screen_filter);
             if (b->cfg.fullscreen != b->fullscreen)
                 set_fullscreen(b->cfg.fullscreen);
             if (b->cfg.scale != b->scale)
                 adjust_scale(b->cfg.scale - b->scale);
-            if (b->cfg.show_fps != b->fps_readout) ev.toggle_fps = true;
-            if (b->cfg.vsync != b->vsync) {
-                // SDL_RenderSetVSync is 2.0.18+. On older SDL the renderer's
-                // vsync flag is fixed at creation, so the toggle would lie —
-                // say so instead of silently doing nothing.
-#if SDL_VERSION_ATLEAST(2, 0, 18)
-                if (SDL_RenderSetVSync(b->renderer, b->cfg.vsync ? 1 : 0) == 0) {
-                    b->vsync = b->cfg.vsync;
-                } else {
-                    std::fprintf(stderr,
-                                 "host_window: SDL_RenderSetVSync failed: %s\n",
-                                 SDL_GetError());
-                    b->cfg.vsync = b->vsync;
-                }
-#else
-                std::fprintf(stderr, "host_window: built against SDL %d.%d.%d; "
-                             "V-Sync cannot be changed after startup\n",
-                             SDL_MAJOR_VERSION, SDL_MINOR_VERSION,
-                             SDL_PATCHLEVEL);
-                b->cfg.vsync = b->vsync;
-#endif
-            }
+            set_fps_readout(b->cfg.show_fps);
+            apply_vsync(b, b->cfg.vsync);
             if (b->cfg.linear_filter != b->linear_filter) {
                 b->linear_filter = b->cfg.linear_filter;
                 SDL_SetTextureScaleMode(b->texture,
@@ -3261,20 +3652,41 @@ HostWindow::Events HostWindow::pump() {
                 SDL_RenderSetIntegerScale(
                     b->renderer, b->integer_scale ? SDL_TRUE : SDL_FALSE);
             }
-            if (b->cfg.screen_kind != static_cast<int>(b->screen_kind)) {
-                b->cfg.screen_kind = std::clamp(b->cfg.screen_kind, 0, 4);
+            const bool kind_changed =
+                b->cfg.screen_kind != static_cast<int>(b->screen_kind);
+            const bool custom_changed =
+                b->cfg.screen_kind == static_cast<int>(runtime::ScreenKind::Custom) &&
+                custom_colors_of(b->cfg) != b->applied_custom;
+            if (kind_changed || custom_changed) {
+                b->cfg.screen_kind = std::clamp(
+                    b->cfg.screen_kind, 0,
+                    static_cast<int>(runtime::ScreenKind::Custom));
                 b->screen_kind = static_cast<runtime::ScreenKind>(
                     b->cfg.screen_kind);
-                runtime::ColorSettings settings;
-                settings.screen = b->screen_kind;
-                b->color_lut = std::make_unique<runtime::ColorLut>(settings);
-                if (b->color_lut->is_passthrough()) {
-                    b->graded_fb.clear();
-                    b->native_graded_fb.clear();
-                } else {
-                    b->graded_fb.resize(static_cast<std::size_t>(b->base_w) *
-                                        b->base_h * 3u);
-                }
+                rebuild_color_lut(b);
+            }
+            // A slider saves when let go, not on every step of a drag.
+            const bool aspect_changed =
+                (b->cfg.aspect == 1) != b->aspect_4_3;
+            if (aspect_changed) {
+                b->aspect_4_3 = b->cfg.aspect == 1;
+                apply_aspect_window_size(b);
+            }
+            // Keep the preference even when this launch cannot use filters.
+            b->preferred_screen_filter = static_cast<ScreenFilter>(std::clamp(
+                b->cfg.screen_filter, 0, static_cast<int>(ScreenFilter::ScaleFx)));
+            b->screen_filter = b->screen_filters_on ? b->preferred_screen_filter
+                                                  : ScreenFilter::Off;
+            if (video_settings_changed && !write_video_ini(b))
+                std::fprintf(stderr, "host_window: could not write %s/config.ini\n",
+                             b->config_dir.c_str());
+            if (kind_changed || aspect_changed || b->cfg.color_save) {
+                b->cfg.color_save = !write_picture_ini(
+                    b->config_dir, b->cfg.screen_kind,
+                    custom_colors_of(b->cfg), b->cfg.aspect);
+                if (b->cfg.color_save)
+                    std::fprintf(stderr, "host_window: could not write %s/config.ini\n",
+                                 b->config_dir.c_str());
             }
             if (b->cfg.native_renderer != b->native_renderer)
                 set_native_renderer_enabled(b->cfg.native_renderer);

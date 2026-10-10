@@ -4,9 +4,11 @@
 // verifies the exact USA/Europe image, and starts the already-built runner.
 
 #include <windows.h>
+#include <shellapi.h>
 #include <bcrypt.h>
 #include <commdlg.h>
 #include <gdiplus.h>
+#include <windowsx.h>
 #include <shlwapi.h>
 #include <winhttp.h>
 
@@ -17,6 +19,7 @@
 #include "launcher_test_policy.h"
 #include "launcher_widescreen_diagnostics_policy.h"
 #include "launcher_logo.h"  // generated from assets/launcher_logo.png
+#include "launcher_common.h"
 #include "launcher_online.h"
 
 #include <algorithm>
@@ -33,11 +36,13 @@
 #include <mutex>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
+using namespace gsr_launcher;
 
 // GSR_RELEASE_LAUNCHER (CMake option of the same name, used by
 // make_release.bat): a player build with only Pick ROM and Quit. No
@@ -51,9 +56,6 @@ constexpr bool kReleaseLauncher = false;
 
 namespace {
 
-constexpr char kExpectedRomSha1[] =
-    "5c4695205413df7db52b9a184815a07783999971";
-
 // ── Release: first-run game build ─────────────────────────────────────
 // A release holds no game code. The first time the player picks their ROM
 // the launcher runs builder\gsr_builder.exe, which translates the ROM and
@@ -65,7 +67,8 @@ constexpr UINT kBuildUpdateMessage = WM_APP + 1;
 constexpr UINT kBuildFinishedMessage = WM_APP + 2;
 // Updates (launcher_online.h): the start-up check found a newer release.
 constexpr UINT kUpdateFoundMessage = WM_APP + 3;
-constexpr char kBuilderVersion[] = "2";  // tools/gsr_builder kBuilderVersion
+// ...and read the newest release's notes (shown whether or not it is newer).
+constexpr UINT kReleaseNotesMessage = WM_APP + 4;
 
 struct BuildStatus {
     std::mutex mutex;
@@ -109,7 +112,19 @@ bool g_test_battle_bg1_record = k_launcher_test_defaults.battle_bg1_record;
 // but we draw nowhere, or a refused frame (GSR_AUTO_CAPTURE; the runner
 // keeps the ring on for it). Off each session, like the other probes.
 bool g_test_auto_capture = false;
+// Saves registers, memory and the host call chain the first time the engine
+// falls back to the interpreter inside the data unpacker (GSR_UNPACKER_CATCH,
+// src/unpacker_catch.h). Always on in the player launcher; off each session
+// here, like the other probes.
+bool g_test_unpacker_catch = false;
+// Adds LCD3x and xBR screen filters to F1 > Video (GSR_SCREEN_FILTERS). A
+// test option: off each session, never saved.
+bool g_test_screen_filters = false;
 bool g_test_mod_field_test = k_launcher_test_defaults.mod_field_test;
+fs::path g_studio_project;
+fs::path g_studio_session;
+bool g_studio_explicit = false;
+int g_studio_exit = 1;
 bool g_test_room_buffer = k_launcher_test_defaults.room_buffer;
 bool g_test_swi_log = k_launcher_test_defaults.swi_log;
 
@@ -131,14 +146,16 @@ LauncherAudioSettings g_audio_settings{};
 bool g_strict_static_route = false;
 
 // What a release launch plays with: Enhanced Options (expanded view
-// rendering and spell effects) and the graphics-card field renderer, WITH
-// the console compositor kept as the fallback for any frame the card
-// refuses. Everything experimental or diagnostic stays off.
+// rendering and spell effects) and the graphics-card field renderer ALONE.
+// The console compositor fallback is off: on the Steam Deck it drew a
+// full 360x240 picture per frame that was almost never shown and made
+// widescreen slow (2026-10-04: one refused frame in ~590,000 across the
+// developer sessions). Everything experimental or diagnostic stays off.
 LauncherAudioSettings release_launch_settings() {
     LauncherAudioSettings settings{};
     settings.enhanced_options = true;
     settings.gpu_field = true;
-    settings.gpu_field_only = false;
+    settings.gpu_field_only = true;
     return settings;
 }
 
@@ -334,13 +351,6 @@ void open_launcher_log(const fs::path& root) {
                  L" started (built " __DATE__ " " __TIME__ ") in " + root.wstring());
 }
 
-std::string read_text(const fs::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) return {};
-    return {std::istreambuf_iterator<char>(file),
-            std::istreambuf_iterator<char>()};
-}
-
 std::wstring read_cached_path(const fs::path& path) {
     const std::string line = read_text(path);
     const std::size_t end = line.find_first_of("\r\n");
@@ -355,6 +365,9 @@ void write_cached_path(const fs::path& path, const std::wstring& value) {
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     if (file) file << wide_to_utf8(value) << '\n';
 }
+
+}  // namespace
+namespace gsr_launcher {
 
 bool sha1_file(const fs::path& path, std::string* out) {
     BCRYPT_ALG_HANDLE algorithm = nullptr;
@@ -413,6 +426,9 @@ bool sha1_file(const fs::path& path, std::string* out) {
     return ok;
 }
 
+}  // namespace gsr_launcher
+namespace {
+
 std::wstring pick_file(const wchar_t* title, const wchar_t* filter,
                        const std::wstring& initial_directory = {},
                        HWND owner = nullptr) {
@@ -429,28 +445,6 @@ std::wstring pick_file(const wchar_t* title, const wchar_t* filter,
     dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (!GetOpenFileNameW(&dialog)) return {};
     return buffer;
-}
-
-bool validate_rom(const std::wstring& path, std::wstring* error) {
-    std::error_code ec;
-    if (!fs::is_regular_file(path, ec)) {
-        *error = L"That file could not be opened.";
-        return false;
-    }
-    std::string actual;
-    if (!sha1_file(path, &actual)) {
-        *error = L"The ROM could not be read.";
-        return false;
-    }
-    if (actual != kExpectedRomSha1) {
-        *error = L"That is not the required Golden Sun USA/Europe ROM.\n\n"
-                 L"Expected SHA-1:\n";
-        *error += utf8_to_wide(kExpectedRomSha1);
-        *error += L"\n\nFound SHA-1:\n";
-        *error += utf8_to_wide(actual);
-        return false;
-    }
-    return true;
 }
 
 // `owner` is the launcher window: the file dialog and the "not the right
@@ -471,12 +465,13 @@ std::wstring choose_rom(const fs::path& root, HWND owner) {
             return {};
         }
 
-        std::wstring error;
-        if (validate_rom(candidate, &error)) {
+        std::string error_utf8;
+        if (validate_rom(candidate, &error_utf8)) {
             launcher_log(L"Pick ROM: " + candidate + L" - accepted.");
             write_cached_path(cache, candidate);
             return candidate;
         }
+        const std::wstring error = utf8_to_wide(error_utf8);
         launcher_log(L"Pick ROM: " + candidate + L" - refused: " + error);
         MessageBoxW(owner, error.c_str(), L"Golden Sun Recompiled",
                     MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
@@ -488,9 +483,10 @@ std::wstring choose_rom(const fs::path& root, HWND owner) {
 std::wstring remembered_rom(const fs::path& root) {
     const std::wstring cached = read_cached_path(root / L"local" / L"launcher-rom.txt");
     if (cached.empty()) return {};
-    std::wstring error;
+    std::string error;
     if (validate_rom(cached, &error)) return cached;
-    launcher_log(L"Remembered ROM " + cached + L" can no longer be used: " + error);
+    launcher_log(L"Remembered ROM " + cached + L" can no longer be used: " +
+                 utf8_to_wide(error));
     return {};
 }
 
@@ -511,8 +507,6 @@ std::wstring remembered_rom(const fs::path& root) {
 // chronological, greppable log is easier for the user to hand over than two
 // files they'd have to interleave by eye, and the tag keeps the streams
 // distinguishable.
-constexpr int kKeepLogCount = 20;  // recent sessions kept; older ones pruned
-
 std::wstring make_session_log_path(const fs::path& logs_dir) {
     SYSTEMTIME st{};
     GetLocalTime(&st);
@@ -557,50 +551,6 @@ bool copy_session_id_to_clipboard(HWND owner, const std::wstring& log_path) {
     CloseClipboard();
     if (memory) GlobalFree(memory);
     return copied;
-}
-
-// Keeps the newest (kKeepLogCount - 1) existing logs so this session's new
-// file brings the total back up to kKeepLogCount. session_YYYYMMDD_HHMMSS
-// sorts lexicographically in chronological order, so no parsing is needed.
-void prune_old_logs(const fs::path& logs_dir) {
-    std::error_code ec;
-    std::vector<fs::path> logs;
-    for (const auto& entry : fs::directory_iterator(logs_dir, ec)) {
-        if (!entry.is_regular_file(ec)) continue;
-        const std::wstring name = entry.path().filename().wstring();
-        if (name.rfind(L"session_", 0) == 0 &&
-            name.size() > 4 && name.compare(name.size() - 4, 4, L".log") == 0) {
-            logs.push_back(entry.path());
-        }
-    }
-    if (logs.size() < static_cast<std::size_t>(kKeepLogCount)) return;
-    std::sort(logs.begin(), logs.end());
-    const std::size_t remove_count =
-        logs.size() - (static_cast<std::size_t>(kKeepLogCount) - 1);
-    for (std::size_t i = 0; i < remove_count; ++i) {
-        fs::path events = logs[i];
-        fs::path phase = logs[i];
-        events.replace_extension(L".events.csv");
-        phase.replace_extension(L".phase.csv");
-        const fs::path misses = events.wstring() + L".misses.csv";
-        const fs::path recursion = events.wstring() + L".recursion.csv";
-        const fs::path ram_churn = events.wstring() + L".ram-churn.csv";
-        const fs::path input = logs[i].wstring().substr(
-            0, logs[i].wstring().size() - 4) + L".input";
-        fs::remove(logs[i], ec);
-        fs::remove(events, ec);
-        fs::remove(misses, ec);
-        fs::remove(recursion, ec);
-        fs::remove(ram_churn, ec);
-        fs::remove(phase, ec);
-        fs::remove(input, ec);
-        for (unsigned suffix = 1; suffix < 1000; ++suffix) {
-            const fs::path suffixed = logs[i].wstring().substr(
-                0, logs[i].wstring().size() - 4) + L"_" +
-                std::to_wstring(suffix) + L".input";
-            fs::remove(suffixed, ec);
-        }
-    }
 }
 
 bool create_empty_file_exclusive(const fs::path& path) {
@@ -782,17 +732,6 @@ private:
 // every capture from that session, or the crash files if it crashed, with
 // the session log, the settings files and a short system note into one zip
 // in logs/bug_reports, and points the player at it.
-std::set<std::wstring> rewind_dirs(const fs::path& logs_dir) {
-    std::set<std::wstring> dirs;
-    std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(logs_dir, ec)) {
-        const std::wstring name = entry.path().filename().wstring();
-        if (entry.is_directory(ec) && name.rfind(L"gpu_rewind_", 0) == 0)
-            dirs.insert(name);
-    }
-    return dirs;
-}
-
 std::string registry_text(const wchar_t* value) {
     wchar_t buffer[256] = {};
     DWORD size = sizeof(buffer);
@@ -974,6 +913,9 @@ int http_request(const wchar_t* verb, const HttpTarget& target,
 // ONE F12 capture (about 7 MB zipped), so each upload stays small; a session
 // with three captures makes three zips.
 
+}  // namespace
+namespace gsr_launcher {
+
 // The text in a report with the player's Windows user name taken out of
 // paths (C:\Users\Name\... becomes C:\Users\<user>\...), so a report never
 // shows who sent it.
@@ -995,55 +937,18 @@ std::string scrub_user_name(std::string text) {
         if (!folder.empty() && lower(folder) != (names.empty() ? "" : lower(names[0])))
             names.push_back(folder);
     }
+    std::vector<std::pair<std::string, std::string>> swaps;
     for (const std::string& name : names) {
         for (const char* sep : {"\\", "/", "\\\\"}) {
-            const std::string needle = lower(std::string(sep) + "users" + sep + name);
-            const std::string replacement = std::string(sep) + "Users" + sep + "<user>";
-            std::string folded = lower(text);
-            std::size_t at = 0;
-            while ((at = folded.find(needle, at)) != std::string::npos) {
-                const std::size_t after = at + needle.size();
-                // Only the whole folder name: "Jim" must not match "Jimmy".
-                if (after < text.size() && text[after] != '\\' && text[after] != '/' &&
-                    text[after] != '"' && text[after] != '\'' && text[after] != ' ' &&
-                    text[after] != '\r' && text[after] != '\n') {
-                    at = after;
-                    continue;
-                }
-                text.replace(at, needle.size(), replacement);
-                folded.replace(at, needle.size(), lower(replacement));
-                at += replacement.size();
-            }
+            swaps.emplace_back(std::string(sep) + "users" + sep + name,
+                               std::string(sep) + "Users" + sep + "<user>");
         }
     }
-    return text;
+    return scrub_paths(std::move(text), swaps);
 }
 
-// Copies a log or settings file into the report, user name taken out. A
-// very long session log keeps its first 256 KB and its last 3 MB: the start
-// says how the game was set up, the end is where the problem is.
-void copy_into_report(const fs::path& from, const fs::path& staging) {
-    std::error_code ec;
-    if (!fs::is_regular_file(from, ec)) return;
-    std::wstring ext = from.extension().wstring();
-    for (wchar_t& c : ext) c = static_cast<wchar_t>(towlower(c));
-    const bool text = ext == L".log" || ext == L".txt" || ext == L".ini" ||
-                      ext == L".csv";
-    if (!text) {
-        fs::copy_file(from, staging / from.filename(),
-                      fs::copy_options::overwrite_existing, ec);
-        return;
-    }
-    std::string content = read_text(from);
-    constexpr std::size_t kHead = 256 * 1024, kTail = 3 * 1024 * 1024;
-    if (content.size() > kHead + kTail) {
-        content = content.substr(0, kHead) +
-                  "\n\n[... the middle of this log was left out of the bug report ...]\n\n" +
-                  content.substr(content.size() - kTail);
-    }
-    std::ofstream out(staging / from.filename(), std::ios::binary | std::ios::trunc);
-    out << scrub_user_name(content);
-}
+}  // namespace gsr_launcher
+namespace {
 
 // Returns the zips (one per F12 capture, or one when there was none), or
 // the folder when zipping failed; empty when there was nothing to report.
@@ -1086,7 +991,16 @@ std::vector<fs::path> make_bug_report(const fs::path& root, const fs::path& game
     if (crashed) {
         copy_into_report(game_dir / L"crash_report.txt", staging);
         copy_into_report(game_dir / L"crash_dump.dmp", staging);
+        copy_into_report(game_dir / L"crash_memory.bin", staging);
+        copy_into_report(game_dir / L"crash_trail.csv", staging);
     }
+    // Only this run's: the launcher deletes the pair before every start.
+    copy_into_report(root / L"unpacker_catch.txt", staging);
+    copy_into_report(root / L"unpacker_catch.bin", staging);
+    // The unpacker guard's pair (src/unpacker_guard.h), also only this run's.
+    const bool unpacker_caught = fs::is_regular_file(root / L"unpacker_recovered.txt", ec);
+    copy_into_report(root / L"unpacker_recovered.txt", staging);
+    copy_into_report(root / L"unpacker_recovered.bin", staging);
     {
         std::ofstream info(staging / L"report_info.txt", std::ios::binary);
         info << "Golden Sun Recompiled bug report\n"
@@ -1096,6 +1010,7 @@ std::vector<fs::path> make_bug_report(const fs::path& root, const fs::path& game
              << registry_text(L"CurrentBuild") << ")\n"
              << "F12 captures: " << rewinds.size() << "\n"
              << "Game crashed: " << (crashed ? "yes" : "no") << "\n"
+             << "Unpacker crash caught: " << (unpacker_caught ? "yes" : "no") << "\n"
              << "Game exit code: " << exit_code << "\n";
     }
 
@@ -1296,7 +1211,21 @@ LRESULT CALLBACK report_window_proc(HWND window, UINT message, WPARAM w_param,
     return DefWindowProcW(window, message, w_param, l_param);
 }
 
-void offer_bug_report(const std::vector<fs::path>& reports, bool crashed) {
+// The report window's opening sentence. `unpacker` is the unpacker guard's
+// unpacker_recovered.txt (src/unpacker_guard.h).
+std::wstring report_heading(bool crashed, bool unpacker) {
+    if (unpacker && crashed)
+        return L"The game's data unpacker hit a crash and could not recover. A bug "
+               L"report was saved; sending it helps a lot in finding the proper fix.";
+    if (unpacker)
+        return L"The game's data unpacker hit a crash. It was caught and the game kept "
+               L"running, and a bug report was saved. Sending it helps a lot in "
+               L"finding the proper fix.";
+    return crashed ? L"The game closed unexpectedly. A bug report was saved."
+                   : L"Your bug report was saved.";
+}
+
+void offer_bug_report(const std::vector<fs::path>& reports, bool crashed, bool unpacker) {
     if (reports.empty()) return;
     ReportWindow state;
     state.reports = reports;
@@ -1320,9 +1249,7 @@ void offer_bug_report(const std::vector<fs::path>& reports, bool crashed) {
     if (!gsr_online::report_upload_enabled()) {
         // A launcher built without the report service (a fork, a developer
         // build): the zips and the form, as before the Send button.
-        std::wstring text = crashed
-            ? L"The game closed unexpectedly. A bug report was saved:\n\n"
-            : L"Your bug report was saved:\n\n";
+        std::wstring text = report_heading(crashed, unpacker) + L"\n\n";
         for (const fs::path& report : reports) text += report.filename().wstring() + L"\n";
         text += L"in " + reports.front().parent_path().wstring() +
                 L"\n\nPress OK to open the bug report form and this folder, write a few "
@@ -1330,7 +1257,7 @@ void offer_bug_report(const std::vector<fs::path>& reports, bool crashed) {
                 L"without sending anything.";
         if (MessageBoxW(nullptr, text.c_str(), L"Golden Sun Recompiled",
                         MB_OKCANCEL | MB_SETFOREGROUND |
-                            (crashed ? MB_ICONWARNING : MB_ICONINFORMATION)) == IDOK) {
+                            (crashed || unpacker ? MB_ICONWARNING : MB_ICONINFORMATION)) == IDOK) {
             ShellExecuteW(nullptr, L"open", kBugReportFormUrl, nullptr, nullptr, SW_SHOWNORMAL);
             const std::wstring select = L"/select,\"" + reports.front().wstring() + L"\"";
             ShellExecuteW(nullptr, L"open", L"explorer.exe", select.c_str(), nullptr,
@@ -1353,7 +1280,9 @@ void offer_bug_report(const std::vector<fs::path>& reports, bool crashed) {
     window_class.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
     RegisterClassW(&window_class);
 
-    const int width = px(520), height = px(400);
+    // The unpacker's heading runs to three lines; everything below moves down.
+    const int dy = unpacker ? 40 : 0;
+    const int width = px(520), height = px(400 + dy);
     RECT frame{0, 0, width, height};
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
     AdjustWindowRectEx(&frame, style, FALSE, WS_EX_APPWINDOW);
@@ -1379,13 +1308,12 @@ void offer_bug_report(const std::vector<fs::path>& reports, bool crashed) {
         return child;
     };
 
-    std::wstring heading = crashed ? L"The game closed unexpectedly. A bug report was saved."
-                                   : L"Your bug report was saved.";
+    std::wstring heading = report_heading(crashed, unpacker);
     heading += L"\nWhat happened, and where in the game? A few words help a lot:";
-    add(L"STATIC", heading, 0, 0, 20, 16, 480, 44);
+    add(L"STATIC", heading, 0, 0, 20, 16, 480, 44 + dy);
     state.edit = add(L"EDIT", L"",
                      ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | WS_VSCROLL | WS_TABSTOP,
-                     kReportEdit, 20, 66, 480, 110);
+                     kReportEdit, 20, 66 + dy, 480, 110);
     SendMessageW(state.edit, EM_SETLIMITTEXT, 500, 0);
     std::wstring files;
     std::uint64_t bytes = 0;
@@ -1398,12 +1326,13 @@ void offer_bug_report(const std::vector<fs::path>& reports, bool crashed) {
             L" MB) to the developer: the game's log and screen captures, your save "
             L"file, your settings and your Windows version. Your Windows user name is taken out. Nothing is "
             L"sent unless you press Send report.";
-    add(L"STATIC", files, 0, 0, 20, 186, 480, 84);
-    state.status = add(L"STATIC", L"", 0, 0, 20, 276, 480, 40);
+    add(L"STATIC", files, 0, 0, 20, 186 + dy, 480, 84);
+    state.status = add(L"STATIC", L"", 0, 0, 20, 276 + dy, 480, 40);
     state.send = add(L"BUTTON", L"Send report", BS_DEFPUSHBUTTON | WS_TABSTOP, kReportSend, 20,
-                     330, 150, 40);
-    state.close = add(L"BUTTON", L"Don't send", WS_TABSTOP, kReportClose, 180, 330, 130, 40);
-    add(L"BUTTON", L"Open folder", WS_TABSTOP, kReportFolder, 370, 330, 130, 40);
+                     330 + dy, 150, 40);
+    state.close = add(L"BUTTON", L"Don't send", WS_TABSTOP, kReportClose, 180, 330 + dy, 130,
+                      40);
+    add(L"BUTTON", L"Open folder", WS_TABSTOP, kReportFolder, 370, 330 + dy, 130, 40);
 
     ShowWindow(window, SW_SHOW);
     SetForegroundWindow(window);
@@ -1437,7 +1366,90 @@ void offer_bug_report(const std::vector<fs::path>& reports, bool crashed) {
     if (launcher_quit) PostQuitMessage(launcher_exit_code);
 }
 
+std::wstring quote_studio_arg(const std::wstring& value) {
+    std::wstring result=L"\"";unsigned slashes=0;
+    for (wchar_t c:value) {
+        if (c==L'\\') {++slashes;continue;}
+        if (c==L'"') {result.append(slashes*2+1,L'\\');result+=c;}
+        else {result.append(slashes,L'\\');result+=c;}slashes=0;
+    }
+    result.append(slashes*2,L'\\');result+=L'"';return result;
+}
+fs::path studio_session_for(const fs::path& root,const fs::path& project) {
+    const auto text=wide_to_utf8(fs::canonical(project).wstring());
+    BCRYPT_ALG_HANDLE algorithm=nullptr;BCRYPT_HASH_HANDLE hash=nullptr;unsigned char digest[20]{};
+    if (BCryptOpenAlgorithmProvider(&algorithm,BCRYPT_SHA1_ALGORITHM,nullptr,0)<0) throw std::runtime_error("Cannot identify Studio session");
+    DWORD object_length=0,result_length=0;
+    auto status=BCryptGetProperty(algorithm,BCRYPT_OBJECT_LENGTH,reinterpret_cast<PUCHAR>(&object_length),sizeof(object_length),&result_length,0);
+    std::vector<UCHAR> object(object_length);
+    if (status>=0) status=BCryptCreateHash(algorithm,&hash,object.data(),object_length,nullptr,0,0);
+    if (status>=0) status=BCryptHashData(hash,reinterpret_cast<PUCHAR>(const_cast<char*>(text.data())),static_cast<ULONG>(text.size()),0);
+    if (status>=0) status=BCryptFinishHash(hash,digest,sizeof digest,0);
+    if (hash) BCryptDestroyHash(hash);
+    BCryptCloseAlgorithmProvider(algorithm,0);
+    if (status<0) throw std::runtime_error("Cannot identify Studio session");
+    std::wstring key;constexpr wchar_t hex[]=L"0123456789abcdef";
+    for (auto byte:digest) {key+=hex[byte>>4];key+=hex[byte&15];}
+    return root/L"local"/L"studio-sessions"/key;
+}
+void prepare_studio_session(const fs::path& root) {
+    auto extension=g_studio_project.extension().wstring();
+    std::transform(extension.begin(),extension.end(),extension.begin(),[](wchar_t c){return std::towlower(c);});
+    if (!g_studio_project.is_absolute() || !fs::is_regular_file(g_studio_project) || extension!=L".mod") throw std::runtime_error("Choose an absolute .mod project path");
+    g_studio_project=fs::canonical(g_studio_project);
+    if (g_studio_session.empty()) g_studio_session=studio_session_for(root,g_studio_project);
+    if (!g_studio_session.is_absolute()) throw std::runtime_error("Studio session path must be absolute");
+    const auto allowed=fs::weakly_canonical(root/L"local"/L"studio-sessions");
+    const auto session=fs::weakly_canonical(g_studio_session);
+    const auto relative=session.lexically_relative(allowed);
+    const auto inside_root=allowed.lexically_relative(fs::canonical(root));
+    if (relative.empty() || relative==L"." || *relative.begin()==L".." || inside_root.empty() || *inside_root.begin()==L"..") throw std::runtime_error("Studio saves must be inside the launcher's local/studio-sessions folder");
+    g_studio_session=session;const auto marker=session/L"studio-project.txt";
+    if (fs::exists(session)) {
+        if (fs::exists(marker)) {
+            auto owner=read_cached_path(marker);
+            if (owner.empty() || !fs::exists(fs::path(owner)) || !fs::equivalent(fs::path(owner),g_studio_project)) throw std::runtime_error("Studio session belongs to another project");
+        } else if (!fs::is_empty(session)) throw std::runtime_error("Studio session folder already contains unrelated files");
+    }
+    fs::create_directories(session);write_cached_path(marker,g_studio_project.wstring());
+    if (read_cached_path(marker)!=g_studio_project.wstring()) throw std::runtime_error("Cannot record Studio session ownership");
+}
+
 int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
+    const bool studio = g_test_variables && g_test_mod_field_test && !g_studio_project.empty();
+    if (studio) {
+        try { prepare_studio_session(root); }
+        catch (const std::exception& e) { MessageBoxW(window,utf8_to_wide(e.what()).c_str(),L"Golden Sun Studio",MB_OK|MB_ICONERROR);return 1; }
+    }
+    HANDLE log_file = INVALID_HANDLE_VALUE;
+    // Close the session log if it is open, say why, and give up the start.
+    auto fail = [&](const std::wstring& text, UINT icon = MB_ICONERROR) {
+        if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);
+        MessageBoxW(window, text.c_str(), L"Golden Sun Recompiled",
+                    MB_OK | icon | MB_SETFOREGROUND);
+        return 1;
+    };
+    // Golden Sun's flash save is 64 KiB; the engine refuses a larger .sav
+    // (runtime.cpp "save file too large"), so say why instead of exiting.
+    constexpr std::uintmax_t kGameSaveBytes = 0x10000;
+    {
+        const fs::path save = studio ? g_studio_session/L"game.sav" : fs::path(rom).replace_extension(L".sav");
+        std::error_code save_ec;
+        const std::uintmax_t save_size = fs::file_size(save, save_ec);
+        if (!save_ec && save_size > kGameSaveBytes) {
+            launcher_log(L"Start game: save file " + save.wstring() + L" is " +
+                         std::to_wstring(save_size) +
+                         L" bytes, larger than 65536: not started.");
+            const std::wstring text =
+                L"This save file can't be used\n\n"
+                L"The save file next to your ROM was made by an emulator or "
+                L"another program, and Golden Sun Recompiled can't read it.\n\n" +
+                save.wstring() +
+                L"\n\nMove it to another folder or delete it, then start the "
+                L"game again. The game will make a new save there.";
+            return fail(text, MB_ICONWARNING);
+        }
+    }
     // Save before spawning so a launch cannot lose a changed checkbox.
     if (!kReleaseLauncher) save_launcher_audio_settings(root, g_audio_settings);
     // The game runs without the BIOS (Jimmy, 2026-09-24): no BIOS path is
@@ -1463,10 +1475,7 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
     }
     if (!fs::is_regular_file(game)) {
         launcher_log(L"Start game: GoldenSunRecomp.exe not found.");
-        MessageBoxW(window,
-                    L"GoldenSunRecomp.exe was not found. Run the build first.",
-                    L"Golden Sun Recompiled", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
-        return 1;
+        return fail(L"GoldenSunRecomp.exe was not found. Run the build first.");
     }
 
     fs::create_directories(root / L"recomp_cache");
@@ -1474,7 +1483,6 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
     const fs::path logs_dir = root / L"logs";
     std::error_code dir_ec;
     fs::create_directories(logs_dir, dir_ec);
-    HANDLE log_file = INVALID_HANDLE_VALUE;
     std::wstring log_path;
     if (!dir_ec) {
         prune_old_logs(logs_dir);
@@ -1509,12 +1517,16 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
     }
 
     ChildEnvironment child_environment;
+    child_environment.unset(L"GSR_STUDIO_MOD");
+    child_environment.unset(L"GSR_STUDIO_SESSION");
+    if (studio) {
+        child_environment.set(L"GSR_STUDIO_MOD",g_studio_project.wstring());
+        child_environment.set(L"GSR_STUDIO_SESSION",g_studio_session.wstring());
+        for (const auto* key:{L"GBARECOMP_LOAD_STATE",L"GBARECOMP_INPUT_REPLAY",L"GBARECOMP_INPUT_RECORD"}) child_environment.unset(key);
+    }
     if (!child_environment.valid()) {
-        if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);
         launcher_log(L"Start game: the game environment could not be prepared.");
-        MessageBoxW(window, L"The game environment could not be prepared.",
-                    L"Golden Sun Recompiled", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
-        return 1;
+        return fail(L"The game environment could not be prepared.");
     }
 
     // Golden Sun's Camelot intro overflows the Windows host stack with the
@@ -1538,14 +1550,20 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
     child_environment.set(L"GBARECOMP_AUDIO_STEREO", L"1");
     child_environment.set(L"GBARECOMP_HEAL_CACHE",
                           (root / L"recomp_cache").wstring());
+    // Release: point the game's self-heal at the bundled g++ (absent on dev).
+    if (std::filesystem::exists(root / L"builder" / L"mingw64" / L"bin" /
+                                L"g++.exe")) {
+        child_environment.set(L"GBARECOMP_HEAL_TOOLCHAIN",
+                              (root / L"builder" / L"mingw64").wstring());
+    }
 
     // A function-tracer launch must carry its exact user input sequence so
     // the resulting trace can be replayed. Replay and recording are mutually
     // exclusive in the runner; reject an explicit conflict before spawning
     // rather than allowing a partial, misleading session.
-    const std::wstring explicit_input_record =
+    const std::wstring explicit_input_record = studio ? L"" :
         inherited_environment_value(L"GBARECOMP_INPUT_RECORD");
-    const std::wstring input_replay =
+    const std::wstring input_replay = studio ? L"" :
         inherited_environment_value(L"GBARECOMP_INPUT_REPLAY");
     std::wstring automatic_input_path;
     if (logging && input_replay.empty() && explicit_input_record.empty() &&
@@ -1560,22 +1578,14 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
         (g_test_function_tracer || g_test_text_record), explicit_input_record,
             !input_replay.empty(), automatic_input_path);
     if (input_record_policy.replay_conflict) {
-        if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);
-        MessageBoxW(window,
-                    L"GBARECOMP_INPUT_RECORD cannot be used together with "
-                    L"GBARECOMP_INPUT_REPLAY.",
-                    L"Golden Sun Recompiled", MB_OK | MB_ICONERROR);
-        return 1;
+        return fail(L"GBARECOMP_INPUT_RECORD cannot be used together with "
+                    L"GBARECOMP_INPUT_REPLAY.");
     }
     if ((g_test_function_tracer || g_test_text_record) &&
         input_replay.empty() &&
         explicit_input_record.empty() && !input_record_policy.enabled) {
-        if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);
-        MessageBoxW(window,
-                    L"Function tracer could not create its input recording "
-                    L"path.",
-                    L"Golden Sun Recompiled", MB_OK | MB_ICONERROR);
-        return 1;
+        return fail(L"Function tracer could not create its input recording "
+                    L"path.");
     }
     if (input_record_policy.enabled) {
         const fs::path input_path(input_record_policy.path);
@@ -1584,12 +1594,8 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
             fs::create_directories(input_path.parent_path(), input_ec);
         if (input_ec || fs::exists(input_path) ||
             !create_empty_file_exclusive(input_path)) {
-            if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);
-            MessageBoxW(window,
-                        L"The input recording path could not be created "
-                        L"without overwriting an existing file.",
-                        L"Golden Sun Recompiled", MB_OK | MB_ICONERROR);
-            return 1;
+            return fail(L"The input recording path could not be created "
+                        L"without overwriting an existing file.");
         }
         child_environment.set(L"GBARECOMP_INPUT_RECORD",
                               input_record_policy.path);
@@ -1634,6 +1640,8 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
         {L"GSR_EFFECT_TRACE", g_test_effect_trace},
         {L"GSR_FRAME_REWIND", g_test_frame_rewind},
         {L"GSR_AUTO_CAPTURE", g_test_auto_capture},
+        {L"GSR_UNPACKER_CATCH", g_test_unpacker_catch},
+        {L"GSR_SCREEN_FILTERS", g_test_screen_filters},
         {L"GSR_BATTLE_BG1_RECORD", g_test_battle_bg1_record},
         {L"GSR_ROOM_BUFFER", g_test_room_buffer},
         // First piece of the mod loader: swaps one item icon and one Psynergy
@@ -1670,11 +1678,16 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
             child_environment.unset(variable.name);
         }
     }
-    // Players: F12 always saves the last 2 seconds for a bug report.
+    // Players: F12 always saves the last 2 seconds for a bug report, and
+    // F1 > Video offers the experimental screen filters (Jimmy, 2026-10-07).
+    // The unpacker catcher too (Jimmy, 2026-10-08): it costs nothing until
+    // the Sol Sanctum fault, then writes one pair the launcher cleans up.
     if (kReleaseLauncher) {
         child_environment.set(L"GSR_FRAME_REWIND", L"1");
+        child_environment.set(L"GSR_SCREEN_FILTERS", L"1");
+        child_environment.set(L"GSR_UNPACKER_CATCH", L"1");
         if (!enabled_list.empty()) enabled_list += ",";
-        enabled_list += "GSR_FRAME_REWIND";
+        enabled_list += "GSR_FRAME_REWIND,GSR_SCREEN_FILTERS,GSR_UNPACKER_CATCH";
     }
     if (logging) {
         const std::string line =
@@ -1759,7 +1772,10 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
     // when these inherited variables are absent. Input replay is already
     // inherited by ChildEnvironment; these controls only bridge the state
     // path and an optional windowed frame budget to the runner CLI.
-    gsr::append_developer_replay_arguments(
+    if (studio) {
+        command += L" --window --save " + quote_studio_arg((g_studio_session/L"game.sav").wstring());
+        command += L" --user-directory " + quote_studio_arg(g_studio_session.wstring());
+    } else gsr::append_developer_replay_arguments(
         command, inherited_environment_value(L"GBARECOMP_LOAD_STATE"),
         inherited_environment_value(L"GBARECOMP_REPLAY_FRAMES"));
     std::vector<wchar_t> mutable_command(command.begin(), command.end());
@@ -1798,6 +1814,19 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
     }
 
     const std::set<std::wstring> rewinds_before = rewind_dirs(logs_dir);
+    // A crash file left by an earlier run must not end up in this run's report.
+    {
+        std::error_code stale_ec;
+        fs::remove(game.parent_path() / L"crash_memory.bin", stale_ec);
+        fs::remove(game.parent_path() / L"crash_trail.csv", stale_ec);
+        // The unpacker catcher's pair (src/unpacker_catch.h), written in the
+        // game's working folder: at most one pair ever exists, from this run.
+        fs::remove(root / L"unpacker_catch.txt", stale_ec);
+        fs::remove(root / L"unpacker_catch.bin", stale_ec);
+        // The unpacker guard's pair (src/unpacker_guard.h), the same way.
+        fs::remove(root / L"unpacker_recovered.txt", stale_ec);
+        fs::remove(root / L"unpacker_recovered.bin", stale_ec);
+    }
     const auto launch_time = fs::file_time_type::clock::now();
 
     PROCESS_INFORMATION process{};
@@ -1816,12 +1845,9 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
         if (out_write) CloseHandle(out_write);
         if (err_read) CloseHandle(err_read);
         if (err_write) CloseHandle(err_write);
-        if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);
         launcher_log(L"Start game: Windows could not start " + game.wstring() +
                      L" (error " + std::to_wstring(start_error) + L").");
-        MessageBoxW(window, L"Windows could not start the recompiled game.",
-                    L"Golden Sun Recompiled", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
-        return 1;
+        return fail(L"Windows could not start the recompiled game.");
     }
     CloseHandle(process.hThread);
     launcher_log(L"Start game: running " + game.wstring() + L", session log " +
@@ -1853,9 +1879,11 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
         out_thread.join();
         err_thread.join();
     }
+    WaitForSingleObject(process.hProcess,INFINITE);
     DWORD exit_code = 0;
     GetExitCodeProcess(process.hProcess, &exit_code);
     if (log_file != INVALID_HANDLE_VALUE) CloseHandle(log_file);
+    log_file=INVALID_HANDLE_VALUE;
     CloseHandle(process.hProcess);
 
     if (kReleaseLauncher) {
@@ -1866,15 +1894,25 @@ int run_game(const fs::path& root, const std::wstring& rom, HWND window) {
         const fs::path crash_report = game.parent_path() / L"crash_report.txt";
         const bool crashed = fs::is_regular_file(crash_report, time_ec) &&
             fs::last_write_time(crash_report, time_ec) >= launch_time;
+        const bool unpacker = fs::is_regular_file(root / L"unpacker_recovered.txt", time_ec);
         launcher_log(L"Game ended: exit code " + std::to_wstring(exit_code) +
                      (crashed ? L", crashed (crash_report.txt written)" : L"") +
+                     (unpacker ? L", unpacker crash caught (unpacker_recovered.txt)" : L"") +
                      L", rewind captures " + std::to_wstring(new_rewinds.size()) + L".");
-        if (!new_rewinds.empty() || crashed) {
+        if (!new_rewinds.empty() || crashed || unpacker) {
             offer_bug_report(make_bug_report(root, game.parent_path(), rom,
                                              log_path, new_rewinds, crashed,
                                              exit_code),
-                             crashed);
+                             crashed, unpacker);
         }
+    }
+    if (studio && exit_code!=0) {
+        std::ifstream file(fs::path(log_path),std::ios::binary);std::string line,reason;
+        while (std::getline(file,line)) if (line.find("ROM data patch rejected:")!=std::string::npos) reason=line;
+        if (reason.empty()) reason="Build the current game and root launcher before using Studio projects.";
+        const auto message=L"Studio preview could not start.\n\n"+utf8_to_wide(reason)+L"\n\nSession log: "+log_path;
+        MessageBoxW(nullptr,message.c_str(),L"Golden Sun Studio",MB_OK|MB_ICONERROR|MB_SETFOREGROUND);
+        return static_cast<int>(exit_code);
     }
     return 0;
 }
@@ -1910,6 +1948,10 @@ constexpr int kBattleBg1RecordButton = 1045;
 constexpr int kModFieldTestButton = 1050;
 constexpr int kAutoCaptureButton = 1051;
 constexpr int kAutoStartButton = 1052;
+constexpr int kScreenFiltersButton = 1053;
+constexpr int kUnpackerCatchButton = 1054;
+constexpr int kStudioProjectButton = 1055;
+constexpr int kStudioProjectPath = 1056;
 
 fs::path g_launcher_root;
 
@@ -1984,6 +2026,35 @@ void begin_auto_start(HWND window) {
     launcher_log(L"Start automatically: waiting for the update check.");
     SetTimer(window, kAutoStartTimer, kAutoStartPollMs, nullptr);
 }
+
+// Relabels the buttons of the question below while it opens.
+HHOOK g_ask_hook = nullptr;
+LRESULT CALLBACK ask_hook_proc(int code, WPARAM wparam, LPARAM lparam) {
+    if (code == HCBT_ACTIVATE) {
+        HWND dialog = reinterpret_cast<HWND>(wparam);
+        SetDlgItemTextW(dialog, IDYES, L"Start now");
+        SetDlgItemTextW(dialog, IDNO, L"What's new");
+        UnhookWindowsHookEx(g_ask_hook);
+        g_ask_hook = nullptr;
+        return 0;
+    }
+    return CallNextHookEx(g_ask_hook, code, wparam, lparam);
+}
+
+// After a build: IDYES = start the game now, IDNO = stay in the launcher.
+int ask_start_or_notes(HWND window) {
+    g_ask_hook = SetWindowsHookExW(WH_CBT, ask_hook_proc, nullptr, GetCurrentThreadId());
+    const int answer = MessageBoxW(
+        window,
+        L"The game is ready.\n\nStart it now, or read what's new in this version first? "
+        L"The Play button starts it whenever you are ready.",
+        L"Golden Sun Recompiled", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
+    if (g_ask_hook) {
+        UnhookWindowsHookEx(g_ask_hook);
+        g_ask_hook = nullptr;
+    }
+    return answer;
+}
 std::unique_ptr<Gdiplus::Image> g_splash_image;
 HFONT g_button_font = nullptr;
 HFONT g_body_font = nullptr;
@@ -1991,6 +2062,15 @@ HFONT g_body_font = nullptr;
 // runs. Kept as client-relative window coordinates so paint_splash can draw
 // it without recomputing the layout itself.
 RECT g_panel_rect{};
+// Release launcher "What's new" box: painted by draw_release_notes, not a
+// control, so the logo shows through it. UI thread only.
+RECT g_notes_rect{};
+std::wstring g_notes_text;
+float g_notes_scroll = 0.0f;
+float g_notes_max_scroll = 0.0f;
+float g_notes_line_height = 18.0f;
+float g_notes_text_height = 0.0f;
+int g_notes_measured_width = -1;
 
 // Every control below is positioned by a single running cursor rather than
 // by hand-tuned offsets between controls, so adding, removing, or hiding a
@@ -2023,6 +2103,11 @@ void layout_buttons(HWND window) {
                        std::max<int>(0, button_y - 44), box_width, 30, TRUE);
             update_auto_start_box(window);
         }
+        // The release notes sit over the logo: the window's side margin
+        // wide, from y 28 down to the bottom band (160 px).
+        g_notes_rect = {40, 28, 40 + std::max<int>(0, client.right - 80),
+                        28 + std::max<int>(0, client.bottom - 160 - 8 - 28)};
+        g_notes_measured_width = -1;
         g_panel_rect = {};
         InvalidateRect(window, nullptr, FALSE);
         return;
@@ -2108,13 +2193,13 @@ void layout_buttons(HWND window) {
     const int child_ids[] = {
         // left: capture something to a file
         kMapRecordButton,      kObjRecordButton,      kTextRecordButton,
-        kSwiLogButton,
+        kSwiLogButton,         kUnpackerCatchButton,
         // left, continued: traces
         kFunctionTracerButton, kVramMapTraceButton,   kEffectTraceButton,
         kBattleBg1RecordButton,
         // right: rendering
         kRoomBufferButton,     kFrameRewindButton,     kAutoCaptureButton,
-        kModFieldTestButton,
+        kModFieldTestButton,    kStudioProjectButton, kStudioProjectPath, kScreenFiltersButton,
         // right, continued: performance
         kHeadroomProbeButton,  kCostProbeButton,      kHostProfButton,
         kPresentCadenceButton, kRamChurnProbeButton,
@@ -2213,6 +2298,7 @@ void layout_buttons(HWND window) {
             content_x + kIndent + column * (child_width + kColumnGap);
         MoveWindow(child, child_x, child_y, child_width, kRowHeight, TRUE);
         ShowWindow(child, g_test_variables ? SW_SHOW : SW_HIDE);
+        if (child_ids[i]==kStudioProjectButton || child_ids[i]==kStudioProjectPath) EnableWindow(child,g_test_variables && g_test_mod_field_test);
     }
 
     // The panel's extent just changed; repaint the backdrop under it.
@@ -2381,6 +2467,73 @@ void paint_progress_bar(Gdiplus::Graphics& g, int width, int height, int done,
     }
 }
 
+// Paints the "What's new" box: a translucent dark rectangle over the logo with
+// word-wrapped, scrollable text. Drawn on the caller's Graphics so it works
+// for the double-buffered window paint and for child-control backdrops alike.
+void draw_release_notes(Gdiplus::Graphics& graphics, HDC dc) {
+    if (g_notes_text.empty() || g_notes_rect.right <= g_notes_rect.left ||
+        g_notes_rect.bottom <= g_notes_rect.top)
+        return;
+    const int left = g_notes_rect.left, top = g_notes_rect.top;
+    const int box_w = g_notes_rect.right - g_notes_rect.left;
+    const int box_h = g_notes_rect.bottom - g_notes_rect.top;
+    Gdiplus::SolidBrush fill(Gdiplus::Color(165, 10, 8, 18));
+    graphics.FillRectangle(&fill, left, top, box_w, box_h);
+    Gdiplus::Pen border(Gdiplus::Color(90, 255, 220, 150), 1.0f);
+    graphics.DrawRectangle(&border, left, top, box_w - 1, box_h - 1);
+
+    constexpr int kPad = 10;
+    const Gdiplus::REAL inner_w = static_cast<Gdiplus::REAL>(box_w - kPad * 2);
+    const Gdiplus::REAL inner_h = static_cast<Gdiplus::REAL>(box_h - kPad * 2);
+    if (inner_w <= 8.0f || inner_h <= 8.0f) return;
+
+    HGDIOBJ previous = g_body_font ? SelectObject(dc, g_body_font) : nullptr;
+    Gdiplus::Font font(dc);
+    if (previous) SelectObject(dc, previous);
+    if (font.GetLastStatus() != Gdiplus::Ok) return;
+
+    graphics.SetTextRenderingHint(Gdiplus::TextRenderingHintClearTypeGridFit);
+    Gdiplus::StringFormat format;
+    g_notes_line_height = std::max(1.0f, font.GetHeight(&graphics));
+    if (g_notes_measured_width != static_cast<int>(inner_w)) {
+        Gdiplus::RectF bounds;
+        graphics.MeasureString(g_notes_text.c_str(), -1, &font,
+                               Gdiplus::RectF(0, 0, inner_w, 100000.0f),
+                               &format, &bounds);
+        g_notes_text_height = bounds.Height;
+        g_notes_measured_width = static_cast<int>(inner_w);
+    }
+    g_notes_max_scroll = std::max(0.0f, g_notes_text_height - inner_h);
+    g_notes_scroll = std::min(std::max(g_notes_scroll, 0.0f), g_notes_max_scroll);
+
+    const Gdiplus::RectF inner(static_cast<Gdiplus::REAL>(left + kPad),
+                               static_cast<Gdiplus::REAL>(top + kPad), inner_w,
+                               inner_h);
+    const Gdiplus::GraphicsState saved = graphics.Save();
+    graphics.SetClip(inner, Gdiplus::CombineModeIntersect);
+    Gdiplus::SolidBrush ink(Gdiplus::Color(255, 240, 232, 210));
+    graphics.DrawString(g_notes_text.c_str(), -1, &font,
+                        Gdiplus::RectF(inner.X, inner.Y - g_notes_scroll,
+                                       inner_w, g_notes_text_height + 40.0f),
+                        &format, &ink);
+    graphics.Restore(saved);
+
+    if (g_notes_max_scroll > 0.0f) {
+        const Gdiplus::REAL track = inner_h;
+        Gdiplus::REAL thumb = std::max(24.0f, track * inner_h / g_notes_text_height);
+        thumb = std::min(thumb, track);
+        const Gdiplus::REAL y = inner.Y + (track - thumb) *
+                                (g_notes_scroll / g_notes_max_scroll);
+        const Gdiplus::REAL x = static_cast<Gdiplus::REAL>(left + box_w - 4 - 5);
+        Gdiplus::GraphicsPath path;
+        path.AddArc(x, y, 4.0f, 4.0f, 180.0f, 180.0f);
+        path.AddArc(x, y + thumb - 4.0f, 4.0f, 4.0f, 0.0f, 180.0f);
+        path.CloseFigure();
+        Gdiplus::SolidBrush thumb_brush(Gdiplus::Color(120, 255, 240, 210));
+        graphics.FillPath(&thumb_brush, &path);
+    }
+}
+
 // origin_x/origin_y let this same routine paint into a child control's DC:
 // (0, 0) in that DC is (origin_x, origin_y) in the launcher window's own
 // client coordinates, so passing the child's client-relative position here
@@ -2425,6 +2578,8 @@ void paint_splash(HWND window, HDC dc, int origin_x = 0, int origin_y = 0) {
                                g_panel_rect.top, panel_width - 1,
                                panel_height - 1);
     }
+
+    if (kReleaseLauncher) draw_release_notes(graphics, dc);
 
     // The player launcher's band is taller: it holds the build note, the
     // step line and the bar above the buttons.
@@ -2512,6 +2667,8 @@ bool* checkbox_state_for_id(int id) {
     case kEffectTraceButton: return &g_test_effect_trace;
     case kFrameRewindButton: return &g_test_frame_rewind;
     case kAutoCaptureButton: return &g_test_auto_capture;
+    case kUnpackerCatchButton: return &g_test_unpacker_catch;
+    case kScreenFiltersButton: return &g_test_screen_filters;
     case kBattleBg1RecordButton: return &g_test_battle_bg1_record;
     case kModFieldTestButton: return &g_test_mod_field_test;
     case kRoomBufferButton: return &g_test_room_buffer;
@@ -2688,62 +2845,6 @@ void draw_action_button(const DRAWITEMSTRUCT& item) {
     DeleteDC(dc);
 }
 
-// What the game code in a release is built from, one "path sha1" line per
-// file: the engine, the builder, the translator and everything in
-// builder\data and builder\engine. Written beside GoldenSunGame.dll after a
-// build (GoldenSunGame.release.txt); any difference, such as a new release
-// unzipped over an old one, means building again. The engine check below
-// already caught a new engine; this also catches a release that changes only
-// the builder, the translator or its data. The toolchain is left out: it is
-// large, and it only changes together with the builder.
-std::string release_fingerprint(const fs::path& root) {
-    std::vector<fs::path> files = {root / L"GoldenSunRecomp.exe",
-                                   root / L"builder" / L"gsr_builder.exe",
-                                   root / L"builder" / L"gba_recompile.exe"};
-    std::error_code ec;
-    for (const wchar_t* dir : {L"data", L"engine"}) {
-        std::vector<fs::path> found;
-        for (const auto& entry :
-             fs::recursive_directory_iterator(root / L"builder" / dir, ec)) {
-            if (entry.is_regular_file(ec)) found.push_back(entry.path());
-        }
-        std::sort(found.begin(), found.end());
-        files.insert(files.end(), found.begin(), found.end());
-    }
-    std::string text;
-    for (const fs::path& file : files) {
-        std::string digest;
-        if (!sha1_file(file, &digest)) digest = "missing";
-        text += fs::relative(file, root, ec).generic_string() + " " + digest + "\n";
-    }
-    return text;
-}
-
-// Whether GoldenSunGame.dll beside the game was built from the supported
-// ROM by this release's builder against this release's engine.
-bool game_code_ready(const fs::path& root) {
-    std::error_code ec;
-    if (!fs::is_regular_file(root / L"GoldenSunGame.dll", ec)) return false;
-    {
-        std::ifstream recorded(root / L"GoldenSunGame.release.txt",
-                               std::ios::binary);
-        std::ostringstream text;
-        text << recorded.rdbuf();
-        if (!recorded || text.str() != release_fingerprint(root)) return false;
-    }
-    std::ifstream in(root / L"GoldenSunGame.build.txt");
-    std::string line, rom, builder, engine;
-    while (std::getline(in, line)) {
-        if (line.rfind("rom_sha1=", 0) == 0) rom = line.substr(9);
-        else if (line.rfind("builder=", 0) == 0) builder = line.substr(8);
-        else if (line.rfind("engine_sha1=", 0) == 0) engine = line.substr(12);
-    }
-    std::string engine_now;
-    if (!sha1_file(root / L"GoldenSunRecomp.exe", &engine_now)) return false;
-    return rom == kExpectedRomSha1 && builder == kBuilderVersion &&
-           engine == engine_now;
-}
-
 // Run builder\gsr_builder.exe for `rom` in the background; progress arrives
 // as kBuildUpdateMessage, the end as kBuildFinishedMessage.
 void start_game_build(HWND window, const std::wstring& rom) {
@@ -2872,6 +2973,7 @@ void start_game_build(HWND window, const std::wstring& rom) {
 // itself downloads and installs nothing.
 std::mutex g_update_mutex;
 gsr_online::Release g_update;
+std::wstring g_release_notes;  // title line + plain text; under g_update_mutex
 
 void check_for_update(HWND window) {
     if (!kReleaseLauncher || !gsr_online::update_checks_enabled()) {
@@ -2901,6 +3003,23 @@ void check_for_update(HWND window) {
         if (!gsr_online::parse_newest_release(reply, false, &release, &parse_error)) {
             launcher_log(L"Update check: " + utf8_to_wide(parse_error));
             return;
+        }
+        {
+            const std::string notes = gsr_online::notes_to_plain_text(release.notes);
+            if (!notes.empty()) {
+                std::wstring text = L"What's new in " + utf8_to_wide(release.tag) +
+                                    L"\n\n" + utf8_to_wide(notes);
+                std::wstring crlf;
+                for (wchar_t c : text) {
+                    if (c == L'\n') crlf += L'\r';
+                    crlf += c;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(g_update_mutex);
+                    g_release_notes = crlf;
+                }
+                PostMessageW(window, kReleaseNotesMessage, 0, 0);
+            }
         }
         if (!gsr_online::is_newer_release(release)) {
             launcher_log(L"Update check: " + utf8_to_wide(release.tag) + L" is the newest.");
@@ -2936,6 +3055,7 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
         g_test_room_buffer = k_launcher_test_defaults.room_buffer;
         g_test_swi_log = k_launcher_test_defaults.swi_log;
         g_test_mod_field_test = k_launcher_test_defaults.mod_field_test;
+        if (g_studio_explicit) { g_test_variables=true;g_test_mod_field_test=true; }
         // "Play" once a ROM has been picked and is still where it was.
         CreateWindowExW(0, L"BUTTON",
                         remembered_rom(g_launcher_root).empty() ? L"Pick ROM" : L"Play",
@@ -2956,9 +3076,13 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
                             0, 0, 0, 0, window,
                             reinterpret_cast<HMENU>(kAutoStartButton),
                             GetModuleHandleW(nullptr), nullptr);
+            // The release notes are painted by paint_splash once the update
+            // check has them (see draw_release_notes).
             layout_buttons(window);
             return 0;
         }
+        CreateWindowExW(0,L"BUTTON",L"Choose .mod project",WS_CHILD|WS_TABSTOP|BS_PUSHBUTTON,0,0,0,0,window,reinterpret_cast<HMENU>(kStudioProjectButton),GetModuleHandleW(nullptr),nullptr);
+        CreateWindowExW(WS_EX_CLIENTEDGE,L"EDIT",g_studio_project.empty()?L"No project (legacy Earth Surge test)":g_studio_project.c_str(),WS_CHILD|WS_TABSTOP|ES_READONLY|ES_AUTOHSCROLL,0,0,0,0,window,reinterpret_cast<HMENU>(kStudioProjectPath),GetModuleHandleW(nullptr),nullptr);
         // Every checkbox below is BS_OWNERDRAW (drawn by draw_checkbox_item,
         // state read from checkbox_state_for_id) rather than BS_AUTOCHECKBOX
         // so it can sit on the panel's real background instead of painting
@@ -3010,7 +3134,7 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
             // the host spell effects on.
             // Also logs [move-probe] lines for battle moves (src/move_probe.cpp):
             // the frame each blow lands and where its sparks are on screen.
-            {kModFieldTestButton, L"Mod test: Earth Surge"},
+            {kModFieldTestButton, L"Enable Mod test"},
             {kRoomBufferButton, L"Room buffer self-check"},
             // F12 saves the frames shown just before it, not only the
             // current one: a one-frame flicker is gone before F12 lands.
@@ -3018,7 +3142,12 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
             // Saves those 2 s by itself when a glitch check fires; the
             // reason goes to auto_capture.txt in the capture folder.
             {kAutoCaptureButton, L"Auto-capture glitches"},
+            // Adds a Filter (test) choice with LCD3x and xBR to F1 > Video.
+            {kScreenFiltersButton, L"Screen filters (F1 > Video)"},
             {kSwiLogButton, L"Record BIOS SWI calls"},
+            // Saves unpacker_catch.txt/.bin the moment the data unpacker
+            // is entered wrongly (the Sol Sanctum crash, 2026-10-07).
+            {kUnpackerCatchButton, L"Catch unpacker faults"},
             // Restored 2026-09-13: the battle/effect slowdown cannot be
             // attributed without it, and handing over a raw environment
             // variable is not how this project ships a debug option.
@@ -3213,6 +3342,7 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
             case kEnhancedOptionsButton:
                 save_launcher_audio_settings(g_launcher_root, g_audio_settings);
                 break;
+            case kModFieldTestButton:
             case kTestVariablesButton:
                 layout_buttons(window);
                 break;
@@ -3221,6 +3351,18 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
             }
             HWND clicked = GetDlgItem(window, LOWORD(w_param));
             if (clicked) InvalidateRect(clicked, nullptr, FALSE);
+            return 0;
+        }
+        if (LOWORD(w_param)==kStudioProjectButton && g_test_variables && g_test_mod_field_test) {
+            const auto selected=pick_file(L"Choose Golden Sun Studio project",L"Golden Sun project (*.mod)\0*.mod\0\0",{},window);
+            if (!selected.empty()) {
+                try {
+                    g_studio_project=fs::canonical(fs::path(selected));g_studio_session.clear();
+                    SetWindowTextW(GetDlgItem(window,kStudioProjectPath),g_studio_project.c_str());
+                } catch (const std::exception& e) {
+                    MessageBoxW(window,utf8_to_wide(e.what()).c_str(),L"Golden Sun Studio",MB_OK|MB_ICONERROR);
+                }
+            }
             return 0;
         }
         if (LOWORD(w_param) == kPickRomButton) {
@@ -3241,7 +3383,9 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
                 return 0;
             }
             launcher_log(L"Starting the game.");
-            if (run_game(g_launcher_root, rom, window) == 0) {
+            const int result=run_game(g_launcher_root, rom, window);
+            if (g_studio_explicit) g_studio_exit=result;
+            if (result == 0) {
                 DestroyWindow(window);  // no-op if run_game already destroyed it
             }
             return 0;
@@ -3253,6 +3397,38 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
         GetClientRect(window, &client);
         RECT status{0, client.bottom - 164, client.right, client.bottom};
         InvalidateRect(window, &status, FALSE);
+        return 0;
+    }
+    case kReleaseNotesMessage: {
+        std::wstring notes;
+        {
+            std::lock_guard<std::mutex> lock(g_update_mutex);
+            notes = g_release_notes;
+        }
+        g_notes_text = notes;
+        g_notes_scroll = 0;
+        g_notes_measured_width = -1;
+        if (g_notes_rect.right > g_notes_rect.left)
+            InvalidateRect(window, &g_notes_rect, FALSE);
+        return 0;
+    }
+    case WM_MOUSEWHEEL: {
+        if (!kReleaseLauncher || g_notes_text.empty() ||
+            g_notes_rect.right <= g_notes_rect.left)
+            break;
+        POINT cursor{GET_X_LPARAM(l_param), GET_Y_LPARAM(l_param)};
+        ScreenToClient(window, &cursor);
+        if (!PtInRect(&g_notes_rect, cursor)) break;
+        const int notches = GET_WHEEL_DELTA_WPARAM(w_param);
+        const float step = g_notes_line_height * 3.0f;
+        float next = g_notes_scroll -
+                     step * static_cast<float>(notches) / WHEEL_DELTA;
+        next = std::min(next, g_notes_max_scroll);
+        next = std::max(next, 0.0f);
+        if (next != g_notes_scroll) {
+            g_notes_scroll = next;
+            InvalidateRect(window, &g_notes_rect, FALSE);
+        }
         return 0;
     }
     case kUpdateFoundMessage: {
@@ -3336,7 +3512,17 @@ LRESULT CALLBACK launcher_window_proc(HWND window, UINT message,
                                       : L"Start automatically: off (asked after the build).");
             InvalidateRect(GetDlgItem(window, kAutoStartButton), nullptr, FALSE);
         }
-        if (run_game(g_launcher_root, g_build_rom, window) == 0)
+        KillTimer(window, kAutoStartTimer);
+        if (ask_start_or_notes(window) != IDYES) {
+            launcher_log(L"Build: finished; the player chose to read what's new first.");
+            update_auto_start_box(window);
+            InvalidateRect(window, nullptr, FALSE);
+            return 0;
+        }
+        launcher_log(L"Build: finished; the player chose to start now.");
+        const int result=run_game(g_launcher_root, g_build_rom, window);
+        if (g_studio_explicit) g_studio_exit=result;
+        if (result == 0)
             DestroyWindow(window);
         return 0;
     }
@@ -3469,8 +3655,8 @@ int show_launcher(const fs::path& root) {
     if (kReleaseLauncher) SetTimer(window, kProgressTimer, 33, nullptr);
     ShowWindow(window, SW_SHOW);
     UpdateWindow(window);
-    check_for_update(window);
-    begin_auto_start(window);
+    if (g_studio_explicit) PostMessageW(window,WM_COMMAND,MAKEWPARAM(kPickRomButton,BN_CLICKED),0);
+    else { check_for_update(window);begin_auto_start(window); }
 
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
@@ -3486,18 +3672,37 @@ int show_launcher(const fs::path& root) {
     g_backdrop.bitmap.reset();
     UnregisterClassW(class_name, GetModuleHandleW(nullptr));
     Gdiplus::GdiplusShutdown(gdiplus_token);
-    return static_cast<int>(message.wParam);
+    return g_studio_explicit ? g_studio_exit : static_cast<int>(message.wParam);
 }
 
 }  // namespace
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
-    // Must be the FIRST thing in WinMain, before any other subsystem.
+    int argc=0;LPWSTR* argv=CommandLineToArgvW(GetCommandLineW(),&argc);
+    if (!argv) return 1;
+    if (argc==2 && std::wstring(argv[1])==L"--studio-capabilities") {
+        constexpr char capability[]="GSR_STUDIO_CAPABILITIES_1\n";
+        DWORD written=0;WriteFile(GetStdHandle(STD_OUTPUT_HANDLE),capability,sizeof(capability)-1,&written,nullptr);
+        LocalFree(argv);return written==sizeof(capability)-1?0:1;
+    }
+    bool bad=false;std::set<std::wstring> supplied;
+    for (int i=1;i<argc;++i) {
+        const std::wstring key=argv[i];
+        if ((key!=L"--studio-project" && key!=L"--studio-session") || i+1>=argc || !supplied.insert(key).second) {bad=true;break;}
+        if (key==L"--studio-project") g_studio_project=fs::path(argv[++i]);else g_studio_session=fs::path(argv[++i]);
+    }
+    LocalFree(argv);
+    if (bad || (!supplied.empty() && (supplied.size()!=2 || g_studio_project.empty() || g_studio_session.empty()))) {MessageBoxW(nullptr,L"Studio launch requires --studio-project and --studio-session absolute paths.",L"Golden Sun Studio",MB_OK|MB_ICONERROR);return 1;}
+    if (!g_studio_project.empty()) {
+        try {prepare_studio_session(module_dir());g_studio_explicit=true;}
+        catch (const std::exception& e) {MessageBoxW(nullptr,utf8_to_wide(e.what()).c_str(),L"Golden Sun Studio",MB_OK|MB_ICONERROR);return 1;}
+    }
+    // The side-effect-free capability query exits before crash logging.
     // nullptr = default to the directory this executable lives in.
     gbarecomp::crash_handler_install(nullptr);
 
     const fs::path root = module_dir();
-    const bool developer_auto_launch = !kReleaseLauncher &&
+    const bool developer_auto_launch = !g_studio_explicit && !kReleaseLauncher &&
         inherited_environment_truthy(L"GBARECOMP_AUTO_LAUNCH");
     if (developer_auto_launch) {
         // This path is deliberately opt-in and uses the same cached ROM plus
@@ -3505,7 +3710,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
         // scripted replay can still enter through GoldenSunLauncher.exe.
         const fs::path cached_path = root / L"local" / L"launcher-rom.txt";
         const std::wstring cached_rom = read_cached_path(cached_path);
-        std::wstring error;
+        std::string error;
         if (!cached_rom.empty() && validate_rom(cached_rom, &error)) {
             g_audio_settings = load_launcher_audio_settings(root);
             g_strict_static_route = inherited_environment_truthy(

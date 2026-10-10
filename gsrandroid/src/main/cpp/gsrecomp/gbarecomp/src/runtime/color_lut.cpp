@@ -165,13 +165,28 @@ const Primaries& target_primaries(DisplayTarget t) {
 
 }  // namespace
 
+// Config/env tokens, in ScreenKind order.
+static constexpr const char* kScreenKindNames[] = {
+    "raw",     "unlit",    "frontlit",       "backlit",
+    "classic", "handheld", "handheld_light", "soft",
+    "natural", "warm",     "deep",           "custom"};
+static_assert(sizeof(kScreenKindNames) / sizeof(kScreenKindNames[0]) ==
+                  static_cast<size_t>(kScreenKindCount),
+              "kScreenKindNames must list every ScreenKind");
+
 bool screen_kind_from_name(std::string_view name, ScreenKind& out) {
-    if (name == "raw")      { out = ScreenKind::Raw;      return true; }
-    if (name == "unlit")    { out = ScreenKind::Unlit;    return true; }
-    if (name == "frontlit") { out = ScreenKind::Frontlit; return true; }
-    if (name == "backlit")  { out = ScreenKind::Backlit;  return true; }
-    if (name == "classic")  { out = ScreenKind::Classic;  return true; }
+    for (int i = 0; i < kScreenKindCount; ++i) {
+        if (name == kScreenKindNames[i]) {
+            out = static_cast<ScreenKind>(i);
+            return true;
+        }
+    }
     return false;
+}
+
+const char* screen_kind_name(ScreenKind kind) {
+    const int i = static_cast<int>(kind);
+    return (i >= 0 && i < kScreenKindCount) ? kScreenKindNames[i] : nullptr;
 }
 
 ColorLut::ColorLut(const ColorSettings& settings) {
@@ -185,6 +200,100 @@ ColorLut::ColorLut(const ColorSettings& settings) {
             table[px] = {static_cast<uint8_t>(r << 3 | r >> 2),
                          static_cast<uint8_t>(g << 3 | g >> 2),
                          static_cast<uint8_t>(b << 3 | b >> 2)};
+        }
+        return;
+    }
+    if (settings.screen >= ScreenKind::Handheld) {
+        // One colour mix in the game's own (gamma-encoded) values, then an
+        // optional darkening curve. No offset term, so black stays black and
+        // the widescreen margins stay black.
+        //
+        // Handheld was fitted by least squares to a photo of Golden Sun on
+        // an Analogue Pocket beside a GBA SP (Jimmy, 2026-10-06): the window
+        // blue goes steel blue, yellow wood golden-brown, neon green olive.
+        constexpr double kHandheld[3][3] = {{0.489, 0.390, 0.143},
+                                            {-0.021, 0.674, 0.296},
+                                            {-0.052, 0.103, 0.808}};
+        // Soft, Natural, Warm and Deep sit between that and the game's own
+        // colours (chosen by eye on the ship cabin and a cave, 2026-10-06).
+        constexpr double kLuma[3] = {0.299, 0.587, 0.114};
+        // Pulls green toward yellow and cools nothing: the warm one's tint.
+        constexpr double kWarmTint[3][3] = {{0.86, 0.18, -0.04},
+                                            {0.03, 0.90, 0.07},
+                                            {0.00, 0.08, 0.86}};
+        double mix[3][3];
+        double saturation = 1.0, curve = 1.0, handheld = 0.0;
+        double warmth = 0.0, brightness = 1.0;
+        switch (settings.screen) {
+            case ScreenKind::Handheld:      handheld = 1.0; break;
+            case ScreenKind::HandheldLight: handheld = 0.6; break;
+            case ScreenKind::Soft:          handheld = 0.35; break;
+            case ScreenKind::Natural:  saturation = 0.72; curve = 1.1; break;
+            case ScreenKind::Warm:     saturation = 0.8; curve = 1.05;
+                                       warmth = 1.0; break;
+            case ScreenKind::Deep:     saturation = 0.88; curve = 1.25; break;
+            case ScreenKind::Custom:
+                saturation = settings.saturation;
+                brightness = settings.brightness;
+                warmth = settings.warmth;
+                curve = settings.curve;
+                break;
+            default: break;
+        }
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) {
+                // Saturation around luma, then the handheld blend.
+                const double s = saturation * (i == j ? 1.0 : 0.0) +
+                                 (1.0 - saturation) * kLuma[j];
+                mix[i][j] = handheld * kHandheld[i][j] + (1.0 - handheld) * s;
+            }
+        if (settings.screen == ScreenKind::Custom &&
+            settings.hue_degrees != 0.0) {
+            // Hue rotation that keeps brightness (the SVG/CSS hue-rotate
+            // matrix); like the rest, no offset, so black stays black.
+            const double a = settings.hue_degrees * 3.14159265358979 / 180.0;
+            const double cs = std::cos(a), sn = std::sin(a);
+            const double rot[3][3] = {
+                {0.213 + cs * 0.787 - sn * 0.213, 0.715 - cs * 0.715 - sn * 0.715,
+                 0.072 - cs * 0.072 + sn * 0.928},
+                {0.213 - cs * 0.213 + sn * 0.143, 0.715 + cs * 0.285 + sn * 0.140,
+                 0.072 - cs * 0.072 - sn * 0.283},
+                {0.213 - cs * 0.213 - sn * 0.787, 0.715 - cs * 0.715 + sn * 0.715,
+                 0.072 + cs * 0.928 + sn * 0.072}};
+            double t[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    t[i][j] = rot[i][0] * mix[0][j] + rot[i][1] * mix[1][j] +
+                              rot[i][2] * mix[2][j];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) mix[i][j] = t[i][j];
+        }
+        if (warmth > 0.0) {
+            // Blend identity -> warm tint by `warmth` (1 gives kWarmTint).
+            double tint[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    tint[i][j] = (1.0 - warmth) * (i == j ? 1.0 : 0.0) +
+                                 warmth * kWarmTint[i][j];
+            double t[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    t[i][j] = tint[i][0] * mix[0][j] +
+                              tint[i][1] * mix[1][j] +
+                              tint[i][2] * mix[2][j];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) mix[i][j] = t[i][j];
+        }
+        for (int px = 0; px < 32768; ++px) {
+            const double c[3] = {(px & 31) / 31.0, ((px >> 5) & 31) / 31.0,
+                                 ((px >> 10) & 31) / 31.0};
+            for (int i = 0; i < 3; ++i) {
+                double v = mix[i][0] * c[0] + mix[i][1] * c[1] +
+                           mix[i][2] * c[2];
+                if (brightness != 1.0) v *= brightness;  // gain, no offset
+                v = v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+                table[px][i] = quantize(curve == 1.0 ? v : std::pow(v, curve));
+            }
         }
         return;
     }

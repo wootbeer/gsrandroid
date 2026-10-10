@@ -20,7 +20,7 @@ enum {
 
 /* Bump when the builder, its data, or what the game code expects from the engine changes: every
  * install then rebuilds once. */
-#define GSR_BUILD_VERSION "gsr-android-2"
+#define GSR_BUILD_VERSION "gsr-android-3"
 
 /* Start preparing in a background thread. data_dir is Descore's game data folder
  * (<files>/gsr/game); rom_sha1 is the verified SHA-1 of the ROM stored there. */
