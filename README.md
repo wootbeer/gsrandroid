@@ -35,6 +35,8 @@ Features
 -------
 - Renderer choice: Auto, CPU or GPU. Auto uses the GPU only in Expanded view and drops back to the CPU renderer if the device can't keep up.  
 - Side menu for settings: view mode, scaling, filter, fast forward, frame interpolation, etc.  
+- Screen filters  
+- Save states  
 - Cheats menu.  
 - Auto show/hide on-screen touch controls with adjustable size and opacity, plus controller support with button remapping.  
 

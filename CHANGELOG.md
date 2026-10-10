@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2. (10-9-2026)]
+
+### Added
+- Save states  
+- Android version of Screen filters 
+- Touch pad option: Joystick or D-pad  
+- Change ROM option. Your save is kept  
+- New screen colors from GSRecomp: Handheld, Handheld (lighter), Soft, Natural, Warm and Deep  
+
+### Changed
+- Bumped to the latest GSRecomp version (0.4.3)  
+- ROM loader tidy up  
+
+### Fixed
+- First-time build could stop at 59% on slower devices  
+- Stereo sound fixed  
+
 ## [0.1. (10-6-2026)]
 
 First public release.  
