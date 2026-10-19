@@ -2,6 +2,10 @@
 
 ## [0.3. (10-10-2026)]
 
+### Changed
+- Bumped to the latest GSRecomp version (0.5.2)  
+- The game code is rebuilt once on first start after updating  
+
 ### Fixed
 - First-time build could freeze at 59% and never finish  
 - The build log (Android/data/wootbeer.gsrandroid/files/gsr_build_log.txt) was never written  
