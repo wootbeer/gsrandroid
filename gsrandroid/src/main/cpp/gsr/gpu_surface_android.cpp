@@ -184,6 +184,7 @@ struct GpuSurface::Readback {
     };
     Slot slots[2];
     int last = -1;  // slot of the most recent begin, -1 when none is queued
+    int next = 0;   // slot the next begin uses (the two are used in turn)
 };
 
 GpuSurface::~GpuSurface() { release(); }
@@ -671,8 +672,12 @@ void GpuSurface::present_target(int x, int y, int width, int height, int viewpor
     draw_quads(blit_program_, &quad, 1, textures, 1);
 }
 
-void GpuSurface::read_texture_rgb(GpuTexture texture, int width, int height, std::uint8_t* out_rgb) {
-    if (!ready_ || !texture || width <= 0 || height <= 0 || !out_rgb) return;
+bool GpuSurface::read_texture_rgb(GpuTexture texture, int width, int height, std::uint8_t* out_rgb) {
+    if (!ready_ || !texture || width <= 0 || height <= 0 || !out_rgb ||
+        g_ctx == EGL_NO_CONTEXT || eglGetCurrentContext() != g_ctx) return false;
+    if (!glIsTexture(texture)) return false;
+    // Only an error raised by this read refuses the frame; an older one left by a draw is cleared first.
+    for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
 
     std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * height * 4u);
     GLint prev_fbo = 0, prev_alignment = 4, prev_row_length = 0, prev_skip_rows = 0, prev_skip_pixels = 0;
@@ -702,7 +707,7 @@ void GpuSurface::read_texture_rgb(GpuTexture texture, int width, int height, std
     glPixelStorei(GL_PACK_SKIP_ROWS, prev_skip_rows);
     glPixelStorei(GL_PACK_SKIP_PIXELS, prev_skip_pixels);
     if (prev_pack_buffer) glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prev_pack_buffer));
-    if (!complete) return;
+    if (!complete || glGetError() != GL_NO_ERROR) return false;
 
     for (int y = 0; y < height; ++y) {
         const std::uint8_t* src = rgba.data() + static_cast<std::size_t>(height - 1 - y) * width * 4u;
@@ -713,13 +718,16 @@ void GpuSurface::read_texture_rgb(GpuTexture texture, int width, int height, std
             dst[x * 3 + 2] = src[x * 4 + 2];
         }
     }
+    return true;
 }
 
 // ---- asynchronous readback (one frame behind) -------------------------------------------------------
 
 bool GpuSurface::begin_texture_readback(GpuTexture texture, int width, int height) {
-    if (!ready_ || !readback_ || !texture || width <= 0 || height <= 0) return false;
-    const int index = readback_->last == 0 ? 1 : 0;
+    if (!ready_ || !readback_ || !texture || width <= 0 || height <= 0 ||
+        g_ctx == EGL_NO_CONTEXT || eglGetCurrentContext() != g_ctx || !glIsTexture(texture)) return false;
+    const int index = readback_->next;
+    readback_->next = 1 - index;
     Readback::Slot& slot = readback_->slots[index];
     if (slot.fence) { glDeleteSync(slot.fence); slot.fence = nullptr; }
     const std::size_t bytes = static_cast<std::size_t>(width) * height * 4u;
@@ -774,10 +782,15 @@ bool GpuSurface::begin_texture_readback(GpuTexture texture, int width, int heigh
 }
 
 bool GpuSurface::finish_texture_readback(int width, int height, std::uint8_t* out_rgb) {
-    if (!ready_ || !readback_ || readback_->last < 0 || !out_rgb) return false;
+    if (!ready_ || !readback_ || readback_->last < 0 || !out_rgb ||
+        g_ctx == EGL_NO_CONTEXT || eglGetCurrentContext() != g_ctx) return false;
     Readback::Slot& slot = readback_->slots[readback_->last];
     readback_->last = -1;
-    if (!slot.fence || slot.width != width || slot.height != height) return false;
+    if (!slot.fence || slot.width != width || slot.height != height) {
+        if (slot.fence) glDeleteSync(slot.fence);
+        slot.fence = nullptr;
+        return false;
+    }
     // Queued a frame ago, so normally already done. A GPU still busy after 50 ms gets the caller's
     // synchronous read instead.
     const GLenum waited = glClientWaitSync(slot.fence, GL_SYNC_FLUSH_COMMANDS_BIT, 50000000ull);
@@ -806,6 +819,17 @@ bool GpuSurface::finish_texture_readback(int width, int height, std::uint8_t* ou
     }
     glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(prev_pack_buffer));
     return ok;
+}
+
+// Drop any queued copy at a presentation boundary; the pack buffers are kept until release().
+void GpuSurface::cancel_texture_readback() {
+    if (!readback_) return;
+    readback_->last = -1;
+    if (g_ctx == EGL_NO_CONTEXT || eglGetCurrentContext() != g_ctx) return;
+    for (Readback::Slot& slot : readback_->slots) {
+        if (slot.fence) glDeleteSync(slot.fence);
+        slot.fence = nullptr;
+    }
 }
 
 }  // namespace gbarecomp

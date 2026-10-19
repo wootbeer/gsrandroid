@@ -956,6 +956,10 @@ note = "OvlFunc_598 town box: left x bound -160 << 16"
 addr = 0x020085d6
 note = "OvlFunc_598 town box: right x bound movs #160"
 
+[[thumb_literal_override]]
+addr = 0x020085e4
+note = "OvlFunc_598 town box: upper z bound -300 << 16"
+
 [[thumb_alu_immediate_override]]
 addr = 0x020085e6
 note = "OvlFunc_598 town box: lower z bound movs #200"

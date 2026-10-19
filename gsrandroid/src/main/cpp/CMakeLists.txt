@@ -8,7 +8,7 @@ project(gsrhost C CXX)
 #   descore/  the shared descore shell (JNI bridge, video present, audio mixer, touch overlay).
 #             Game-agnostic; carried between ports. Built here in its GLES 3 mode.
 #   gsr/      the game side. Milestone 0: a smoke test that checks the picked ROM and draws a
-#             status colour. Later: the GSRecomp engine (src/ and gbarecomp/) and the code
+#             status colour. Later: the GSRecomp engine (gsrecomp/engine and gsrecomp/tbs, "The Broken Seal") and the code
 #             generated from the player's ROM, behind a descore-backed HostWindow.
 #
 # The library name has to match DescoreGameConfig.nativeLibrary (see GsrConfig.java), and the JNI
@@ -34,11 +34,13 @@ target_compile_definitions(tcc PRIVATE ONE_SOURCE=1 TCC_TARGET_ARM64=1 TCC_IS_NA
 target_compile_options(tcc PRIVATE -w)
 
 # ---- GSRecomp's translator and player builder, run inside the app ---------------------------------
-# gsrecomp/ holds unmodified copies of the translator (gba_recompile), its libraries and the player
-# builder (gsr_builder), except for the GSR_ANDROID_INPROCESS hooks in builder_main.cpp. No Golden Sun
+# gsrecomp/ holds copies of the engine (engine/), Golden Sun's game layer (tbs/ = "The Broken Seal")
+# and the player builder (player_builder/), except for the GSR_ANDROID_INPROCESS hooks in builder_main.cpp. No Golden Sun
 # code is in here: the game code is translated from the player's own ROM on the device.
 set(GSRC ${CMAKE_CURRENT_SOURCE_DIR}/gsrecomp)
-set(GSRC_GB ${GSRC}/gbarecomp)
+set(GSRC_GB ${GSRC}/engine)
+set(GSRC_PB ${GSRC}/player_builder)
+set(GSRC_TBS ${GSRC}/tbs)
 add_library(gsrecomp_core STATIC
 		${GSRC_GB}/src/armv4t/arm_decode.cpp
 		${GSRC_GB}/src/armv4t/thumb_decode.cpp
@@ -51,33 +53,21 @@ add_library(gsrecomp_core STATIC
 		${GSRC_GB}/src/gba/gba_memory.cpp
 		${GSRC_GB}/src/gba/gba_bus.cpp
 		${GSRC_GB}/src/gba/gba_io.cpp
-		${GSRC_GB}/src/gba/gba_irq.cpp
-		${GSRC_GB}/src/gba/gba_dma.cpp
-		${GSRC_GB}/src/gba/gba_timers.cpp
 		${GSRC_GB}/src/gba/gba_ppu.cpp
 		${GSRC_GB}/src/gba/gba_vram_trace.cpp
 		${GSRC_GB}/src/gba/gba_audio.cpp
-		${GSRC_GB}/src/gba/gba_m4a.cpp
-		${GSRC_GB}/src/gba/audio_shadow.cpp
-		${GSRC_GB}/src/gba/turbo_audio_scheduler.cpp
-		${GSRC_GB}/src/gba/audio_event_capture.cpp
-		${GSRC_GB}/src/gba/mp2k_wall_mixer.cpp
-		${GSRC_GB}/src/gba/mp2k_wall_update_queue.cpp
-		${GSRC_GB}/src/gba/mp2k_shadow.cpp
-		${GSRC_GB}/src/gba/gba_input.cpp
 		${GSRC_GB}/src/gba/gba_save.cpp
 		${GSRC_GB}/src/gba/gba_rtc.cpp
 		${GSRC_GB}/src/gba/gba_bios.cpp
-		${GSRC_GB}/src/gba/gba_scheduler.cpp
 		${GSRC_GB}/src/gba/gba_rom_header.cpp
 		${GSRC_GB}/src/gba/sha1.cpp
 		${GSRC_GB}/src/gba/crc32.cpp
 		${GSRC_GB}/tools/gba_recompile/main.cpp
 		${GSRC_GB}/tools/gba_recompile/config.cpp
 		${GSRC_GB}/tools/gba_recompile/slim_pass.cpp
-		${GSRC}/tools/gsr_builder/builder_main.cpp
-		${GSRC}/tools/gsr_builder/guest_call.cpp
-		${GSRC}/tools/gsr_builder/block_timing.cpp
+		${GSRC_PB}/builder_main.cpp
+		${GSRC_PB}/guest_call.cpp
+		${GSRC_PB}/block_timing.cpp
 		# ---- the engine core: ARM runtime, bus bridge, host seam, debug server ----
 		${GSRC_GB}/src/armv4t/runtime_arm.cpp
 		${GSRC_GB}/src/debug/cosim.cpp
@@ -92,7 +82,9 @@ add_library(gsrecomp_core STATIC
 		${GSRC_GB}/src/runtime/crash_handler.cpp
 		${GSRC_GB}/src/runtime/frame_interpolation.cpp
 		${GSRC_GB}/src/runtime/frame_timing.cpp
-		${GSRC_GB}/src/runtime/generated_dispatch.cpp
+		${GSRC_GB}/src/runtime/frame_history.cpp
+		${GSRC_GB}/src/runtime/game_options.cpp
+		${GSRC_GB}/src/runtime/memory_snapshot.cpp
 		${GSRC_GB}/src/runtime/heal_gate.cpp
 		${GSRC_GB}/src/runtime/host_config_ui.cpp
 		${GSRC_GB}/src/runtime/host_overlay.cpp
@@ -121,13 +113,13 @@ set_source_files_properties(${GSRC_GB}/src/runtime/host_config_ui.cpp ${GSRC_GB}
 set_property(SOURCE ${GSRC_GB}/src/runtime/runtime.cpp APPEND PROPERTY COMPILE_DEFINITIONS "GSR_ANDROID_RUNTIME")
 set_source_files_properties(${GSRC_GB}/tools/gba_recompile/main.cpp
 		PROPERTIES COMPILE_DEFINITIONS "main=gba_recompile_main")
-set_source_files_properties(${GSRC}/tools/gsr_builder/builder_main.cpp
+set_source_files_properties(${GSRC_PB}/builder_main.cpp
 		PROPERTIES COMPILE_DEFINITIONS "main=gsr_builder_main;GSR_ANDROID_INPROCESS")
 target_include_directories(gsrecomp_core PRIVATE
 		${GSRC_GB}
 		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/recompile ${GSRC_GB}/src/debug
-		${GSRC_GB}/src/runtime ${GSRC}/config/usa
-		${GSRC_GB}/tools/gba_recompile ${GSRC}/tools/gsr_builder
+		${GSRC_GB}/src/runtime ${GSRC_GB}/src/field ${GSRC_TBS}/config/usa
+		${GSRC_GB}/tools/gba_recompile ${GSRC_PB}
 		${CMAKE_CURRENT_SOURCE_DIR}/gsr)
 # CMake 3.10 (pinned in build.gradle) has no cxx_std_20 feature, so ask for C++20 directly
 target_compile_options(gsrecomp_core PRIVATE -std=c++20)
@@ -175,30 +167,27 @@ target_link_libraries(gsrhost PRIVATE
 # (gsr_engine.c); its undefined game symbols resolve against those.
 add_library(gsrengine SHARED
 		gsr/gsr_engine_entry.cpp
-		gsrecomp/src/runner_main.cpp
-		gsrecomp/src/function_tracer.cpp
-		gsrecomp/src/map_recorder.cpp
-		gsrecomp/src/obj_recorder.cpp
-		gsrecomp/src/room_buffer.cpp
-		gsrecomp/src/field_scene.cpp
-		gsrecomp/src/field_scene_renderer.cpp
-		gsrecomp/src/world_map_source.cpp
-		gsrecomp/src/effect_particles.cpp
-		gsrecomp/src/effect_sources.cpp
-		gsrecomp/src/effect_capture.cpp
-		gsrecomp/src/mod_loader.cpp
-		gsrecomp/src/gs_text_encode.cpp
-		gsrecomp/src/move_probe.cpp
-		gsrecomp/src/unpacker_catch.cpp
-		gsrecomp/src/unpacker_guard.cpp
-		gsrecomp/src/earth_surge.cpp
-		gsrecomp/src/effect_burst.cpp)
-set_source_files_properties(gsrecomp/src/runner_main.cpp PROPERTIES COMPILE_DEFINITIONS "main=gsr_engine_main_cpp")
+		${GSRC_TBS}/src/runner_main.cpp
+		${GSRC_TBS}/src/map_recorder.cpp
+		${GSRC_TBS}/src/obj_recorder.cpp
+		${GSRC_TBS}/src/room_buffer.cpp
+		${GSRC_GB}/src/field/field_scene.cpp
+		${GSRC_GB}/src/field/field_scene_renderer.cpp
+		${GSRC_TBS}/src/field_game_profile.cpp
+		${GSRC_TBS}/src/world_map_source.cpp
+		${GSRC_GB}/src/field/effect_particles.cpp
+		${GSRC_TBS}/src/effect_sources.cpp
+		${GSRC_GB}/src/field/effect_capture.cpp
+		${GSRC_TBS}/src/gs_text_encode.cpp
+		${GSRC_TBS}/src/unpacker_catch.cpp
+		${GSRC_TBS}/src/unpacker_guard.cpp
+		${GSRC_GB}/src/field/effect_burst.cpp)
+set_source_files_properties(${GSRC_TBS}/src/runner_main.cpp PROPERTIES COMPILE_DEFINITIONS "main=gsr_engine_main_cpp")
 target_include_directories(gsrengine PRIVATE
 		gsr/shim_inc
-		${GSRC}/src ${GSRC_GB}
+		${GSRC_TBS}/src ${GSRC_GB} ${GSRC_GB}/src/field ${GSRC_PB}
 		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/runtime ${GSRC_GB}/src/debug
-		${GSRC_GB}/src/recompile ${GSRC}/config/usa)
+		${GSRC_GB}/src/recompile ${GSRC_TBS}/config/usa)
 target_compile_options(gsrengine PRIVATE -std=c++20 -w -fPIC -O2)
 target_compile_definitions(gsrengine PRIVATE GBARECOMP_DEFAULT_DEBUG_PORT=19843 GSR_ANDROID_ENGINE)
 # game symbols are undefined here on purpose

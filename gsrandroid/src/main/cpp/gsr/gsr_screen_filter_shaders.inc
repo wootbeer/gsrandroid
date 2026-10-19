@@ -1,5 +1,5 @@
 // gsr_screen_filter_shaders.inc -- copied verbatim (by script, nothing retyped) from GSRecomp 0.4.3,
-// gsrecomp/gbarecomp/src/runtime/screen_filter.cpp: the shared fragment header and the LCD3x, xBR-lv2 and
+// gsrecomp/engine/src/runtime/screen_filter.cpp: the shared fragment header and the LCD3x, xBR-lv2 and
 // CRT Lottes filters, with their authors' licence notices exactly as upstream reproduces them. Included by
 // gsr_screen_filter.cpp, which swaps only the "#version 130" line for GLSL ES 3.00. ScaleFX (five passes) is
 // not included. After an engine update, copy this block again (see tools/UPSTREAM_UPDATES.md).

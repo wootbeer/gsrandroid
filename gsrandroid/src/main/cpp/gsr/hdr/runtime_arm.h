@@ -184,32 +184,6 @@ extern RuntimeUnmatchedReturnHook g_runtime_unmatched_return_hook;
 typedef void (*RuntimeGuestStepBoundaryHook)(void);
 extern RuntimeGuestStepBoundaryHook g_runtime_guest_step_boundary_hook;
 
-// Optional native-audio observer. The runtime bridge installs this callback
-// when a bus is active; runtime_trace_event invokes it only when an MP2K
-// enhancement request is present, so ordinary runs pay no callback cost.
-typedef void (*RuntimeMp2kWriteHook)(uint32_t pc, uint32_t addr,
-                                     uint32_t value, uint32_t width,
-                                     uint32_t operand_sample,
-                                     uint32_t operand_gain,
-                                     uint32_t before_value,
-                                     uint8_t thumb,
-                                     uint8_t pre_write);
-extern RuntimeMp2kWriteHook g_runtime_mp2k_write_hook;
-extern void runtime_mp2k_write_observer(uint32_t pc, uint32_t addr,
-                                              uint32_t value, uint32_t width,
-                                              uint32_t operand_sample,
-                                              uint32_t operand_gain,
-                                              uint32_t before_value,
-                                              uint8_t thumb, uint8_t pre_write);
-
-// Optional native-audio control-flow observer. The runtime reports dispatch
-// events; the game-owned audio layer applies any measured target-PC gate.
-typedef void (*RuntimeMp2kControlHook)(uint32_t pc, uint32_t target,
-                                       uint64_t cycles, uint8_t thumb);
-extern RuntimeMp2kControlHook g_runtime_mp2k_control_hook;
-extern void runtime_mp2k_control_observer(uint32_t pc, uint32_t target,
-                                                uint64_t cycles, uint8_t thumb);
-
 // Optional, diagnostic-only attribution for writes of a pointer into the
 // measured generated image. The callback receives no guest bytes: only the
 // frame, destination, writer PC/mode, and pointer target/mode.
@@ -630,7 +604,7 @@ static inline void bus_write_u8_inline(uint32_t addr, uint8_t val) {
 // Generated game code (GBARECOMP_OUTLINE_BUS, set by CMake on every
 // recompiled_*.cpp) calls one shared out-of-line copy of each fast path
 // instead of inlining it at all ~890k access sites: same behaviour, about a
-// quarter of the game's machine code less (FACTS.md, "Generated code size").
+// quarter of the game's machine code less (The Broken Seal FACTS.md, "Generated code size").
 // Engine code keeps the inline copies.
 #if defined(GBARECOMP_OUTLINE_BUS)
 uint32_t runtime_bus_read_u32(uint32_t addr);
@@ -783,9 +757,8 @@ void runtime_force_interp_step(void);
 // no reliable stop address (a top-level / exception-return miss).
 int runtime_has_static_entry(uint32_t pc, int thumb);
 
-// The interpret-the-missed-subtree core of the on-miss bridge, factored so the
-// P6 sljit differential gate can reuse it as its "interpreter pass" (the kept
-// result a healed shard is validated against). Interprets from (entry_pc,
+// The interpret-the-missed-subtree core of the on-miss bridge, factored so a
+// validation pass can reuse it as its "interpreter pass". Interprets from (entry_pc,
 // entry_thumb) until control returns to the stop address, mutating g_cpu live
 // and ticking each instruction (IRQ self-delivery + SWI routing exactly as in
 // normal play). forced_stop_pc=0 → use the call-return-stack contract (the
@@ -837,7 +810,7 @@ void runtime_trace_dump_recent(uint32_t max_entries);
 // dump otherwise only reveals implicitly through its sequence numbers.
 uint32_t runtime_trace_total(void);
 
-// ── Per-instruction fingerprint ring (MC-HP-002 cycle-aligned diff) ──
+// ── Per-instruction fingerprint ring (cycle-aligned diff) ──
 // When g_runtime_insn_trace != 0 the generated per-instruction prologue calls
 // runtime_insn_fp() to record the pre-execution architectural state of EVERY
 // instruction: {cumulative cycles, pc, cpsr, R0..R15}. The ring is always-on
@@ -916,7 +889,7 @@ void runtime_fn_entry_observers_reset(void);
 // point instead of fragmenting it into dispatch-chained pieces.
 extern uint32_t g_runtime_resume_pc;
 
-// Dedicated always-on IRQ-vector log (MC-HP-002): one entry per IRQ vectoring,
+// Dedicated always-on IRQ-vector log: one entry per IRQ vectoring,
 // dumped as CSV. Armed by env GBARECOMP_IRQ_LOG. g_runtime_irq_from_halt is set
 // by runtime_tick's wake-from-HALT path so each log entry records whether the
 // vector woke the CPU from HALT.
@@ -981,11 +954,11 @@ void runtime_tick(uint32_t cycles);
 void runtime_tick_realtime(uint32_t cycles);
 bool runtime_should_yield(void);
 
-// ── Combined per-instruction helpers (tools/slim_corpus.py) ────────────
+// ── Combined per-instruction helpers (scripts/slim_corpus.py) ────────────
 // Each replaces a fixed sequence the translator writes at every instruction,
 // load or store with ONE call that does exactly the same work in the same
 // order, so the game's machine code carries one call where it carried two
-// to four (FACTS.md, "Generated code size").
+// to four (The Broken Seal FACTS.md, "Generated code size").
 //
 // `if (runtime_should_yield()) return; if (g_runtime_insn_trace)
 //  runtime_insn_fp();`  ->  `if (runtime_insn_boundary()) return;`
@@ -995,7 +968,7 @@ bool runtime_insn_boundary(void);
 // runtime_mem_cycles(pc, w, 1u). This does all three and returns that cost
 // (always >= 1), or 0 where the boundary said return.
 uint32_t runtime_insn_begin(uint32_t pc, uint32_t width);
-// Block timing (game code made by tools/block_timing.py; the normal corpus
+// Block timing (game code made by scripts/block_timing.py; the normal corpus
 // never uses these). Inside a translated block only the first instruction,
 // labels and branches keep runtime_insn_begin / runtime_insn_boundary; the
 // others take their fetch cost with runtime_insn_fetch (R15 and the cost, no
@@ -1035,15 +1008,15 @@ uint32_t runtime_ldm_u32(uint32_t addr, uint32_t seq, uint32_t* dst);
 uint32_t runtime_stm_u32(uint32_t pc, uint32_t addr, uint32_t value,
                          uint32_t seq);
 
-// ── GBARECOMP_CPU_OVERCLOCK (TURBO-B2-UI) ──────────────────────────────
+// ── GBARECOMP_CPU_OVERCLOCK ──────────────────────────────
 // Live control for the runtime_tick scaling factor (see runtime_bus_bridge.cpp
 // "GBARECOMP_CPU_OVERCLOCK" section). Safe to call at any time, including
 // while the guest is executing / mid-frame / from a nested runtime_dispatch:
 // backed by a relaxed atomic, no lock, no getenv. factor < 1 is clamped to 1
 // (off). The env var supplies only the process-start default; a host UI
 // control that calls this overrides it live and is expected to. The host UI
-// exposes this as an Off/On control: Off pins 1x, On pins the 10x ceiling —
-// see kOverclockFactors in host_config_ui.h.
+// exposes this as an Off/On control: Off pins 1x, On pins 50x — see
+// kOverclockFactors in host_config_ui.h.
 void runtime_set_overclock_factor(unsigned factor);
 unsigned runtime_get_overclock_factor(void);
 
@@ -1061,6 +1034,9 @@ void runtime_set_infinite_pp(int on);
 int  runtime_get_infinite_hp(void);
 int  runtime_get_infinite_pp(void);
 void runtime_apply_infinite_hp_pp(void);
+// The party records the cheats fill: max HP, max PP, HP, PP as halfwords at
+// base + slot * stride + 0, 2, 4, 6. Set once at startup, before the run.
+void runtime_set_party_layout(uint32_t base, uint32_t stride, unsigned slots);
 
 // Generic live enable bit for an optional game-owned memory-write transform.
 // The game runner owns the callback and all guest metadata; the canonical
@@ -1084,7 +1060,7 @@ int  runtime_take_no_slowdown_request(void);
 void runtime_publish_no_slowdown(int on);
 int  runtime_get_no_slowdown(void);
 
-// ── "Additional debug logging" toggle (config UI Logging tab) ───────────
+// ── "Additional debug logging" (config.ini [Logging] AdditionalDebugLogging) ──
 // Single live control shared by every verbose/diagnostic stream that is
 // otherwise env-var gated: the hot-path trace ring in this file's own
 // runtime_trace_event (GBARECOMP_TRACE), plus the Group-B diagnostics in
@@ -1099,7 +1075,7 @@ int  runtime_get_no_slowdown(void);
 // boolean cannot supply, stays env-var-only).
 // Backed by a relaxed atomic, same shape as runtime_set_overclock_factor
 // above: cheap enough to read from runtime_trace_event's hot path, safe to
-// flip live from the config UI at any time, no lock. Default OFF.
+// flip live at any time, no lock. Default OFF.
 void gsr_set_additional_debug_logging(int on);
 int gsr_additional_debug_logging(void);
 
@@ -1130,23 +1106,22 @@ extern unsigned long long g_idle_disturb_epoch;
 extern unsigned long long g_runtime_state_epoch;
 // Cumulative guest-cycle clock. Incremented by runtime_tick on EVERY tick
 // (per-instruction exec ticks AND halt-pump chunks), so it is the authoritative
-// total-cycle count — unlike runtime.cpp's `cycles_elapsed`, which only tallied
-// the halt path (the MC-HP-002 "cycles incomparable" red herring). Reset to 0
-// at machine reset (runtime_trace_reset). Stamped onto every ring entry so the
-// recomp and interp oracle can be aligned by identical cycle counts. (MC-HP-002.)
+// total-cycle count — unlike runtime.cpp's `cycles_elapsed`, which only tallies
+// the halt path. Reset to 0 at machine reset (runtime_trace_reset). Stamped
+// onto every ring entry so the recomp and interp oracle can be aligned by
+// identical cycle counts.
 extern unsigned long long g_runtime_cycles;
 
-// P6 sljit differential gate — shadow-tick mode. While g_runtime_shadow_tick is
-// nonzero (only during a healed shard's throwaway validation re-run) runtime_tick
-// accumulates the cost into g_runtime_shadow_cycles and pumps nothing (the
-// interpreter pass already pumped devices / delivered IRQs). Default 0 → normal
-// play and the gcc path are untouched.
+// Shadow-tick mode. While g_runtime_shadow_tick is nonzero (meant for a
+// throwaway validation re-run) runtime_tick accumulates the cost into
+// g_runtime_shadow_cycles and pumps nothing. Nothing sets it at present;
+// the default 0 leaves normal play untouched.
 extern unsigned          g_runtime_shadow_tick;
 extern unsigned long long g_runtime_shadow_cycles;
 
 // Debug PC breakpoint: when nonzero, runtime_should_yield() unwinds the
 // current runtime_dispatch the moment the guest PC equals this value.
-// Set via the TCP set_break_pc command; 0 = disabled. (MC-HP-002.)
+// Set via the TCP set_break_pc command; 0 = disabled.
 extern uint32_t g_runtime_break_pc;
 
 // ── BIOS / SWI ─────────────────────────────────────────────────────
@@ -1223,7 +1198,7 @@ void runtime_restore_cpsr_from_spsr(void);
 // ── Codegen gap (NOT a dispatch miss) ──────────────────────────────
 // Emitted for IrOps codegen hasn't lowered yet. The runtime ALWAYS
 // aborts here — this is a CODEGEN gap, not a dispatch miss, so it is
-// NOT self-healed; it is a P0 codegen-completion task. (Analogous to
+// NOT self-healed; codegen must be completed for it. (Analogous to
 // the interpreter's own NotImplemented gate, which also stays loud —
 // see PRINCIPLES.md "Honest self-healing", "Genuine interpreter gaps
 // still abort loudly". Dispatch misses, by contrast, self-heal.)

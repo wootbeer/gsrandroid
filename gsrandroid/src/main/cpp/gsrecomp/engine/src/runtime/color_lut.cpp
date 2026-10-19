@@ -1,0 +1,417 @@
+// color_lut.cpp — see color_lut.h. Present-time only.
+//
+// Ported from JRickey/gba-recomp (crates/screen/src/{color,profile,lut}.rs),
+// © Jrickey, MIT OR Apache-2.0, used with permission. See
+// THIRD_PARTY_ATTRIBUTION.md.
+
+#include "color_lut.h"
+
+#include <cmath>
+
+namespace gbarecomp::runtime {
+namespace {
+
+// ── CIE colorimetry (all f64; runs only at LUT-build time) ─────────
+struct Xy { double x, y; };
+struct Primaries { Xy red, green, blue, white; };
+struct Mat3 { double m[3][3]; };
+
+constexpr Xy kD65 = {0.3127, 0.3290};
+constexpr Primaries kSrgb = {{0.64, 0.33}, {0.30, 0.60}, {0.15, 0.06}, kD65};
+constexpr Primaries kDisplayP3 = {{0.680, 0.320}, {0.265, 0.690}, {0.150, 0.060}, kD65};
+
+// Measured reflective/frontlit gamut, and the near-sRGB backlit revision.
+constexpr Primaries kPanelReflective = {
+    {0.4925, 0.3100}, {0.3150, 0.4825}, {0.1625, 0.1925}, kD65};
+constexpr Primaries kPanelBacklit = {
+    {0.6191, 0.3454}, {0.3269, 0.6003}, {0.1436, 0.0893}, kD65};
+
+bool xy_eq(Xy a, Xy b) { return a.x == b.x && a.y == b.y; }
+
+void mat_apply(const Mat3& a, const double v[3], double out[3]) {
+    for (int i = 0; i < 3; ++i)
+        out[i] = a.m[i][0] * v[0] + a.m[i][1] * v[1] + a.m[i][2] * v[2];
+}
+
+Mat3 mat_mul(const Mat3& a, const Mat3& b) {
+    Mat3 r{};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k) r.m[i][j] += a.m[i][k] * b.m[k][j];
+    return r;
+}
+
+Mat3 mat_inverse(const Mat3& a) {
+    const auto& m = a.m;
+    auto cof = [&](int r, int c) {
+        int r1 = (r + 1) % 3, r2 = (r + 2) % 3;
+        int c1 = (c + 1) % 3, c2 = (c + 2) % 3;
+        return m[r1][c1] * m[r2][c2] - m[r1][c2] * m[r2][c1];
+    };
+    double det = m[0][0] * cof(0, 0) + m[0][1] * cof(0, 1) + m[0][2] * cof(0, 2);
+    Mat3 out{};
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) out.m[i][j] = cof(j, i) / det;
+    return out;
+}
+
+void xy_to_xyz(Xy c, double out[3]) {
+    out[0] = c.x / c.y;
+    out[1] = 1.0;
+    out[2] = (1.0 - c.x - c.y) / c.y;
+}
+
+// Linear RGB → CIE XYZ for a set of primaries (white maps to Y=1).
+Mat3 rgb_to_xyz(const Primaries& p) {
+    double r[3], g[3], b[3], w[3];
+    xy_to_xyz(p.red, r);
+    xy_to_xyz(p.green, g);
+    xy_to_xyz(p.blue, b);
+    xy_to_xyz(p.white, w);
+    Mat3 m = {{{r[0], g[0], b[0]}, {r[1], g[1], b[1]}, {r[2], g[2], b[2]}}};
+    double s[3];
+    mat_apply(mat_inverse(m), w, s);
+    Mat3 out = m;
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) out.m[i][j] *= s[j];
+    return out;
+}
+
+Mat3 bradford_adaptation(Xy from, Xy to) {
+    constexpr Mat3 kBradford = {{{0.8951, 0.2664, -0.1614},
+                                 {-0.7502, 1.7135, 0.0367},
+                                 {0.0389, -0.0685, 1.0296}}};
+    double f[3], t[3], src[3], dst[3];
+    xy_to_xyz(from, f);
+    xy_to_xyz(to, t);
+    mat_apply(kBradford, f, src);
+    mat_apply(kBradford, t, dst);
+    Mat3 scale = {{{dst[0] / src[0], 0, 0},
+                   {0, dst[1] / src[1], 0},
+                   {0, 0, dst[2] / src[2]}}};
+    return mat_mul(mat_mul(mat_inverse(kBradford), scale), kBradford);
+}
+
+Mat3 rgb_to_rgb(const Primaries& src, const Primaries& dst) {
+    Mat3 to_xyz = rgb_to_xyz(src);
+    Mat3 from_xyz = mat_inverse(rgb_to_xyz(dst));
+    if (xy_eq(src.white, dst.white)) return mat_mul(from_xyz, to_xyz);
+    return mat_mul(mat_mul(from_xyz, bradford_adaptation(src.white, dst.white)),
+                   to_xyz);
+}
+
+double srgb_oetf(double v) {
+    return v <= 0.0031308 ? 12.92 * v : 1.055 * std::pow(v, 1.0 / 2.4) - 0.055;
+}
+
+// ── Panel optical model ────────────────────────────────────────────
+struct PanelModel { Primaries primaries; double gamma, luminance, black_floor; };
+
+double effective_gamma(double darken) {
+    if (darken < 0.0) darken = 0.0;
+    if (darken > 1.0) darken = 1.0;
+    return 2.2 + 1.6 * darken;
+}
+
+double default_darken(ScreenKind s) {
+    switch (s) {
+        case ScreenKind::Unlit:    return 0.7;
+        case ScreenKind::Frontlit: return 0.15;
+        default:                   return 0.0;
+    }
+}
+
+// Returns false for every kind that is not a measured panel (Raw, Classic,
+// the colour-mix kinds); the constructor handles those itself.
+bool panel_model(ScreenKind s, double darken, PanelModel& out) {
+    switch (s) {
+        case ScreenKind::Unlit:
+            out = {kPanelReflective, effective_gamma(darken), 0.91, 0.055};
+            return true;
+        case ScreenKind::Frontlit:
+            out = {kPanelReflective, effective_gamma(darken), 0.91, 0.030};
+            return true;
+        case ScreenKind::Backlit:
+            out = {kPanelBacklit, 2.2, 0.935, 0.002};
+            return true;
+        default:
+            return false;
+    }
+}
+
+uint8_t quantize(double v) {
+    if (v < 0.0) v = 0.0;
+    if (v > 1.0) v = 1.0;
+    return static_cast<uint8_t>(v * 255.0 + 0.5);
+}
+
+// The community-canonical gamma-4.0 model, reproduced exactly as published.
+std::array<uint8_t, 3> classic_entry(uint16_t px) {
+    double r = (px & 31) / 31.0;
+    double g = ((px >> 5) & 31) / 31.0;
+    double b = ((px >> 10) & 31) / 31.0;
+    double lr = std::pow(r, 4.0), lg = std::pow(g, 4.0), lb = std::pow(b, 4.0);
+    auto mix = [&](double a, double bq, double c) {
+        double v = (a * lb + bq * lg + c * lr) / 255.0;
+        double e = std::pow(v, 1.0 / 2.2) * (255.0 / 280.0);
+        return e;
+    };
+    return {quantize(mix(0.0, 50.0, 255.0)), quantize(mix(30.0, 230.0, 10.0)),
+            quantize(mix(220.0, 10.0, 50.0))};
+}
+
+const Primaries& target_primaries(DisplayTarget t) {
+    return t == DisplayTarget::DisplayP3 ? kDisplayP3 : kSrgb;
+}
+
+// Colour-vision correction ("daltonizing", Fidaner, Lin and Ozguven 2005):
+// simulate what the player sees, then move the lost difference into the
+// channels they can see. Simulation is Machado, Oliveira and Fernandes 2009,
+// severity 1.0, in linear sRGB. For deuteranopia the red-green error is
+// added to green and blue, for tritanopia the blue-yellow error to red and
+// green (each with Fidaner's 0.7 share).
+constexpr double kDeuteranopia[3][3] = {{0.367322, 0.860646, -0.227968},
+                                        {0.280085, 0.672501, 0.047413},
+                                        {-0.011820, 0.042940, 0.968881}};
+constexpr double kTritanopia[3][3] = {{1.255528, -0.076749, -0.178779},
+                                      {-0.078411, 0.930809, 0.147602},
+                                      {0.004733, 0.691367, 0.303900}};
+
+double srgb_eotf(double v) {
+    return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+}
+
+void correct_vision(ColorVision vision, std::array<uint8_t, 3>& entry) {
+    const double (*sim)[3] =
+        vision == ColorVision::Deuteranopia ? kDeuteranopia : kTritanopia;
+    double lin[3], seen[3], err[3];
+    for (int i = 0; i < 3; ++i) lin[i] = srgb_eotf(entry[i] / 255.0);
+    for (int i = 0; i < 3; ++i)
+        seen[i] = sim[i][0] * lin[0] + sim[i][1] * lin[1] + sim[i][2] * lin[2];
+    for (int i = 0; i < 3; ++i) err[i] = lin[i] - seen[i];
+    double shift[3];
+    if (vision == ColorVision::Deuteranopia) {
+        shift[0] = 0.0;
+        shift[1] = 0.7 * err[0] + err[1];
+        shift[2] = 0.7 * err[0] + err[2];
+    } else {
+        shift[0] = err[0] + 0.7 * err[2];
+        shift[1] = err[1] + 0.7 * err[2];
+        shift[2] = 0.0;
+    }
+    for (int i = 0; i < 3; ++i) {
+        double v = lin[i] + shift[i];
+        v = v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+        entry[i] = quantize(srgb_oetf(v));
+    }
+}
+
+}  // namespace
+
+// Config/env tokens, in ScreenKind order.
+static constexpr const char* kScreenKindNames[] = {
+    "raw",     "unlit",    "frontlit",       "backlit",
+    "classic", "handheld", "handheld_light", "soft",
+    "natural", "warm",     "deep",           "custom"};
+static_assert(sizeof(kScreenKindNames) / sizeof(kScreenKindNames[0]) ==
+                  static_cast<size_t>(kScreenKindCount),
+              "kScreenKindNames must list every ScreenKind");
+
+bool screen_kind_from_name(std::string_view name, ScreenKind& out) {
+    for (int i = 0; i < kScreenKindCount; ++i) {
+        if (name == kScreenKindNames[i]) {
+            out = static_cast<ScreenKind>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* screen_kind_name(ScreenKind kind) {
+    const int i = static_cast<int>(kind);
+    return (i >= 0 && i < kScreenKindCount) ? kScreenKindNames[i] : nullptr;
+}
+
+constexpr const char* kColorVisionNames[kColorVisionCount] = {
+    "normal", "deuteranopia", "tritanopia"};
+
+const char* color_vision_name(ColorVision vision) {
+    const int i = static_cast<int>(vision);
+    return (i >= 0 && i < kColorVisionCount) ? kColorVisionNames[i] : nullptr;
+}
+
+bool color_vision_from_name(std::string_view name, ColorVision& out) {
+    for (int i = 0; i < kColorVisionCount; ++i)
+        if (name == kColorVisionNames[i]) {
+            out = static_cast<ColorVision>(i);
+            return true;
+        }
+    return false;
+}
+
+ColorLut::ColorLut(const ColorSettings& settings) {
+    table_ = std::make_unique<std::array<std::array<uint8_t, 3>, 32768>>();
+    passthrough_ = fill(settings);
+    if (settings.vision != ColorVision::Normal) {
+        passthrough_ = false;
+        for (auto& entry : *table_) correct_vision(settings.vision, entry);
+    }
+}
+
+// The screen model's table; true when it is the plain 5-to-8-bit copy.
+bool ColorLut::fill(const ColorSettings& settings) {
+    auto& table = *table_;
+
+    if (settings.screen == ScreenKind::Raw) {
+        for (int px = 0; px < 32768; ++px) {
+            uint8_t r = px & 31, g = (px >> 5) & 31, b = (px >> 10) & 31;
+            table[px] = {static_cast<uint8_t>(r << 3 | r >> 2),
+                         static_cast<uint8_t>(g << 3 | g >> 2),
+                         static_cast<uint8_t>(b << 3 | b >> 2)};
+        }
+        return true;
+    }
+    if (settings.screen >= ScreenKind::Handheld) {
+        // One colour mix in the game's own (gamma-encoded) values, then an
+        // optional darkening curve. No offset term, so black stays black and
+        // the widescreen margins stay black.
+        //
+        // Handheld was fitted by least squares to a photo of Golden Sun on
+        // an Analogue Pocket beside a GBA SP: window blue goes steel blue,
+        // yellow wood golden-brown, neon green olive.
+        constexpr double kHandheld[3][3] = {{0.489, 0.390, 0.143},
+                                            {-0.021, 0.674, 0.296},
+                                            {-0.052, 0.103, 0.808}};
+        // Soft, Natural, Warm and Deep sit between that and the game's own
+        // colours (chosen by eye on the ship cabin and a cave).
+        constexpr double kLuma[3] = {0.299, 0.587, 0.114};
+        // The Warm tint: pulls greens toward yellow.
+        constexpr double kWarmTint[3][3] = {{0.86, 0.18, -0.04},
+                                            {0.03, 0.90, 0.07},
+                                            {0.00, 0.08, 0.86}};
+        double mix[3][3];
+        double saturation = 1.0, curve = 1.0, handheld = 0.0;
+        double warmth = 0.0, brightness = 1.0;
+        switch (settings.screen) {
+            case ScreenKind::Handheld:      handheld = 1.0; break;
+            case ScreenKind::HandheldLight: handheld = 0.6; break;
+            case ScreenKind::Soft:          handheld = 0.35; break;
+            case ScreenKind::Natural:  saturation = 0.72; curve = 1.1; break;
+            case ScreenKind::Warm:     saturation = 0.8; curve = 1.05;
+                                       warmth = 1.0; break;
+            case ScreenKind::Deep:     saturation = 0.88; curve = 1.25; break;
+            case ScreenKind::Custom:
+                saturation = settings.saturation;
+                brightness = settings.brightness;
+                warmth = settings.warmth;
+                curve = settings.curve;
+                break;
+            default: break;
+        }
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j) {
+                // Saturation around luma, then the handheld blend.
+                const double s = saturation * (i == j ? 1.0 : 0.0) +
+                                 (1.0 - saturation) * kLuma[j];
+                mix[i][j] = handheld * kHandheld[i][j] + (1.0 - handheld) * s;
+            }
+        if (settings.screen == ScreenKind::Custom &&
+            settings.hue_degrees != 0.0) {
+            // Hue rotation that keeps brightness (the SVG/CSS hue-rotate
+            // matrix); like the rest, no offset, so black stays black.
+            const double a = settings.hue_degrees * 3.14159265358979 / 180.0;
+            const double cs = std::cos(a), sn = std::sin(a);
+            const double rot[3][3] = {
+                {0.213 + cs * 0.787 - sn * 0.213, 0.715 - cs * 0.715 - sn * 0.715,
+                 0.072 - cs * 0.072 + sn * 0.928},
+                {0.213 - cs * 0.213 + sn * 0.143, 0.715 + cs * 0.285 + sn * 0.140,
+                 0.072 - cs * 0.072 - sn * 0.283},
+                {0.213 - cs * 0.213 - sn * 0.787, 0.715 - cs * 0.715 + sn * 0.715,
+                 0.072 + cs * 0.928 + sn * 0.072}};
+            double t[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    t[i][j] = rot[i][0] * mix[0][j] + rot[i][1] * mix[1][j] +
+                              rot[i][2] * mix[2][j];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) mix[i][j] = t[i][j];
+        }
+        if (warmth > 0.0) {
+            // Blend identity -> warm tint by `warmth` (1 gives kWarmTint).
+            double tint[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    tint[i][j] = (1.0 - warmth) * (i == j ? 1.0 : 0.0) +
+                                 warmth * kWarmTint[i][j];
+            double t[3][3];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    t[i][j] = tint[i][0] * mix[0][j] +
+                              tint[i][1] * mix[1][j] +
+                              tint[i][2] * mix[2][j];
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j) mix[i][j] = t[i][j];
+        }
+        for (int px = 0; px < 32768; ++px) {
+            const double c[3] = {(px & 31) / 31.0, ((px >> 5) & 31) / 31.0,
+                                 ((px >> 10) & 31) / 31.0};
+            for (int i = 0; i < 3; ++i) {
+                double v = mix[i][0] * c[0] + mix[i][1] * c[1] +
+                           mix[i][2] * c[2];
+                if (brightness != 1.0) v *= brightness;  // gain, no offset
+                v = v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+                table[px][i] = quantize(curve == 1.0 ? v : std::pow(v, curve));
+            }
+        }
+        return false;
+    }
+    if (settings.screen == ScreenKind::Classic) {
+        for (int px = 0; px < 32768; ++px)
+            table[px] = classic_entry(static_cast<uint16_t>(px));
+        return false;
+    }
+
+    double darken = settings.darken < 0.0 ? default_darken(settings.screen)
+                                          : settings.darken;
+    PanelModel model{};
+    panel_model(settings.screen, darken, model);
+    Mat3 to_display = rgb_to_rgb(model.primaries, target_primaries(settings.target));
+
+    for (int px = 0; px < 32768; ++px) {
+        double c[3] = {(px & 31) / 31.0, ((px >> 5) & 31) / 31.0,
+                       ((px >> 10) & 31) / 31.0};
+        double lin[3];
+        for (int i = 0; i < 3; ++i) {
+            double v = std::pow(c[i], model.gamma) * model.luminance;
+            lin[i] = v > 1.0 ? 1.0 : v;
+        }
+        double out[3];
+        mat_apply(to_display, lin, out);
+        for (int i = 0; i < 3; ++i) {
+            double v = out[i] < 0.0 ? 0.0 : (out[i] > 1.0 ? 1.0 : out[i]);
+            double lifted = model.black_floor + (1.0 - model.black_floor) * v;
+            out[i] = srgb_oetf(lifted);
+        }
+        table[px] = {quantize(out[0]), quantize(out[1]), quantize(out[2])};
+    }
+    return false;
+}
+
+void ColorLut::map_rgb888(const uint8_t* src, uint8_t* dst,
+                          int width, int height) const {
+    const auto& table = *table_;
+    const int n = width * height;
+    for (int i = 0; i < n; ++i) {
+        const uint8_t* s = src + i * 3;
+        // Recover the 5-bit hardware channels (top 5 bits) and re-pack as
+        // BGR555 (red is the low 5 bits, matching the LUT index).
+        uint32_t idx = (s[0] >> 3) | ((s[1] >> 3) << 5) | ((s[2] >> 3) << 10);
+        const auto& e = table[idx];
+        uint8_t* d = dst + i * 3;
+        d[0] = e[0];
+        d[1] = e[1];
+        d[2] = e[2];
+    }
+}
+
+}  // namespace gbarecomp::runtime

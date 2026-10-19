@@ -1,6 +1,6 @@
 # Every piece of translated game code the player builder (gsr_builder)
 # generates from the player's ROM, in the build's own folder names. Read by
-# tools/gsr_builder/builder_main.cpp; keep in step with CMakeLists.txt's
+# ../player_builder/builder_main.cpp; keep in step with CMakeLists.txt's
 # GSR_*_DIR list.
 #
 #   main      <dir> <toml> <max functions>

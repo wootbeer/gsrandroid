@@ -1,5 +1,5 @@
-// gsr_android.cpp -- glue that lets GSRecomp's player builder (tools/gsr_builder) and the translator
-// (gbarecomp/tools/gba_recompile) run inside the app on Android.
+// gsr_android.cpp -- glue that lets GSRecomp's player builder (player_builder) and the translator
+// (engine/tools/gba_recompile) run inside the app on Android.
 //
 // The builder normally starts gba_recompile and a bundled GCC as separate programs; apps cannot start
 // programs from their own storage, so builder_main.cpp has a few GSR_ANDROID_INPROCESS hooks:

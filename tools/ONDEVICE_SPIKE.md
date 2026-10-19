@@ -75,7 +75,7 @@ Not yet on device: the ROM -> C translation step (gba_recompile, about 4 min on 
 
 ## Step 2: the whole flow on the device (ROM -> translate -> block timing -> compile -> link -> load)
 Code: cpp/gsrecomp (GSRecomp's gba_recompile + gsr_builder, copied; only GSR_ANDROID_INPROCESS hooks added in
-tools/gsr_builder/builder_main.cpp, search for GSR-ANDROID), gsr/gsr_build.* (compile + pack + link + load),
+player_builder/builder_main.cpp, search for GSR-ANDROID), gsr/gsr_build.* (compile + pack + link + load),
 gsr/gsr_android.cpp (glue), gsr/gsr_spike.c (test driver). The translator runs as a function in a forked
 child of the app (apps cannot exec programs from their storage).
 Verified on the VM (x86 build of the same code, reduced build plan): builder exit 0, 2 libraries loaded.

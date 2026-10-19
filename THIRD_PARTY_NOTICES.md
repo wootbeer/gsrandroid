@@ -1,12 +1,12 @@
 # Third-party notices
 
-This file collects the licence and attribution notices from the projects this port is built on, copied unchanged from the vendored copies in this repository (version 0.3.1 of Golden Sun Recompiled). The originals stay where they are and must stay with any copy of this project. See `COPYING` for the notice covering the Android port itself. Full licence texts are in the `licenses/` folder.
+This file collects the licence and attribution notices from the projects this port is built on, copied unchanged from the vendored copies in this repository (version 0.5.2 of Golden Sun Recompiled). The originals stay where they are and must stay with any copy of this project. See `COPYING` for the notice covering the Android port itself. Full licence texts are in the `licenses/` folder.
 
 ---
 
 ## Golden Sun Recompiled (Shmargus): licence statement
 
-Source: https://github.com/Shmargus/GSRecomp, file `LICENSE`, copied from `gsrandroid/src/main/cpp/gsrecomp/LICENSE`.
+Source: https://github.com/Shmargus/GSRecomp, file `The Broken Seal/LICENSE`, copied from `gsrandroid/src/main/cpp/gsrecomp/tbs/LICENSE`. Its `../engine/` is `gsrecomp/engine/` here.
 
 ```
 License not yet selected.
@@ -18,17 +18,17 @@ owner selects and adds an explicit license.
 Third-party components remain under their own licenses, and one of them binds
 this whole project:
 
-  The emulation and recompilation engine in gbarecomp/ is copyright Matthew
-  Stan and is licensed under the PolyForm Noncommercial License 1.0.0. Its
-  text is at gbarecomp/LICENSE and must stay with any copy. It permits use,
-  modification and redistribution for noncommercial purposes only. Nothing
-  here runs without that engine, so THIS PROJECT IS NONCOMMERCIAL, and any
-  license later chosen for the original material cannot escape that while the
-  engine is part of the build.
+  The emulation and recompilation engine in ../engine/ (the collection's
+  engine folder) is copyright Matthew Stan and is licensed under the PolyForm
+  Noncommercial License 1.0.0. Its text is at ../engine/LICENSE and must stay
+  with any copy. It permits use, modification and redistribution for
+  noncommercial purposes only. Nothing here runs without that engine, so THIS
+  PROJECT IS NONCOMMERCIAL, and any license later chosen for the original
+  material cannot escape that while the engine is part of the build.
 
   Portions of the engine are derived from mGBA (MPL-2.0) and from
   JRickey/gba-recomp (MIT OR Apache-2.0); see
-  gbarecomp/THIRD_PARTY_ATTRIBUTION.md.
+  ../engine/THIRD_PARTY_ATTRIBUTION.md and ../engine/MODIFICATIONS.md.
 
   Dear ImGui (MIT), toml++ (MIT) and SDL2 (zlib) are fetched or installed at
   build time and are not stored in this repository.
@@ -37,7 +37,7 @@ No Golden Sun ROM, BIOS, save or extracted asset is in this repository, and
 none may be added; that material belongs to Nintendo and Camelot Software
 Planning.
 
-See ATTRIBUTION.md for who owns what, and COPYING before publishing,
+See ATTRIBUTION.md for who owns what, and docs/LEGAL.md before publishing,
 distributing, or relicensing this project.
 ```
 
@@ -45,7 +45,7 @@ distributing, or relicensing this project.
 
 ## Golden Sun Recompiled (Shmargus): attribution
 
-Copied from `gsrandroid/src/main/cpp/gsrecomp/ATTRIBUTION.md`.
+Copied from `gsrandroid/src/main/cpp/gsrecomp/tbs/ATTRIBUTION.md`. Its `gbarecomp/` is the engine, `gsrecomp/engine/` here.
 
 # What is in this repository, and who owns it
 
@@ -147,7 +147,7 @@ Adding a dependency means adding a row here. Adding game data means breaking
 
 ## gbarecomp third-party attribution
 
-Copied from `gsrandroid/src/main/cpp/gsrecomp/gbarecomp/THIRD_PARTY_ATTRIBUTION.md`. The gbarecomp licence (PolyForm Noncommercial 1.0.0) is at `gsrandroid/src/main/cpp/gsrecomp/gbarecomp/LICENSE`.
+Copied from `gsrandroid/src/main/cpp/gsrecomp/engine/THIRD_PARTY_ATTRIBUTION.md`. The gbarecomp licence (PolyForm Noncommercial 1.0.0) is at `gsrandroid/src/main/cpp/gsrecomp/engine/LICENSE`.
 
 # Third-Party Attribution
 
@@ -201,7 +201,7 @@ The on-device C compiler. LGPL 2.1; full text in `gsrandroid/src/main/cpp/tcc/CO
 ## Screen filters
 
 The optional screen filters (Display > Screen filter) are the single-pass filters Golden Sun Recompiled ported
-from libretro's glsl-shaders (`gbarecomp/src/runtime/screen_filter.cpp`), copied verbatim with their notices
+from libretro's glsl-shaders (`engine/src/runtime/screen_filter.cpp`), copied verbatim with their notices
 into `gsrandroid/src/main/cpp/gsr/gsr_screen_filter_shaders.inc`:
 
 - **LCD3x** by Gigaherz: public domain.

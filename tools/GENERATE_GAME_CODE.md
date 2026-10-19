@@ -7,9 +7,9 @@ files, ~12.6M lines).
 Steps used (Linux; the Windows release's `builder\gsr_builder.exe` accepts the same
 `--generate-only --keep-work` flags):
 
-1. Build `gba_recompile` from `GSRecomp-main/gbarecomp` (CMake, target `gba_recompile`).
-2. Build `gsr_builder` from `GSRecomp-main/tools/gsr_builder` (see CMakeLists.txt, GSR_BUILDER_SOURCES).
-3. `gsr_builder --rom <rom.gba> --recompiler <gba_recompile> --data GSRecomp-main/config/usa
+1. Build `gba_recompile` from `GSRecomp-main/engine` (CMake, target `gba_recompile`).
+2. Build `gsr_builder` from `GSRecomp-main/player_builder` (see `The Broken Seal/CMakeLists.txt`, GSR_BUILDER_SOURCES).
+3. `gsr_builder --rom <rom.gba> --recompiler <gba_recompile> --data "GSRecomp-main/The Broken Seal/config/usa"
    --engine <dir with include/runtime_arm.h> --toolchain <dir with bin/g++> --work <dir>
    --keep-work --generate-only`
 4. Apply block timing to `<work>/gen` (gsr_builder does this on a normal run, but skips it
