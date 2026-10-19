@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3. (10-10-2026)]
+
+### Fixed
+- First-time build could freeze at 59% and never finish  
+- The build log (Android/data/wootbeer.gsrandroid/files/gsr_build_log.txt) was never written  
+
 ## [0.2. (10-9-2026)]
 
 ### Added

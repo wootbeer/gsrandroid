@@ -41,7 +41,7 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `gbarecomp/src/runtime/runtime.cpp` | `GSR_ANDROID_RUNTIME`: when 2x frame interpolation cannot build an in-between frame, blend the previous and new real frames 50/50 instead of jumping to the new one, and tell the host (`gsr_host_present_slot`) which present is the in-between frame so flicker reduction can treat it like the real frames (CMake adds the define) |
 | `gbarecomp/src/runtime/host_window_android.cpp` (ours) | `present_native` / `native_renderer_enabled` back the High-res rendering option |
 | `src/runner_main.cpp` | `GSR_ANDROID_ENGINE`: `gpu_field_enabled()` reads the Renderer setting live; `gpu_field_present_override` is wrapped to report whether the GPU drew the frame; init result reported |
-| `tools/gsr_builder/builder_main.cpp` | `GSR_ANDROID_INPROCESS` (in-process entry) |
+| `tools/gsr_builder/builder_main.cpp` | `GSR_ANDROID_INPROCESS`: in-process translator entry, and the `spawn` helper -- a single-threaded process started first thing in `main` that forks every translator (forking from the multithreaded builder could freeze a translator at 59%) and runs the watchdog |
 | `crash_handler.cpp` | Android crash handling |
 | `tcc/tccelf.c` (line ~3920) | on-device linking change (LGPL: keep notice) |
 | `gsr/gsr_screen_filter_shaders.inc` (ours, copied) | verbatim copy of `screen_filter.cpp`'s shared fragment header and the LCD3x, xBR-lv2 and CRT Lottes shaders with their notices; copy it again when upstream changes them |
@@ -68,8 +68,8 @@ shaders in `field_scene_renderer.cpp` still validate as GLSL ES 3.00 after the `
 6. Test: boot, field, battle, world map, Expanded view, fast-forward, menu, save/load.
 7. Update the vendored engine version recorded here.
 
-Vendored engine version: 0.4.3 (upstream commit 53d2eeb), updated 2026-10-09 from https://github.com/Shmargus/GSRecomp
-(previously 0.3.1 = commit ddde2e2; before that 0.2.3).
+Vendored engine version: 0.4.4 (upstream commit 8770e0d), updated 2026-10-12 from https://github.com/Shmargus/GSRecomp
+(previously 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
 
 How the 0.4.3 update was done (repeat this next time): a three-way git merge with base = the upstream commit we
 were on (only the files we vendor), ours = the vendored folder, theirs = the new upstream commit. Only files we

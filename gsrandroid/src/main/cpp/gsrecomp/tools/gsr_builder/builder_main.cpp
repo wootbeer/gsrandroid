@@ -62,6 +62,9 @@ using gsr::builder::GuestMachine;
 // GSR-ANDROID: the Android build runs the translator and the compile step inside the app (no
 // executables can be started from app storage), see gsr_android.cpp.
 #ifdef GSR_ANDROID_INPROCESS
+#include <condition_variable>
+#include <poll.h>
+#include <sys/socket.h>
 int gba_recompile_main(int argc, char** argv);  // gba_recompile's main(), renamed with -Dmain=
 bool gsr_android_compile_and_link(const std::string& gen, const std::string& out_dir,
                                   std::string* error);
@@ -105,6 +108,193 @@ void log_line(const std::string& s) {
     std::lock_guard<std::mutex> lock(g_out_mutex);
     if (g_log) g_log << s << '\n' << std::flush;
 }
+
+
+#ifdef GSR_ANDROID_INPROCESS
+// ---------------------------------------------------------------- spawner (GSR-ANDROID)
+//
+// The translator runs as a function in a forked child. Forking a process that has other threads
+// running is only safe if none of them holds a C library lock (stdio, locale, ...) at that instant;
+// otherwise the child inherits the lock already taken and freezes the first time it needs it. With
+// several translator threads -- each polling its child's CPU time -- that happened often enough
+// that builds stalled at 59% for good (a child at 0 s of CPU, the watchdog unable to notice).
+//
+// So every translator is forked by a helper started once, before the builder makes any thread: a
+// single-threaded process cannot hand a held lock to its child. The threads ask it over a socket
+// pair and wait for the exit status. The helper also runs the watchdog, reading CPU time with plain
+// open/read (no stdio). If the helper cannot be started the old in-thread fork is used.
+namespace spawn {
+
+int g_fd = -1;                  // builder side of the socket pair
+std::mutex g_send_mutex;        // one request on the wire at a time
+std::mutex g_wait_mutex;
+std::condition_variable g_wait_cv;
+std::map<std::uint64_t, std::pair<int, int>> g_done;  // id -> (exit code, timed out)
+bool g_reading = false;
+std::atomic<std::uint64_t> g_next_id{1};
+
+struct Reply { std::uint64_t id; std::int32_t code; std::int32_t timed_out; };
+
+// CPU ticks of a child, or false if they cannot be read. Plain syscalls only.
+bool child_ticks(pid_t pid, unsigned long long* ticks) {
+    char path[64], line[1024];
+    std::snprintf(path, sizeof path, "/proc/%d/stat", static_cast<int>(pid));
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    const ssize_t n = read(fd, line, sizeof line - 1);
+    close(fd);
+    if (n <= 0) return false;
+    line[n] = 0;
+    const char* p = std::strrchr(line, ')');  // after "(comm)": state is field 3
+    unsigned long long ut = 0, st = 0;
+    if (!p || std::sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &ut, &st) != 2)
+        return false;
+    *ticks = ut + st;
+    return true;
+}
+
+[[noreturn]] void serve(int fd) {
+    struct Child {
+        pid_t pid;
+        std::uint64_t id;
+        std::chrono::steady_clock::time_point start, last_change;
+        unsigned long long last_ticks;
+    };
+    std::vector<Child> kids;
+    std::vector<char> buf(256 * 1024);
+    auto reply = [&](std::uint64_t id, int code, int timed_out) {
+        const Reply r{id, code, timed_out};
+        send(fd, &r, sizeof r, MSG_NOSIGNAL);
+    };
+    auto stop_all = [&]() {
+        for (const Child& k : kids) { kill(k.pid, SIGKILL); waitpid(k.pid, nullptr, 0); }
+        _exit(0);
+    };
+    for (;;) {
+        pollfd pf{fd, POLLIN, 0};
+        poll(&pf, 1, 100);
+        if (pf.revents & POLLIN) {
+            const ssize_t n = recv(fd, buf.data(), buf.size(), 0);
+            if (n <= 0) stop_all();  // the builder is gone
+            // Request: id, then NUL-terminated strings: log, cwd, argv[0..].
+            std::uint64_t id = 0;
+            std::memcpy(&id, buf.data(), sizeof id);
+            std::vector<char*> parts;
+            for (std::size_t i = sizeof id; i < static_cast<std::size_t>(n);) {
+                parts.push_back(buf.data() + i);
+                i += std::strlen(buf.data() + i) + 1;
+            }
+            if (parts.size() < 3) { reply(id, -1, 0); continue; }
+            const char* log = parts[0];
+            const char* cwd = parts[1];
+            std::vector<char*> argv(parts.begin() + 2, parts.end());
+            argv.push_back(nullptr);
+            const pid_t pid = fork();
+            if (pid < 0) { reply(id, -1, 0); continue; }
+            if (pid == 0) {
+                close(fd);
+                prctl(PR_SET_PDEATHSIG, SIGKILL);
+                const int lfd = open(log, O_WRONLY | O_CREAT | O_APPEND, 0644);
+                if (lfd >= 0) { dup2(lfd, 1); dup2(lfd, 2); close(lfd); }
+                if (cwd[0] && chdir(cwd) != 0) _exit(127);
+                if (fs::path(argv[0]).filename() == "gba_recompile") {
+                    const int rc = gba_recompile_main(static_cast<int>(argv.size()) - 1, argv.data());
+                    std::fflush(nullptr);
+                    _exit(rc);
+                }
+                execv(argv[0], argv.data());
+                _exit(127);
+            }
+            const auto now = std::chrono::steady_clock::now();
+            kids.push_back(Child{pid, id, now, now, ~0ull});
+        } else if (pf.revents & (POLLHUP | POLLERR)) {
+            stop_all();
+        }
+        const auto now = std::chrono::steady_clock::now();
+        for (std::size_t i = 0; i < kids.size();) {
+            Child& k = kids[i];
+            int status = 0;
+            if (waitpid(k.pid, &status, WNOHANG) == k.pid) {
+                int code = -1;
+                if (WIFEXITED(status)) code = WEXITSTATUS(status) == 127 ? -1 : WEXITSTATUS(status);
+                reply(k.id, code, 0);
+                kids.erase(kids.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            unsigned long long t = 0;
+            const bool known = child_ticks(k.pid, &t);
+            if (known && t != k.last_ticks) { k.last_ticks = t; k.last_change = now; }
+            // A working child keeps using CPU: 30 s without any means it is stuck. Wall-clock limits
+            // are a last resort (shorter when CPU time cannot be read), as before.
+            const auto wall_limit = known ? std::chrono::minutes(180) : std::chrono::minutes(25);
+            if ((known && now - k.last_change > std::chrono::seconds(30)) || now - k.start > wall_limit) {
+                kill(k.pid, SIGKILL);
+                waitpid(k.pid, nullptr, 0);
+                reply(k.id, -1, 1);
+                kids.erase(kids.begin() + static_cast<std::ptrdiff_t>(i));
+                continue;
+            }
+            ++i;
+        }
+    }
+}
+
+// Called first thing in main, while the builder still has a single thread.
+void start() {
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sv) != 0) return;
+    const pid_t parent = getpid();
+    const pid_t pid = fork();
+    if (pid < 0) { close(sv[0]); close(sv[1]); return; }
+    if (pid == 0) {
+        close(sv[0]);
+        prctl(PR_SET_PDEATHSIG, SIGKILL);
+        if (getppid() != parent) _exit(0);
+        serve(sv[1]);
+    }
+    close(sv[1]);
+    g_fd = sv[0];
+}
+
+bool ready() { return g_fd >= 0; }
+
+// Runs argv (argv[0] is the program) with output appended to `log`; the exit code, or -1.
+int run(const std::vector<std::string>& argv, const std::string& log, const std::string& cwd,
+        bool* timed_out) {
+    *timed_out = false;
+    const std::uint64_t id = g_next_id++;
+    std::string msg(reinterpret_cast<const char*>(&id), sizeof id);
+    for (const std::string* part : {&log, &cwd}) { msg += *part; msg += '\0'; }
+    for (const std::string& a : argv) { msg += a; msg += '\0'; }
+    {
+        std::lock_guard<std::mutex> lock(g_send_mutex);
+        if (send(g_fd, msg.data(), msg.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(msg.size())) return -1;
+    }
+    // Replies come back in any order; whichever waiting thread is free reads the next one.
+    std::unique_lock<std::mutex> lock(g_wait_mutex);
+    while (!g_done.count(id)) {
+        if (!g_reading) {
+            g_reading = true;
+            lock.unlock();
+            Reply r{};
+            const ssize_t n = recv(g_fd, &r, sizeof r, 0);
+            lock.lock();
+            g_reading = false;
+            if (n == static_cast<ssize_t>(sizeof r)) g_done[r.id] = {r.code, r.timed_out};
+            else g_done[id] = {-1, 0};  // the helper is gone
+            g_wait_cv.notify_all();
+        } else {
+            g_wait_cv.wait(lock);
+        }
+    }
+    const auto result = g_done[id];
+    g_done.erase(id);
+    *timed_out = result.second != 0;
+    return result.first;
+}
+
+}  // namespace spawn
+#endif
 
 // ---------------------------------------------------------------- files
 
@@ -270,7 +460,18 @@ int run_process(const fs::path& exe, const std::vector<std::string>& args,
     argv.push_back(nullptr);
     const pid_t parent = getpid();
 #ifdef GSR_ANDROID_INPROCESS
-    // GSR-ANDROID: fork() from a multithreaded process only works if no other thread is inside
+    // GSR-ANDROID: started by the single-threaded spawner helper (see spawn above).
+    if (spawn::ready()) {
+        for (int attempt = 0;; ++attempt) {
+            bool timed_out = false;
+            const int rc = spawn::run(owned, log_s, cwd_s, &timed_out);
+            if (!timed_out) return rc;
+            emit("@log translator step timed out, retrying (%d)", attempt + 1);
+            if (attempt >= 2) return -1;
+        }
+    }
+    // Fallback when the helper could not be started: the old in-thread fork.
+    // fork() from a multithreaded process only works if no other thread is inside
     // stdio (or holds another lock the child needs) at that instant. The only stdio user in the
     // parent is emit(), so forking under g_out_mutex rules that out. A child that still gets stuck
     // (no exit within the limit) is killed and retried; translating one piece takes seconds.
@@ -1163,6 +1364,9 @@ int wmain(int argc, wchar_t** wargv) {
 #else
 int main(int argc, char** cargv) {
     std::vector<std::string> argv(cargv, cargv + argc);
+#endif
+#ifdef GSR_ANDROID_INPROCESS
+    spawn::start();  // before any thread exists (see spawn)
 #endif
     const fs::path here = exe_dir();
     Setup s;

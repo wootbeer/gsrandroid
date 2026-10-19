@@ -355,7 +355,14 @@ static void *prepare_thread(void *arg) {
 	write_status("running");
 	rep("== Golden Sun Recompiled: prepare (builder %s) ==", GSR_BUILD_VERSION);
 
-	if (stamp_matches()) {
+	/* Support / testing: a file named rebuild_game in the app's own folder on shared storage
+	 * (Android/data/<package>/files, reachable over USB) forces one fresh build. It is removed first. */
+	char rebuild_flag[760];
+	snprintf(rebuild_flag, sizeof rebuild_flag, "%.*s/rebuild_game", (int)(strrchr(g_log, '/') - g_log), g_log);
+	const int forced = exists(rebuild_flag) && remove(rebuild_flag) == 0;
+	if (forced) rep("rebuild_game found: building again");
+
+	if (!forced && stamp_matches()) {
 		rep("cached build found, skipping translate/compile");
 		atomic_store(&g_cached, 1);
 		set_msg("Loading the game");
