@@ -6100,6 +6100,7 @@ int golden_sun_battle_bg_sample_provider(int bg, int output_x, int screen_y,
 // (they draw the room), so they would show the field's tiles there with the menu's graphics and colours.
 // Also logs each new window/blend setup to gsr_perf_log.txt (GSR_PERF_LOG) so a case this misses can be
 // read back from the phone.
+extern "C" unsigned g_gsr_field_px_last;  // gba_ppu.cpp
 bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* io) {
     if (!io) return false;
     const auto rd = [&](unsigned o) { return static_cast<unsigned>(io[o] | (io[o + 1] << 8)); };
@@ -6123,6 +6124,7 @@ bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* 
         unsigned long long key = 1469598103934665603ull;
         for (unsigned v : {static_cast<unsigned>(dispcnt), winin, winout, rd(0x50), rd(0x08), rd(0x0A),
                            rd(0x0C), rd(0x0E), hidden ? 1u : 0u, replaced ? 1u : 0u,
+                           g_gsr_field_px_last < 1500u ? 1u : 0u,
                            gsr::room_buffer_row_is_room() ? 1u : 0u})
             key = (key ^ v) * 1099511628211ull;
         if (key != last && lines < 300) {
@@ -6132,12 +6134,12 @@ bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* 
                     ++lines;
                     std::fprintf(f, "#win frame=%llu dispcnt=%04X win0h=%04X win0v=%04X win1h=%04X win1v=%04X "
                                     "winin=%04X winout=%04X bldcnt=%04X bldy=%04X bgcnt=%04X,%04X,%04X,%04X "
-                                    "room=%d replaced=%d hidden=%d match=%u/%u,%u/%u,%u/%u\n",
+                                    "room=%d replaced=%d hidden=%d match=%u/%u,%u/%u,%u/%u field_px=%u\n",
                                  static_cast<unsigned long long>(runtime_current_frame()), dispcnt, rd(0x40),
                                  rd(0x44), rd(0x42), rd(0x46), winin, winout, rd(0x50), rd(0x54), rd(0x08),
                                  rd(0x0A), rd(0x0C), rd(0x0E), gsr::room_buffer_row_is_room() ? 1 : 0,
                                  replaced ? 1 : 0, hidden ? 1 : 0,
-                                 mat[1], chk[1], mat[2], chk[2], mat[3], chk[3]);
+                                 mat[1], chk[1], mat[2], chk[2], mat[3], chk[3], g_gsr_field_px_last);
                     std::fclose(f);
                 }
             }
@@ -6175,7 +6177,8 @@ unsigned golden_sun_room_buffer_margin_policy(std::uint16_t dispcnt,
         gba::g_ws_authored_margin_layers = 0;
         return gsr::widescreen::kPillarboxVertical;
     }
-    if (gsr::room_buffer_field_replaced() || android_field_hidden_by_windows(dispcnt, io)) {
+    if (gsr::room_buffer_field_replaced() || android_field_hidden_by_windows(dispcnt, io) ||
+        g_gsr_field_px_last < 1500u) {  // field covered in the native area (status screen)
         gba::g_ws_authored_margin_layers = 0;
         return gsr::widescreen::kPillarboxAll;
     }

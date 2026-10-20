@@ -1074,6 +1074,11 @@ void render_scanline_internal(uint8_t* rgb,
 // mix), for the timing log (runtime.cpp, gsr_perf_log.txt). Two clock reads per stage per row.
 }  // namespace
 extern "C" unsigned long long g_gsr_wide_ns[3] = {0, 0, 0};
+// GSR-ANDROID: how many native-area pixels of the last finished expanded frame showed a field layer
+// (BG1-BG3, on top or as the lower half of an alpha blend). A full-screen menu covers the field in
+// the native area; the game layer then stops continuing the room into the margins.
+extern "C" unsigned g_gsr_field_px_last = 0xFFFFFFFFu;
+unsigned g_gsr_field_px_now = 0;
 namespace {
 struct GsrWideTimer {
     using clk = std::chrono::steady_clock;
@@ -2287,6 +2292,12 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
     const bool row_pillar_left = margin_is_pillarboxed(0u);
     const bool row_pillar_right =
         out_w > 0 && margin_is_pillarboxed(out_w - 1u);
+#ifdef __ANDROID__
+    if (logical_y == 0) {  // first native row: the previous frame is complete
+        g_gsr_field_px_last = g_gsr_field_px_now;
+        g_gsr_field_px_now = 0;
+    }
+#endif
     for (uint32_t x = 0; x < out_w; ++x) {
         uint8_t* dst = row + x * 3;
         if (census) {
@@ -2296,6 +2307,15 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
         const bool x_left = static_cast<int>(x) < native_first;
         const bool x_right = static_cast<int>(x) >= native_last;
         const bool x_margin = x_left || x_right || row_vertical_margin;
+#ifdef __ANDROID__
+        if (!x_margin) {
+            const unsigned l = top[x].layer;
+            if ((l >= 1u && l <= 3u) ||
+                (effect == 1 && top[x].target1 && second[x].valid && second[x].target2 &&
+                 second[x].layer >= 1u && second[x].layer <= 3u))
+                ++g_gsr_field_px_now;
+        }
+#endif
         const bool x_pillar = (x_left && row_pillar_left) ||
             (x_right && row_pillar_right) ||
             (row_pillar_vertical && !x_left && !x_right);
