@@ -3,7 +3,7 @@
 ## [0.3. (10-10-2026)]
 
 ### Changed
-- Bumped to the latest GSRecomp version (0.5.2)  
+- Bumped to the latest GSRecomp version (0.5.3)  
 - The game code is rebuilt once on first start after updating  
 
 ### Fixed

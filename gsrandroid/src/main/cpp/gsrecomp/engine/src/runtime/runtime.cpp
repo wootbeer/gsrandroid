@@ -32,6 +32,9 @@ extern "C" unsigned long long g_cost_pump_idle_calls;
 extern "C" unsigned long long g_cost_tick_devices_ns;
 extern "C" unsigned long long g_cost_tick_devices_calls;
 extern "C" unsigned long long g_cost_ppu_render_ns;
+#ifdef GSR_ANDROID_RUNTIME
+extern "C" unsigned long long g_gsr_ppu_ns, g_gsr_ppu_latch_ns;  // runtime_bus_bridge.cpp
+#endif
 extern "C" unsigned long long g_cost_ppu_render_calls;
 extern "C" unsigned long long g_cost_irq_handler_ns;
 extern "C" unsigned long long g_cost_irq_handler_calls;
@@ -2524,30 +2527,34 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             // GSR_ANDROID: a short timing summary every 600 frames into GSR_PERF_LOG (the app's files folder),
             // since an Android app never reaches the desktop's dump at exit.
             {
-                static uint64_t n = 0, guest = 0, ppu = 0, render = 0, present = 0, pacer = 0, audio = 0, pump = 0,
+                static unsigned long long ppu_prev = 0, latch_prev = 0;
+                static uint64_t n = 0, guest = 0, ppu = 0, latch = 0, render = 0, present = 0, pacer = 0, audio = 0, pump = 0,
                                 worst = 0;
                 static std::FILE* log = nullptr;
                 static bool opened = false;
                 if (!opened) {
                     opened = true;
                     if (const char* lp = std::getenv("GSR_PERF_LOG"); lp && *lp) log = std::fopen(lp, "w");
-                    if (log) std::fprintf(log, "frame,view,avg_us:guest,ppu,render,present,pacer,audio,pump,worst_frame_us\n");
+                    if (log) std::fprintf(log, "frame,view,avg_us:guest,ppu_lines,ppu_extra_rows,render,present,pacer,audio,pump,worst_frame_us\n");
                 }
                 const uint64_t frame_us = s.guest_us + s.render_us + s.present_us + s.pacer_us + s.audio_us + s.pump_us;
-                ++n; guest += s.guest_us; ppu += s.ppu_render_us; render += s.render_us; present += s.present_us;
+                ++n; guest += s.guest_us;
+                ppu += (g_gsr_ppu_ns - ppu_prev) / 1000u; ppu_prev = g_gsr_ppu_ns;
+                latch += (g_gsr_ppu_latch_ns - latch_prev) / 1000u; latch_prev = g_gsr_ppu_latch_ns; render += s.render_us; present += s.present_us;
                 pacer += s.pacer_us; audio += s.audio_us; pump += s.pump_us;
                 if (frame_us > worst) worst = frame_us;
                 if (n >= 600) {
                     if (log) {
-                        std::fprintf(log, "%llu,%ux%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                        std::fprintf(log, "%llu,%ux%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
                             static_cast<unsigned long long>(frame), g_ws_view_width, g_ws_view_height,
                             static_cast<unsigned long long>(guest / n), static_cast<unsigned long long>(ppu / n),
+                            static_cast<unsigned long long>(latch / n),
                             static_cast<unsigned long long>(render / n), static_cast<unsigned long long>(present / n),
                             static_cast<unsigned long long>(pacer / n), static_cast<unsigned long long>(audio / n),
                             static_cast<unsigned long long>(pump / n), static_cast<unsigned long long>(worst));
                         std::fflush(log);
                     }
-                    n = guest = ppu = render = present = pacer = audio = pump = worst = 0;
+                    n = guest = ppu = latch = render = present = pacer = audio = pump = worst = 0;
                 }
             }
 #endif
@@ -3111,6 +3118,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         if (ev.toggle_fps)  win.set_fps_readout(!win.fps_readout());
         if (ev.toggle_pause) {
             host_paused = !host_paused;
+            win.set_local_music_paused(host_paused);
             if (host_paused) {
                 discard_canonical_audio();
                 win.reset_audio();
@@ -3129,6 +3137,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             opts.pause_request_poll(&requested_paused) &&
             requested_paused != host_paused) {
             host_paused = requested_paused;
+            win.set_local_music_paused(host_paused);
             if (host_paused) {
                 discard_canonical_audio();
                 win.reset_audio();
@@ -3693,34 +3702,12 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // effect on --window (host keyboard wins) or verify/oracle runs.
     // GBARECOMP_DEMO_INPUT modes: unset = off; "walk" = sustained-direction
     // walker from reset; "campaign" = menu/cutscene track until gameplay then
-    // the walker; "campaign-combat" = the same deterministic opening followed
-    // by a rightward action-platformer stress track (move/attack/jump/dash);
-    // "campaign-traverse" = a more aggressive dash-jump route intended to
-    // clear terrain/escort bottlenecks while continuing hardware-only attacks;
-    // "campaign-safe" = the same full-height terrain traversal without dash,
-    // preserving health by avoiding sustained contact pressure;
-    // "campaign-clear" = campaign-safe through the saber handoff, followed by
-    // a selectable input-only boss strategy (GBARECOMP_BOSS_STRATEGY);
-    // any other value = the menu/masher track.
+    // the walker; any other value = the menu/masher track.
     const char* demo_env = std::getenv("GBARECOMP_DEMO_INPUT");
     const bool demo_input = !args.window && demo_env != nullptr;
     const bool demo_walk = demo_env && std::strcmp(demo_env, "walk") == 0;
     const bool demo_campaign =
         demo_env && std::strcmp(demo_env, "campaign") == 0;
-    const bool demo_campaign_combat =
-        demo_env && std::strcmp(demo_env, "campaign-combat") == 0;
-    const bool demo_campaign_traverse =
-        demo_env && std::strcmp(demo_env, "campaign-traverse") == 0;
-    const bool demo_campaign_safe =
-        demo_env && std::strcmp(demo_env, "campaign-safe") == 0;
-    const bool demo_campaign_clear =
-        demo_env && std::strcmp(demo_env, "campaign-clear") == 0;
-    const char* boss_strategy_env = std::getenv("GBARECOMP_BOSS_STRATEGY");
-    // golem_attempt is the reviewed deterministic route that triggers the
-    // opening Golem and reaches the Z-Saber finish attempt. It currently
-    // retries rather than proving the kill; other values remain available for
-    // input-only route experiments.
-    const std::string boss_strategy = boss_strategy_env ? boss_strategy_env : "golem_attempt";
     auto demo_keyinput_for_frame = [](uint64_t frame) -> uint16_t {
         enum : uint16_t {
             KEY_A = 1u << 0, KEY_B = 1u << 1, KEY_START = 1u << 3,
@@ -3750,123 +3737,6 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         uint16_t btn = kDirs[(frame / kHold) % 4];
         if ((frame % 60) < 2) btn |= KEY_A;
         return static_cast<uint16_t>(0x03FFu & ~btn);  // KEYINPUT active-low
-    };
-    // Generic side-scrolling combat stress track. It uses hardware KEYINPUT
-    // only: hold right, pulse B frequently, jump with A, and periodically hold
-    // L so games that map it to dash exercise combined movement. Keeping this
-    // separate from "campaign" preserves the established oracle replay.
-    auto combat_keyinput_for_frame = [](uint64_t frame) -> uint16_t {
-        enum : uint16_t {
-            KEY_A = 1u << 0, KEY_B = 1u << 1, KEY_L = 1u << 9,
-            KEY_RIGHT = 1u << 4,
-        };
-        uint16_t btn = KEY_RIGHT;
-        if ((frame % 12u) < 3u) btn |= KEY_B;
-        const uint64_t motion_phase = frame % 180u;
-        if (motion_phase < 50u) btn |= KEY_L;
-        if (motion_phase >= 30u && motion_phase < 40u) btn |= KEY_A;
-        return static_cast<uint16_t>(0x03FFu & ~btn);
-    };
-    // Traversal stress track: keep forward pressure, dash for most of each
-    // cycle, and hold jump long enough to reach full height.  B remains a
-    // short edge-triggered pulse so terrain traversal still fights enemies.
-    auto traverse_keyinput_for_frame = [](uint64_t frame) -> uint16_t {
-        enum : uint16_t {
-            KEY_A = 1u << 0, KEY_B = 1u << 1, KEY_L = 1u << 9,
-            KEY_RIGHT = 1u << 4,
-        };
-        uint16_t btn = KEY_RIGHT;
-        if ((frame % 10u) < 3u) btn |= KEY_B;
-        const uint64_t motion_phase = frame % 120u;
-        if (motion_phase < 75u) btn |= KEY_L;
-        if (motion_phase >= 18u && motion_phase < 50u) btn |= KEY_A;
-        return static_cast<uint16_t>(0x03FFu & ~btn);
-    };
-    // Safer traversal track: retain the long jumps needed for opening-stage
-    // geometry, frequent buster pulses, and steady forward movement, but omit
-    // dash so Zero does not continuously force contact with enemies/bosses.
-    auto safe_keyinput_for_frame = [](uint64_t frame) -> uint16_t {
-        enum : uint16_t {
-            KEY_A = 1u << 0, KEY_B = 1u << 1, KEY_RIGHT = 1u << 4,
-        };
-        uint16_t btn = KEY_RIGHT;
-        if ((frame % 10u) < 3u) btn |= KEY_B;
-        const uint64_t motion_phase = frame % 120u;
-        if (motion_phase >= 18u && motion_phase < 50u) btn |= KEY_A;
-        return static_cast<uint16_t>(0x03FFu & ~btn);
-    };
-    // Opening Golem strategy matrix. This is deterministic KEYINPUT
-    // orchestration only: it neither reads nor writes guest state. The route
-    // branches after the observed saber-handoff window so experiments share
-    // the same LLE approach to the boss.
-    auto boss_keyinput_for_frame = [&boss_strategy](uint64_t frame) -> uint16_t {
-        enum : uint16_t {
-            KEY_A = 1u << 0, KEY_B = 1u << 1,
-            KEY_RIGHT = 1u << 4, KEY_LEFT = 1u << 5, KEY_R = 1u << 8,
-        };
-        uint16_t btn = 0;
-        const uint64_t phase = frame % 120u;
-        if (boss_strategy == "golem_attempt") {
-            // The safe traversal reaches the stable pre-trigger room at local
-            // frame 5500. Approach Ciel and advance the scripted loss/handoff,
-            // then close a bounded distance and repeatedly use B: the handoff
-            // equips Z-Saber as the main weapon for this encounter.
-            constexpr uint64_t kTrigger = 5500u;
-            if (frame < kTrigger) {
-                if (phase >= 18u && phase < 50u) btn |= KEY_A;
-                if (phase >= 30u && phase < 38u) btn |= KEY_R;
-            } else {
-                const uint64_t encounter = frame - kTrigger;
-                if (encounter < 54u) {
-                    btn |= KEY_RIGHT;
-                } else if (encounter < 700u) {
-                    if (((encounter - 54u) % 12u) < 4u) btn |= KEY_A;
-                } else if (encounter < 4200u) {
-                    const uint64_t scripted_phase = (encounter - 700u) % 120u;
-                    if (scripted_phase >= 18u && scripted_phase < 50u) btn |= KEY_A;
-                    if (scripted_phase >= 30u && scripted_phase < 38u) btn |= KEY_R;
-                } else {
-                    const uint64_t finish = encounter - 4200u;
-                    if (finish < 120u) {
-                        if ((finish % 12u) < 4u) btn |= KEY_A;
-                    } else {
-                        const uint64_t active = finish - 120u;
-                        if (active < 70u) btn |= KEY_RIGHT;
-                        if (active >= 50u && (active % 12u) < 4u) btn |= KEY_B;
-                        const uint64_t finish_phase = active % 120u;
-                        if (finish_phase >= 18u && finish_phase < 50u) btn |= KEY_A;
-                    }
-                }
-            }
-        } else if (boss_strategy == "stand_fire") {
-            if ((frame % 10u) < 3u) btn |= KEY_B;
-        } else if (boss_strategy == "jump_fire") {
-            if ((frame % 10u) < 3u) btn |= KEY_B;
-            if (phase >= 18u && phase < 50u) btn |= KEY_A;
-        } else if (boss_strategy == "retreat_jump_fire") {
-            if (frame < 180u) btn |= KEY_LEFT;
-            if ((frame % 10u) < 3u) btn |= KEY_B;
-            if (phase >= 18u && phase < 50u) btn |= KEY_A;
-        } else if (boss_strategy == "jump_slash") {
-            if (phase >= 18u && phase < 50u) btn |= KEY_A;
-            if (phase >= 30u && phase < 36u) btn |= KEY_B;
-        } else if (boss_strategy == "charge_jump") {
-            // Hold B to charge, then release near the top of a full jump.
-            if (phase < 72u) btn |= KEY_B;
-            if (phase >= 30u && phase < 66u) btn |= KEY_A;
-        } else if (boss_strategy == "saber_jump") {
-            if (phase >= 18u && phase < 50u) btn |= KEY_A;
-            if (phase >= 30u && phase < 38u) btn |= KEY_R;
-        } else if (boss_strategy == "saber_charge_jump") {
-            // X gives the Z-Saber in the sub-weapon slot: charge/release R.
-            if (phase < 72u) btn |= KEY_R;
-            if (phase >= 30u && phase < 66u) btn |= KEY_A;
-        } else {  // baseline: retain the safe route's forward pressure.
-            btn |= KEY_RIGHT;
-            if ((frame % 10u) < 3u) btn |= KEY_B;
-            if (phase >= 18u && phase < 50u) btn |= KEY_A;
-        }
-        return static_cast<uint16_t>(0x03FFu & ~btn);
     };
     uint64_t demo_last_frame = ~uint64_t{0};
 
@@ -3953,22 +3823,11 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 // the status menu. This is input-only test orchestration: no
                 // guest state or timing is injected.
                 constexpr uint64_t kCampaignWalkStart = 9000;
-                constexpr uint64_t kCampaignBossStart = 14500;
                 const uint16_t keys = demo_walk
                     ? walk_keyinput_for_frame(fc)
-                    : (demo_campaign_clear && fc >= kCampaignBossStart)
-                        ? boss_keyinput_for_frame(fc - kCampaignBossStart)
-                    : (demo_campaign_clear && fc >= kCampaignWalkStart)
-                        ? safe_keyinput_for_frame(fc - kCampaignWalkStart)
-                    : (demo_campaign_safe && fc >= kCampaignWalkStart)
-                        ? safe_keyinput_for_frame(fc - kCampaignWalkStart)
-                    : (demo_campaign_traverse && fc >= kCampaignWalkStart)
-                        ? traverse_keyinput_for_frame(fc - kCampaignWalkStart)
-                    : (demo_campaign_combat && fc >= kCampaignWalkStart)
-                        ? combat_keyinput_for_frame(fc - kCampaignWalkStart)
-                        : (demo_campaign && fc >= kCampaignWalkStart)
-                            ? walk_keyinput_for_frame(fc - kCampaignWalkStart)
-                            : demo_keyinput_for_frame(fc);
+                    : (demo_campaign && fc >= kCampaignWalkStart)
+                        ? walk_keyinput_for_frame(fc - kCampaignWalkStart)
+                        : demo_keyinput_for_frame(fc);
                 bus.io().set_keyinput(keys);
             }
         }

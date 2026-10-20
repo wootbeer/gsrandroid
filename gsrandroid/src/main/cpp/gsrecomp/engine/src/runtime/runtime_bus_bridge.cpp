@@ -188,6 +188,24 @@ extern "C" bool g_cost_probe_enabled(void) { return g_cost_probe; }
 static inline void cost_bk(int slot) {
     if (g_cost_probe) ++g_cost_bk[slot];
 }
+#ifdef __ANDROID__
+// GSR-ANDROID: picture-drawing time per frame for the timing log (runtime.cpp, gsr_perf_log.txt). Always on;
+// two clock reads per scanline.
+extern "C" unsigned long long g_gsr_ppu_ns = 0, g_gsr_ppu_latch_ns = 0;
+struct GsrPpuTimer {
+    unsigned long long* acc;
+    std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+    explicit GsrPpuTimer(unsigned long long* a) : acc(a) {}
+    ~GsrPpuTimer() {
+        *acc += static_cast<unsigned long long>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - t0).count());
+    }
+};
+#define GSR_PPU_TIME(acc) GsrPpuTimer _gsr_ppu_t(&acc)
+#else
+#define GSR_PPU_TIME(acc) (void)0
+#endif
+
 struct CostTimer {
     unsigned long long* ns_accum;
     unsigned long long* call_accum;
@@ -251,7 +269,8 @@ static unsigned long long g_idle_skipped_cycles = 0;
 static unsigned long long g_idle_skipped_iters  = 0;
 static unsigned long long g_idle_confirmed_sites = 0;
 
-// Shadow-tick mode for the differential gate (see heal_gate.h). While
+// Shadow-tick mode for the differential gate (archived unused 2026-10-20,
+// Archive/2026-10-20-heal-gate). While
 // g_runtime_shadow_tick is set (during a throwaway validation or transactional
 // guest re-run), runtime_tick accumulates the cycle cost into
 // g_runtime_shadow_cycles and does NOTHING else: no device pump, no IRQ
@@ -1401,6 +1420,7 @@ static void tick_devices(gba::GbaBus* bus, gba::GbaPpu* ppu, uint32_t cycles) {
                 if (phase_prof_enabled()) _prof_t0 = std::chrono::steady_clock::now();
                 {
                     CostTimer _ct_render(&g_cost_ppu_render_ns, &g_cost_ppu_render_calls);
+                    GSR_PPU_TIME(g_gsr_ppu_ns);
                     gbarecomp::HostProfPhaseScope _hp_ppu(gbarecomp::kHpPpuRender);
                     ppu->render_scanline(ppu->vcount(),
                                          bus->io().read16(0x000),
@@ -1453,6 +1473,7 @@ static void tick_devices(gba::GbaBus* bus, gba::GbaPpu* ppu, uint32_t cycles) {
                 if (mark_renders) {
                     CostTimer _ct_render(&g_cost_ppu_render_ns,
                                          &g_cost_ppu_render_calls);
+                    GSR_PPU_TIME(g_gsr_ppu_latch_ns);
                     gbarecomp::HostProfPhaseScope _hp_ppu(gbarecomp::kHpPpuRender);
                     ppu->mark_framebuffer_latched();
                 } else {

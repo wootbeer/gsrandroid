@@ -37,7 +37,7 @@ remove or reword upstream copyright headers when updating.
 
 - `gsr/` : host seam and Android glue (`gsr_host`, `gsr_controls`, `gsr_settings`, `gsr_jni`,
   `gsr_main`, `gsr_engine`, `gsr_text`, `gpu_surface_android.cpp`)
-- `gsrecomp/engine/src/runtime/host_window_android.cpp` : the HostWindow backend (also the no-op window hand-over and Seamless screen-veil functions)
+- `gsrecomp/engine/src/runtime/host_window_android.cpp` : the HostWindow backend (also the no-op window hand-over, Seamless screen-veil and local-music functions)
 - `descore/` additions: `descore_is_paused`, `descore_request_menu`
 - Java: `wootbeer.gsrandroid.*` (menu, native bridge, activity)
 
@@ -49,7 +49,8 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 |---|---|
 | `engine/src/runtime/host_window.cpp` | stub guard becomes `#elif !defined(GSR_ANDROID_HOST)` so the Android backend is used |
 | `engine/src/armv4t/runtime_arm.cpp` | `GSR_ANDROID_LATEBIND` |
-| `engine/src/runtime/runtime.cpp` | `GSR_ANDROID_RUNTIME`: when 2x frame interpolation cannot build an in-between frame, blend the previous and new real frames 50/50 instead of jumping to the new one, and tell the host (`gsr_host_present_slot`) which present is the in-between frame so flicker reduction can treat it like the real frames (CMake adds the define) |
+| `engine/src/runtime/runtime_bus_bridge.cpp` | `__ANDROID__`: times the picture drawing (`GsrPpuTimer`) for the timing log |
+| `engine/src/runtime/runtime.cpp` | `GSR_ANDROID_RUNTIME`: the timing log `gsr_perf_log.txt` (path from `GSR_PERF_LOG`, set in `gsr_prepare.c`). Also: when 2x frame interpolation cannot build an in-between frame, blend the previous and new real frames 50/50 instead of jumping to the new one, and tell the host (`gsr_host_present_slot`) which present is the in-between frame so flicker reduction can treat it like the real frames (CMake adds the define) |
 | `engine/src/runtime/host_window_android.cpp` (ours) | `present_native` / `native_renderer_enabled` back the High-res rendering option |
 | `tbs/src/runner_main.cpp` | `GSR_ANDROID_ENGINE`: `gpu_field_enabled()` reads the Renderer setting live; `gpu_field_present_override` is wrapped to report whether the GPU drew the frame; init result reported |
 | `player_builder/builder_main.cpp` | `GSR_ANDROID_INPROCESS`: in-process translator entry, and the `spawn` helper -- a single-threaded process started first thing in `main` that forks every translator (forking from the multithreaded builder could freeze a translator at 59%) and runs the watchdog |
@@ -86,8 +87,8 @@ The view modes now come from `engine/src/runtime/view_config.h` (Original 240x16
 Extra Wide 480x320). The side menu's View setting still offers the first two; the Android HostWindow
 reports the Original aspect, so a mode's size is used as is.
 
-Vendored engine version: 0.5.2 (upstream commit 7958fa6), updated 2026-10-19 from https://github.com/Shmargus/GSRecomp
-(previously 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
+Vendored engine version: 0.5.3 (upstream commit 27fedb5), updated 2026-10-20 from https://github.com/Shmargus/GSRecomp
+(previously 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
 
 How the update is done (repeat this next time): a three-way git merge with base = the upstream commit we
 were on (only the files we vendor), ours = the vendored folder, theirs = the new upstream commit. Only files we

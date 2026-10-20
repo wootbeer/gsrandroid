@@ -85,7 +85,6 @@ add_library(gsrecomp_core STATIC
 		${GSRC_GB}/src/runtime/frame_history.cpp
 		${GSRC_GB}/src/runtime/game_options.cpp
 		${GSRC_GB}/src/runtime/memory_snapshot.cpp
-		${GSRC_GB}/src/runtime/heal_gate.cpp
 		${GSRC_GB}/src/runtime/host_config_ui.cpp
 		${GSRC_GB}/src/runtime/host_overlay.cpp
 		${GSRC_GB}/src/runtime/host_platform.cpp
@@ -123,7 +122,7 @@ target_include_directories(gsrecomp_core PRIVATE
 		${CMAKE_CURRENT_SOURCE_DIR}/gsr)
 # CMake 3.10 (pinned in build.gradle) has no cxx_std_20 feature, so ask for C++20 directly
 target_compile_options(gsrecomp_core PRIVATE -std=c++20)
-target_compile_options(gsrecomp_core PRIVATE -w -fPIC -O2)
+target_compile_options(gsrecomp_core PRIVATE -w -fPIC -O3)
 
 set(GSR_SOURCES
 		gsr/gsr_main.c
@@ -146,9 +145,9 @@ add_library(gsrhost SHARED ${DESCORE_SOURCES} ${GSR_SOURCES})
 target_include_directories(gsrhost PRIVATE descore gsr ${GSRC_GB}/src/runtime)
 # GLES 3 mode of the shared shell: no fixed-function video present, shader-based touch overlay.
 target_compile_definitions(gsrhost PRIVATE DESCORE_GLES3)
-# -O2 also in debug builds (the play button): the present path touches every pixel of every frame, and
-# unoptimised it makes the Expanded view crawl. The engine libraries ask for -O2 themselves.
-target_compile_options(gsrhost PRIVATE -O2)
+# -O3 also in debug builds (the play button): the present path touches every pixel of every frame, and
+# unoptimised it makes the Expanded view crawl. The engine libraries ask for -O3 themselves (the picture drawing is the hot path).
+target_compile_options(gsrhost PRIVATE -O3)
 
 # The engine core lives in gsrecomp_core; link all of it (whole-archive) so libgsrengine.so and the
 # game libraries built on the device find every engine symbol exported from libgsrhost.so.
@@ -191,7 +190,7 @@ target_include_directories(gsrengine PRIVATE
 		${GSRC_TBS}/src ${GSRC_GB} ${GSRC_GB}/src/field ${GSRC_PB}
 		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/runtime ${GSRC_GB}/src/debug
 		${GSRC_GB}/src/recompile ${GSRC_TBS}/config/usa)
-target_compile_options(gsrengine PRIVATE -std=c++20 -w -fPIC -O2)
+target_compile_options(gsrengine PRIVATE -std=c++20 -w -fPIC -O3)
 target_compile_definitions(gsrengine PRIVATE GBARECOMP_DEFAULT_DEBUG_PORT=19843 GSR_ANDROID_ENGINE)
 # game symbols are undefined here on purpose
 set_target_properties(gsrengine PROPERTIES LINK_FLAGS "-Wl,-z,undefs -Wl,--no-as-needed")
