@@ -2536,7 +2536,11 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 static bool opened = false;
                 if (!opened) {
                     opened = true;
-                    if (const char* lp = std::getenv("GSR_PERF_LOG"); lp && *lp) log = std::fopen(lp, "w");
+                    if (const char* lp = std::getenv("GSR_PERF_LOG"); lp && *lp) {
+                        // Emptied, then appended to: other lines (#win, runner_main.cpp) go in the same file.
+                        if (std::FILE* t = std::fopen(lp, "w")) std::fclose(t);
+                        log = std::fopen(lp, "a");
+                    }
                     if (log) std::fprintf(log, "frame,view,avg_us:guest,ppu_lines,ppu_extra_rows,wide_bg,wide_obj,wide_mix,render,present,pacer,audio,pump,worst_frame_us\n");
                 }
                 const uint64_t frame_us = s.guest_us + s.render_us + s.present_us + s.pacer_us + s.audio_us + s.pump_us;
