@@ -11898,6 +11898,11 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
     {
         static std::vector<std::uint8_t> last_field;
         static std::uint32_t last_w = 0, last_h = 0;
+        // Once showing the held sides, keep them through the menu's own transition frames (the game
+        // turns the field layers off for a moment when the status screen closes), as long as the
+        // screen is not blanked and the map has not changed.
+        static bool holding = false;
+        static std::uint16_t hold_map = 0;
         const std::uint32_t L = g_golden_sun_wide_extra_left, T = g_golden_sun_wide_extra_top;
         const bool geometry = golden_sun_expanded_obj_view_active() &&
             L + 240u + g_golden_sun_wide_extra_right == width &&
@@ -11906,13 +11911,11 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
         const bool field_on = (dispcnt & 0x0080u) == 0u && (dispcnt & 0x0E00u) != 0u;
         const bool room = gsr::room_buffer_row_is_room();
         const std::size_t bytes = static_cast<std::size_t>(width) * height * 3u;
-        if (!geometry || !room) {
-            last_field.clear();
-        } else if (g_gsr_field_px_now >= 1500u) {  // this frame, now complete
-            last_field.assign(rgb, rgb + bytes);  // a normal field frame: remember it
-            last_w = width;
-            last_h = height;
-        } else if (field_on && last_field.size() == bytes && last_w == width && last_h == height) {
+        const std::uint16_t map_no = bus_read_u16(0x02000408u);
+        const bool blanked = (dispcnt & 0x0080u) != 0u;
+        const bool keep_holding = holding && !blanked && map_no == hold_map;
+        const bool have_last = last_field.size() == bytes && last_w == width && last_h == height;
+        const auto paint_held_sides = [&] {
             const std::size_t row_bytes = static_cast<std::size_t>(width) * 3u;
             for (std::uint32_t y = 0; y < height; ++y) {
                 std::uint8_t* d = rgb + y * row_bytes;
@@ -11926,6 +11929,26 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
                 }
             }
             drawn = true;
+        };
+        if (!geometry || (!room && !keep_holding)) {
+            last_field.clear();
+            holding = false;
+        } else if (room && g_gsr_field_px_now >= 1500u && g_gsr_field_px_last < 1500u) {
+            // The first frame back: the field shows again in the middle, but this frame's sides
+            // were still drawn black (the margin rule judges by the previous frame).
+            if (have_last) paint_held_sides();
+            holding = false;
+        } else if (room && g_gsr_field_px_now >= 1500u) {  // this frame, now complete
+            last_field.assign(rgb, rgb + bytes);  // a normal field frame: remember it
+            last_w = width;
+            last_h = height;
+            holding = false;
+        } else if (((room && field_on) || keep_holding) && have_last) {
+            if (!holding) hold_map = map_no;
+            holding = true;
+            paint_held_sides();
+        } else {
+            holding = false;
         }
     }
 #endif
