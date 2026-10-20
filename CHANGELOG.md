@@ -11,6 +11,9 @@
 - The build log (Android/data/wootbeer.gsrandroid/files/gsr_build_log.txt) was never written  
 - Expanded view ran slowly (now about as fast as Native)  
 - Title and file select looked blurry in Expanded view  
+- Screen tearing (a line across the picture), most visible when fast forwarding  
+- Garbled colours beside the status screen in Expanded view  
+- Black strip at the top of the sides in battles in Expanded view  
 
 ## [0.2. (10-9-2026)]
 
