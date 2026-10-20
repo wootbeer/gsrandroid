@@ -50,6 +50,7 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `engine/src/runtime/host_window.cpp` | stub guard becomes `#elif !defined(GSR_ANDROID_HOST)` so the Android backend is used |
 | `engine/src/armv4t/runtime_arm.cpp` | `GSR_ANDROID_LATEBIND` |
 | `engine/src/gba/gba_ppu.h`, `gba_ppu.cpp` | `GSR-ANDROID`: optional `g_ws_field_tilemap_source_span` hook; the expanded compositor asks the room buffer once per run of pixels (rest of the tile / up to the room edge) instead of once per pixel |
+| `engine/src/gba/gba_ppu.cpp` (sprites) | `GSR-ANDROID` (`__ANDROID__`): the expanded compositor remembers each OBJ's x/y/park provider answers for the rest of the frame while its OAM attributes are unchanged, instead of asking on every row; also times its stages for the perf log |
 | `tbs/src/room_buffer.cpp`, `room_buffer.h` | `GSR-ANDROID`: `room_buffer_supply_span` / `gsr_field_tilemap_source_span` answer that hook (same answers as the per-pixel source) |
 | `engine/src/runtime/runtime_bus_bridge.cpp` | `__ANDROID__`: times the picture drawing (`GsrPpuTimer`) for the timing log |
 | `engine/src/runtime/runtime.cpp` | `GSR_ANDROID_RUNTIME`: the timing log `gsr_perf_log.txt` (path from `GSR_PERF_LOG`, set in `gsr_prepare.c`). Also: when 2x frame interpolation cannot build an in-between frame, blend the previous and new real frames 50/50 instead of jumping to the new one, and tell the host (`gsr_host_present_slot`) which present is the in-between frame so flicker reduction can treat it like the real frames (CMake adds the define) |

@@ -1955,6 +1955,25 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
         // Sprite priority lift, as in render_scanline_internal's OBJ loop.
         static thread_local std::vector<uint8_t> obj_lift;
         obj_lift.assign(out_w, 4);
+#ifdef __ANDROID__
+        // GSR-ANDROID: the game's placement providers (x, y, park) answer per OBJ, not per row, but are
+        // asked on every row -- 128 OBJs x every row, which was most of the expanded view's cost on a
+        // phone. Remember each OBJ's answers for the rest of the frame while its OAM attributes are
+        // unchanged. A row that is not below the previous one starts a new frame (the top/bottom margin
+        // rows are drawn after the native rows, and a repaint restarts from the top).
+        struct ObjAnswer {
+            uint32_t gen = 0;
+            uint16_t a0 = 0, a1 = 0, a2 = 0;
+            int sy = 0, sx = 0;
+            bool sy_trusted = false, sx_trusted = false;
+            int8_t parked = -1;  // -1 = not asked yet this frame
+        };
+        static ObjAnswer obj_answers[128];
+        static uint32_t obj_gen = 1;
+        static int obj_last_y = 0x7FFFFFFF;
+        if (logical_y <= obj_last_y) ++obj_gen;
+        obj_last_y = logical_y;
+#endif
         for (int idx = 127; idx >= 0; --idx) {
             const uint8_t* entry = oam + idx * 8;
             uint16_t attr0 = load_u16_le(&entry[0]);
@@ -1996,7 +2015,26 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
                     sy_trusted = false;
                 }
             };
+#ifdef __ANDROID__
+            ObjAnswer& answer = obj_answers[idx];
+            const bool answer_known = answer.gen == obj_gen && answer.a0 == attr0 &&
+                                      answer.a1 == attr1 && answer.a2 == attr2;
+            if (!answer_known) {
+                answer = ObjAnswer{};
+                answer.gen = obj_gen;
+                answer.a0 = attr0;
+                answer.a1 = attr1;
+                answer.a2 = attr2;
+                resolve_sy();
+                answer.sy = sy;
+                answer.sy_trusted = sy_trusted;
+            } else {
+                sy = answer.sy;
+                sy_trusted = answer.sy_trusted;
+            }
+#else
             resolve_sy();
+#endif
             // Mirror the regular-BG world shift above: moving the whole
             // canvas by (shift_x, shift_y) means a sprite fixed at world
             // position W must be drawn shift_y/shift_x pixels *earlier* on
@@ -2029,7 +2067,18 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
             };
             // Resolve X before culling, without replacing an authenticated
             // position with a wrapped OAM coordinate.
+#ifdef __ANDROID__
+            if (!answer_known) {
+                resolve_sx();
+                answer.sx = sx;
+                answer.sx_trusted = sx_trusted;
+            } else {
+                sx = answer.sx;
+                sx_trusted = answer.sx_trusted;
+            }
+#else
             resolve_sx();
+#endif
             // Tally trust outcome once per OBJ per frame: an OBJ may only be
             // placed into the margin when both axes are trusted.
             if (logical_y == 0) {
@@ -2087,9 +2136,16 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
             // inside the new margins. `g_ws_obj_park_provider` lets the game
             // name exactly those slots, and everything else now draws where it
             // really is. An OBJ with no park provider at all is never confined.
+#ifdef __ANDROID__
+            if (answer.parked < 0)
+                answer.parked = (g_ws_obj_park_provider &&
+                                 g_ws_obj_park_provider(idx, attr0, attr1, attr2) != 0) ? 1 : 0;
+            const bool obj_parked = answer.parked != 0;
+#else
             const bool obj_parked =
                 g_ws_obj_park_provider &&
                 g_ws_obj_park_provider(idx, attr0, attr1, attr2) != 0;
+#endif
             auto emit_obj = [&](int tex_x, int tex_y, int screen_x) {
                 const bool native_row =
                     logical_y >= 0 && logical_y < static_cast<int>(kVanH);
