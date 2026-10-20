@@ -6075,7 +6075,15 @@ int golden_sun_battle_bg_sample_provider(int bg, int output_x, int screen_y,
         (bg == static_cast<int>(gsr::battle::kArenaAffineLayer) &&
          st.affine_margin_allowed)) {
         if (!native_row) return -1;
+#ifdef GSR_ANDROID_ENGINE
+        // GSR_ANDROID_ENGINE: after the first round the game lowers the top of the WIN0V band to
+        // make room for the party's HP boxes, but the arena still shows above it in the middle of
+        // the screen. Continue it to the top in the margins too (only the bottom, the command menu,
+        // stays cut), instead of leaving a black strip above the band at both sides.
+        if (screen_y >= st.band_bottom) return -1;
+#else
         if (screen_y < st.band_top || screen_y >= st.band_bottom) return -1;
+#endif
         *out_hw_x = out_x;
         *out_hw_y = screen_y;
         return 1;
