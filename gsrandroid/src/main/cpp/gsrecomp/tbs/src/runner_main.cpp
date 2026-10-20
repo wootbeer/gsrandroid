@@ -9107,6 +9107,8 @@ extern "C" int gsr_host_gpu_wanted(void);
 extern "C" void gsr_host_gpu_report_init(int ok);
 extern "C" void gsr_host_gpu_report_frame(int drew);
 extern "C" int gsr_host_debug(void);
+extern "C" int gsr_host_present_crop;            // host_window_android.cpp
+extern "C" unsigned gsr_host_present_crop_x, gsr_host_present_crop_y;
 bool gpu_field_enabled() { return gsr_host_gpu_wanted() != 0; }
 #else
 bool gpu_field_enabled() {
@@ -10320,8 +10322,10 @@ bool gpu_field_present_override(std::uint8_t* rgb, std::uint32_t width,
                           delivered->capture, delivered->world_source_ok);
     frame = std::move(delivered->frame);
     frame.gpu_drawn = true;
+#ifndef GSR_ANDROID_ENGINE  // GSR_ANDROID: no F12 history to save, so skip the per-frame scene dump
     frame.scene = gpu_field_dump_bytes(delivered->capture);
     frame.scene_frame = delivered->capture.scene.frame;
+#endif
 
     return true;
 }
@@ -11740,10 +11744,12 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
     // Settings paint reads live window/font state. A torn spell picture and
     // settings therefore form explicit synchronous boundaries.
     bool drawn = gpu_field_present_override(rgb, width, height, frame, settings || held);
+#ifndef GSR_ANDROID_ENGINE  // GSR_ANDROID: see above
     if (frame.scene.empty() && g_gpu_field_capture.valid) {
         frame.scene = gpu_field_dump_bytes(g_gpu_field_capture);
         frame.scene_frame = g_gpu_field_capture.scene.frame;
     }
+#endif
     if (held) {
         const auto& last = g_history.back(0);
         std::copy(last.rgb.begin(), last.rgb.end(), rgb);
@@ -11784,8 +11790,10 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
 #endif
 #ifdef GSR_ANDROID_ENGINE
     // Boot/title/intro are drawn at the original 240x160 in the middle of the
-    // expanded canvas with black all round. Scale that picture up to fill the
-    // canvas height (aspect kept, so only the sides stay black).
+    // expanded canvas with black all round. Have the host show just that
+    // middle 240x160, so these screens look exactly like the Native view
+    // (an in-engine 1.5x rescale of them looked soft next to it).
+    gsr_host_present_crop = 0;
     if (golden_sun_expanded_obj_view_active() && !drawn &&
         g_golden_sun_wide_extra_left + 240u + g_golden_sun_wide_extra_right == width &&
         g_golden_sun_wide_extra_top + 160u + g_golden_sun_wide_extra_bottom == height) {
@@ -11793,39 +11801,9 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
             bus_read_u16(0x0400000Eu) == 0x0503u &&
             (bus_read_u16(0x0400000Cu) == 0x0681u || bus_read_u16(0x0400000Cu) == 0x0685u);
         if (bus_read_u16(0x02000408u) <= 1u || title_bgcnt) {
-            const std::uint32_t L = g_golden_sun_wide_extra_left;
-            const std::uint32_t T = g_golden_sun_wide_extra_top;
-            const float sc = std::min(static_cast<float>(width) / 240.0f,
-                                      static_cast<float>(height) / 160.0f);
-            const std::uint32_t dw = static_cast<std::uint32_t>(240.0f * sc);
-            const std::uint32_t dh = static_cast<std::uint32_t>(160.0f * sc);
-            const std::uint32_t ox = (width - dw) / 2u, oy = (height - dh) / 2u;
-            std::vector<std::uint8_t> src(static_cast<std::size_t>(240) * 160 * 3);
-            for (std::uint32_t y = 0; y < 160; ++y)
-                std::memcpy(&src[static_cast<std::size_t>(y) * 240 * 3],
-                            rgb + (static_cast<std::size_t>(T + y) * width + L) * 3u, 240u * 3u);
-            std::memset(rgb, 0, static_cast<std::size_t>(width) * height * 3u);
-            for (std::uint32_t y = 0; y < dh; ++y) {
-                const float fy = std::min(159.0f, (y + 0.5f) / sc - 0.5f);
-                const float fyc = fy < 0 ? 0 : fy;
-                const std::uint32_t y0 = static_cast<std::uint32_t>(fyc);
-                const std::uint32_t y1 = std::min(159u, y0 + 1u);
-                const float wy = fyc - y0;
-                for (std::uint32_t x = 0; x < dw; ++x) {
-                    const float fx = std::min(239.0f, (x + 0.5f) / sc - 0.5f);
-                    const float fxc = fx < 0 ? 0 : fx;
-                    const std::uint32_t x0 = static_cast<std::uint32_t>(fxc);
-                    const std::uint32_t x1 = std::min(239u, x0 + 1u);
-                    const float wx = fxc - x0;
-                    std::uint8_t* d = rgb + (static_cast<std::size_t>(oy + y) * width + ox + x) * 3u;
-                    for (int c = 0; c < 3; ++c) {
-                        const float a = src[(y0 * 240 + x0) * 3 + c] * (1 - wx) + src[(y0 * 240 + x1) * 3 + c] * wx;
-                        const float b = src[(y1 * 240 + x0) * 3 + c] * (1 - wx) + src[(y1 * 240 + x1) * 3 + c] * wx;
-                        d[c] = static_cast<std::uint8_t>(a * (1 - wy) + b * wy + 0.5f);
-                    }
-                }
-            }
-            drawn = true;
+            gsr_host_present_crop_x = g_golden_sun_wide_extra_left;
+            gsr_host_present_crop_y = g_golden_sun_wide_extra_top;
+            gsr_host_present_crop = 1;
         }
     }
 #endif

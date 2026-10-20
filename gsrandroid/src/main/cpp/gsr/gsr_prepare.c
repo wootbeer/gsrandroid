@@ -147,6 +147,11 @@ static int derive_dirs(const char *data_dir) {
 	snprintf(g_tmp, sizeof g_tmp, "%s/build_tmp", g_root);
 	snprintf(g_status, sizeof g_status, "%s/build_status.txt", g_root);
 	snprintf(g_log, sizeof g_log, "/sdcard/Android/data/%s/files/gsr_build_log.txt", g_pkg);
+	{ /* timing summary written by the engine (runtime.cpp, GSR_ANDROID_RUNTIME) */
+		char perf[700];
+		snprintf(perf, sizeof perf, "/sdcard/Android/data/%s/files/gsr_perf_log.txt", g_pkg);
+		setenv("GSR_PERF_LOG", perf, 1);
+	}
 	return 0;
 }
 

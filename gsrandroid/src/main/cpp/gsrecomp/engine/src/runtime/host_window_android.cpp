@@ -48,6 +48,7 @@ struct State {
     int blend_history = 0;
     bool blend_did_last = false;       // the last real frame was blended (blend_prev = it, blend_out = result)
     std::vector<uint8_t> blend_mid;
+    std::vector<uint8_t> cropped;      // the native 240x160 part of an Expanded frame (see gsr_host_present_crop)
     int slot = 0;                      // 1 while the engine presents a 2x-interpolation in-between frame
 } g;
 
@@ -106,6 +107,14 @@ bool HostWindow::drawable_size(int* width, int* height) const {
     return w > 0 && h > 0;
 }
 
+// Set by the game layer (runner_main.cpp) on frames whose picture is only the native 240x160 at
+// (x, y) inside a larger Expanded canvas (boot, title, file select): the host then shows just that part,
+// exactly as the Native view would.
+extern "C" {
+int gsr_host_present_crop = 0;
+unsigned gsr_host_present_crop_x = 0, gsr_host_present_crop_y = 0;
+}
+
 // Called by the engine (runtime.cpp, GSR_ANDROID_RUNTIME) around the in-between frame of 2x interpolation.
 extern "C" void gsr_host_present_slot(int slot) { g.slot = slot; }
 
@@ -156,6 +165,18 @@ void HostWindow::present(const uint8_t* rgb888) {
         g.graded.resize(static_cast<size_t>(g.base_w) * g.base_h * 3);
         g.lut->map_rgb888(rgb888, g.graded.data(), g.base_w, g.base_h);
         rgb888 = g.graded.data();
+    }
+    if (gsr_host_present_crop && g.base_w >= 240 && g.base_h >= 160 &&
+        gsr_host_present_crop_x + 240u <= static_cast<unsigned>(g.base_w) &&
+        gsr_host_present_crop_y + 160u <= static_cast<unsigned>(g.base_h)) {
+        g.cropped.resize(240u * 160u * 3u);
+        for (unsigned y = 0; y < 160u; ++y)
+            std::memcpy(&g.cropped[y * 240u * 3u],
+                        rgb888 + ((static_cast<size_t>(gsr_host_present_crop_y) + y) * g.base_w +
+                                  gsr_host_present_crop_x) * 3u,
+                        240u * 3u);
+        gsr_host_frame_submit(g.cropped.data(), 240, 160);
+        return;
     }
     gsr_host_frame_submit(rgb888, g.base_w, g.base_h);
 }

@@ -59,7 +59,7 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `tbs/src/unpacker_catch.cpp` | `GSR_ANDROID`: no `<execinfo.h>`/`backtrace()` (API 33+), the host call chain is left out of the diagnostic |
 | `tbs/src/runner_main.cpp` (cheats) | `GSR_ANDROID_CHEATS`: the side menu's Cheats page owns the reward multipliers |
 | `tbs/src/room_buffer.cpp` | `GSR_ANDROID_ENGINE`: map numbers 0/1 and the title's BGCNT set are not rooms; `room_buffer_row_is_room()` |
-| `tbs/src/runner_main.cpp` (more) | `GSR_ANDROID_ENGINE`: margin policy pillarboxes non-room rows; GPU hands boot/title/intro frames to CPU; camera inset skipped for the title; boot/title/intro picture scaled to fill the canvas; intro flare averaging; camera-glide blackout |
+| `tbs/src/runner_main.cpp` (more) | `GSR_ANDROID_ENGINE`: margin policy pillarboxes non-room rows; GPU hands boot/title/intro frames to CPU; camera inset skipped for the title; boot/title/intro shown as the native 240x160 part of the canvas (`gsr_host_present_crop`, read in host_window_android.cpp); intro flare averaging; camera-glide blackout |
 | `tbs/src/runner_main.cpp` (Seamless) | `GSR_ANDROID_ENGINE`: Seamless mode (hand-over to The Lost Age, new in 0.5) is always off and the new-game prompt does not ask about it |
 | `tbs/src/settings_page.h` | `GSR_ANDROID_ENGINE`: the in-game settings page leaves out Screen and No Slowdown (the side menu owns them) |
 | `CMakeLists.txt` | source lists, include dirs, `GSR_ANDROID_*` defines, `gpu_surface_android.cpp` instead of upstream `gpu_surface.cpp` |

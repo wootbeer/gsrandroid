@@ -2520,6 +2520,37 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             gbarecomp::host_prof_note_row_recorded(frame);
             ring[total % kSize] = s;
             ++total;
+#ifdef GSR_ANDROID_RUNTIME
+            // GSR_ANDROID: a short timing summary every 600 frames into GSR_PERF_LOG (the app's files folder),
+            // since an Android app never reaches the desktop's dump at exit.
+            {
+                static uint64_t n = 0, guest = 0, ppu = 0, render = 0, present = 0, pacer = 0, audio = 0, pump = 0,
+                                worst = 0;
+                static std::FILE* log = nullptr;
+                static bool opened = false;
+                if (!opened) {
+                    opened = true;
+                    if (const char* lp = std::getenv("GSR_PERF_LOG"); lp && *lp) log = std::fopen(lp, "w");
+                    if (log) std::fprintf(log, "frame,view,avg_us:guest,ppu,render,present,pacer,audio,pump,worst_frame_us\n");
+                }
+                const uint64_t frame_us = s.guest_us + s.render_us + s.present_us + s.pacer_us + s.audio_us + s.pump_us;
+                ++n; guest += s.guest_us; ppu += s.ppu_render_us; render += s.render_us; present += s.present_us;
+                pacer += s.pacer_us; audio += s.audio_us; pump += s.pump_us;
+                if (frame_us > worst) worst = frame_us;
+                if (n >= 600) {
+                    if (log) {
+                        std::fprintf(log, "%llu,%ux%u,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+                            static_cast<unsigned long long>(frame), g_ws_view_width, g_ws_view_height,
+                            static_cast<unsigned long long>(guest / n), static_cast<unsigned long long>(ppu / n),
+                            static_cast<unsigned long long>(render / n), static_cast<unsigned long long>(present / n),
+                            static_cast<unsigned long long>(pacer / n), static_cast<unsigned long long>(audio / n),
+                            static_cast<unsigned long long>(pump / n), static_cast<unsigned long long>(worst));
+                        std::fflush(log);
+                    }
+                    n = guest = ppu = render = present = pacer = audio = pump = worst = 0;
+                }
+            }
+#endif
             dispatch.reset();
         }
         void dump() const {

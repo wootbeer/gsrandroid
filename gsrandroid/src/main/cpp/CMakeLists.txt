@@ -31,7 +31,7 @@ set(DESCORE_SOURCES
 add_library(tcc STATIC tcc/libtcc.c)
 target_include_directories(tcc PUBLIC tcc)
 target_compile_definitions(tcc PRIVATE ONE_SOURCE=1 TCC_TARGET_ARM64=1 TCC_IS_NATIVE=1 CONFIG_TCC_STATIC=1)
-target_compile_options(tcc PRIVATE -w)
+target_compile_options(tcc PRIVATE -w -O2)  # -O2 also in debug builds: it compiles the game on the device
 
 # ---- GSRecomp's translator and player builder, run inside the app ---------------------------------
 # gsrecomp/ holds copies of the engine (engine/), Golden Sun's game layer (tbs/ = "The Broken Seal")
@@ -146,6 +146,9 @@ add_library(gsrhost SHARED ${DESCORE_SOURCES} ${GSR_SOURCES})
 target_include_directories(gsrhost PRIVATE descore gsr ${GSRC_GB}/src/runtime)
 # GLES 3 mode of the shared shell: no fixed-function video present, shader-based touch overlay.
 target_compile_definitions(gsrhost PRIVATE DESCORE_GLES3)
+# -O2 also in debug builds (the play button): the present path touches every pixel of every frame, and
+# unoptimised it makes the Expanded view crawl. The engine libraries ask for -O2 themselves.
+target_compile_options(gsrhost PRIVATE -O2)
 
 # The engine core lives in gsrecomp_core; link all of it (whole-archive) so libgsrengine.so and the
 # game libraries built on the device find every engine symbol exported from libgsrhost.so.
