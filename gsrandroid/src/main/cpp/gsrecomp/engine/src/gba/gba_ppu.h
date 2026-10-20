@@ -18,6 +18,7 @@
 #include <array>
 #include <cstdint>
 #include <cstddef>
+#include <cstring>  // GSR-ANDROID: publish_latched_fb
 
 namespace gbarecomp::debug { class SnapshotWriter; class SnapshotReader; }
 
@@ -295,7 +296,13 @@ public:
     bool has_latched_native_scene_state() const {
         return has_latched_native_state_;
     }
+#ifdef __ANDROID__
+    // GSR-ANDROID: the frame as it was when it was finished (copied at the latch), so a present
+    // that happens after the next frame's first rows were drawn cannot show half of each.
+    const uint8_t* latched_framebuffer() const { return shown_fb_.data(); }
+#else
     const uint8_t* latched_framebuffer() const { return latched_fb_.data(); }
+#endif
     bool has_latched_framebuffer() const { return has_latched_fb_; }
 
 private:
@@ -312,6 +319,12 @@ private:
     // reallocation; only the first render_bytes() are used (vanilla = 115200).
     std::array<uint8_t, kMaxFramebufferBytes> latched_fb_{};
     bool has_latched_fb_ = false;
+#ifdef __ANDROID__
+    std::array<uint8_t, kMaxFramebufferBytes> shown_fb_{};  // GSR-ANDROID: see latched_framebuffer()
+    void publish_latched_fb() { std::memcpy(shown_fb_.data(), latched_fb_.data(), render_bytes()); }
+#else
+    void publish_latched_fb() {}
+#endif
     uint16_t latched_native_dispcnt_ = 0;
     std::array<uint8_t, 0x400> latched_native_io_{};
     std::array<uint8_t, 96 * 1024> latched_native_vram_{};

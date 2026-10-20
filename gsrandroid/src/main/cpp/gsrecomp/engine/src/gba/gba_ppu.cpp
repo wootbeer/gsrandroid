@@ -150,6 +150,7 @@ void GbaPpu::deserialize(gbarecomp::debug::SnapshotReader& r) {
         // Historical native-width restore path, deliberately unchanged.
         has_latched_fb_ = serialized_latch;
         r.bytes(latched_fb_.data(), kFramebufferBytes);
+        publish_latched_fb();
     } else {
         // The fixed-size payload has no authored wide margins. Consume it to
         // preserve snapshot framing, then invalidate only the presentation
@@ -2659,6 +2660,7 @@ void GbaPpu::latch_framebuffer(uint16_t dispcnt,
     render(latched_fb_.data(), dispcnt, io, vram, oam, pal);
     latch_native_scene_state(dispcnt, io, vram, oam, pal);
     has_latched_fb_ = true;
+    publish_latched_fb();
 }
 
 void GbaPpu::mark_framebuffer_latched() {
@@ -2674,6 +2676,7 @@ void GbaPpu::mark_framebuffer_latched() {
         }
     }
     has_latched_fb_ = true;
+    publish_latched_fb();
     if (wide_margin_diagnostics_active_ &&
         wide_margin_diagnostics_callback_ != nullptr) {
         wide_margin_diagnostics_callback_(wide_margin_diagnostics_);

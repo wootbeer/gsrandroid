@@ -64,6 +64,9 @@ bool room_buffer_rendering();
 
 // GSR_ANDROID_ENGINE: true when the last prepared row was a valid field room (not a menu/title).
 bool room_buffer_row_is_room();
+// GSR_ANDROID_ENGINE: true when every shown field layer's tilemap has been rewritten (full-screen
+// menus such as the status screen), so the room must not be continued into the margins.
+bool room_buffer_field_replaced();
 
 }  // namespace gsr
 

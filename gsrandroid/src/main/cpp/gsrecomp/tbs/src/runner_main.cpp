@@ -6108,9 +6108,15 @@ unsigned golden_sun_room_buffer_margin_policy(std::uint16_t dispcnt,
     // GSR_ANDROID_ENGINE: menus, file select and title are not field rooms; the room
     // buffer has nothing to put in their margins, so keep them pillarboxed
     // instead of letting the generic wrapped margin fetch draw garbage.
+    // Likewise a full-screen menu (status screen) over a field room: the game has rewritten the
+    // field's tilemaps, so the room's tiles would be drawn with the menu's graphics and colours.
     if (!gsr::room_buffer_row_is_room()) {
         gba::g_ws_authored_margin_layers = 0;
         return gsr::widescreen::kPillarboxVertical;
+    }
+    if (gsr::room_buffer_field_replaced()) {
+        gba::g_ws_authored_margin_layers = 0;
+        return gsr::widescreen::kPillarboxAll;
     }
     gba::g_ws_authored_margin_layers = 1;
     return 0u;

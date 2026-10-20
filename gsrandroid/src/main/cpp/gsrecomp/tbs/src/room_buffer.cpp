@@ -215,6 +215,16 @@ bool is_field_signature(const std::uint8_t* io) {
            ((io_u16(io, 0x0Au) >> 8) & 0x1Fu) == 7u;
 }
 
+#ifdef GSR_ANDROID_ENGINE
+// GSR_ANDROID_ENGINE: a field layer whose live tilemap no longer agrees with the room (the game has
+// rewritten it, e.g. for the full-screen status menu). Its room-buffer answers would draw the room's
+// tiles with the menu's graphics and palettes in the margins, so the layer is not continued there.
+// Checked once per frame; see android_layer_replaced (after check_layer).
+bool g_layer_replaced[4] = {false, false, false, false};
+bool android_layer_replaced(const gba::GbaBus& bus, const std::uint8_t* io, unsigned layer,
+                            const Rect& rect, std::uint32_t cam_x, std::uint32_t cam_y);
+#endif
+
 void prepare_row_state(int screen_y, std::uint16_t dispcnt,
                        const std::uint8_t* io) {
     (void)screen_y;
@@ -274,6 +284,22 @@ void prepare_row_state(int screen_y, std::uint16_t dispcnt,
             io_u16(io, 0x12u + layer * 4u));
     }
     g_prepared_row.scene_valid = true;
+#ifdef GSR_ANDROID_ENGINE
+    {
+        static std::uint64_t checked_frame = ~std::uint64_t{0};
+        const std::uint64_t frame = runtime_current_frame();
+        if (frame != checked_frame) {
+            checked_frame = frame;
+            for (unsigned layer : kLayers) {
+                g_layer_replaced[layer] =
+                    (g_prepared_row.dispcnt & (0x0100u << layer)) != 0u &&
+                    android_layer_replaced(*bus, io, layer, g_prepared_row.rect,
+                                           static_cast<std::uint32_t>(g_prepared_row.cam_x),
+                                           static_cast<std::uint32_t>(g_prepared_row.cam_y));
+            }
+        }
+    }
+#endif
 }
 
 // GSR-ANDROID: *run (when given) = how many consecutive screen_x from this one
@@ -297,6 +323,13 @@ bool entry_for_prepared_row(unsigned layer, std::int32_t world_px,
         *run = kWholeRow;
         return false;
     }
+#ifdef GSR_ANDROID_ENGINE
+    if (layer < 4u && g_layer_replaced[layer]) {  // see g_layer_replaced
+        ++g_refuse[kBadOffset];
+        *run = kWholeRow;
+        return false;
+    }
+#endif
 
     // Bounds are in the actual room/world coordinate space, which is
     // camera + screen. The layer's own scroll is a separate source-space
@@ -658,6 +691,23 @@ void check_layer(const gba::GbaBus& bus, const std::uint8_t* io, unsigned layer,
     }
 }
 
+#ifdef GSR_ANDROID_ENGINE
+// Run the room self-check (check_layer) on this layer now and look only at this frame's result: in a
+// field room nearly every resident cell matches (about 95%); a rewritten tilemap matches few.
+bool android_layer_replaced(const gba::GbaBus& bus, const std::uint8_t* io, unsigned layer,
+                            const Rect& rect, std::uint32_t cam_x, std::uint32_t cam_y) {
+    if (layer >= 4u) return false;
+    const Counters before = g_counts[layer];
+    check_layer(bus, io, layer, rect, cam_x, cam_y);
+    const Counters& after = g_counts[layer];
+    const std::uint64_t checked = after.checked - before.checked;
+    const std::uint64_t matched = after.matched - before.matched;
+    // Too few cells to judge (offset not understood, tiny room): leave the layer as it was.
+    if (checked < 16u) return false;
+    return matched * 2u < checked;
+}
+#endif
+
 // ---- readout ------------------------------------------------------------
 void (*g_prev_extra_draw)() = nullptr;
 bool (*g_prev_extra_wants_keyboard)() = nullptr;
@@ -813,6 +863,16 @@ bool room_buffer_rendering() { return g_rendering; }
 
 // GSR_ANDROID_ENGINE: true when the most recently prepared row was a valid field room.
 bool room_buffer_row_is_room() { return g_prepared_row.prepared && g_prepared_row.scene_valid; }
+
+bool room_buffer_field_replaced() {
+    bool any = false;
+    for (unsigned layer : kLayers) {
+        if ((g_prepared_row.dispcnt & (0x0100u << layer)) == 0u) continue;
+        if (!g_layer_replaced[layer]) return false;
+        any = true;
+    }
+    return any;
+}
 
 void room_buffer_init() {
     g_enabled = gbarecomp::env_flag("GSR_ROOM_BUFFER");
