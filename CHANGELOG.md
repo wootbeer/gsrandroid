@@ -5,6 +5,7 @@
 ### Changed
 - Bumped to the latest GSRecomp version (0.5.3)  
 - The game code is rebuilt once on first start after updating  
+- Renderer: Auto now uses the CPU renderer (fast enough for Expanded view now); GPU is marked experimental  
 
 ### Fixed
 - First-time build could freeze at 59% and never finish  

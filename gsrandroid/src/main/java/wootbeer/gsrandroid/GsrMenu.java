@@ -309,9 +309,9 @@ final class GsrMenu {
 		return r;
 	}
 
-	private static final String[] RENDERER = { "Auto", "CPU", "GPU" };
+	private static final String[] RENDERER = { "Auto", "CPU", "GPU (experimental)" };
 
-	/** Auto / CPU / GPU. When the GPU renderer could not start on this device the row is greyed and stays on CPU. */
+	/** Auto (the CPU renderer) / CPU / GPU (experimental). When the GPU renderer could not start on this device the row is greyed and stays on CPU. */
 	private Row renderer() {
 		Row r = new Row("Renderer") {
 			private boolean gpuOff() { return GsrNative.gpuStatus() == 2; }

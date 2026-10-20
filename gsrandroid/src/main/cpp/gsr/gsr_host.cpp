@@ -276,7 +276,10 @@ int gsr_host_gpu_wanted(void) {
     switch (gsr_settings_get(GSR_S_RENDERER)) {
     case 1: return 0;
     case 2: return 1;
-    default: return !gsr_settings_get(GSR_S_AUTO_CPU) && gsr_settings_get(GSR_S_VIEW_MODE) == 1;
+    // Auto: the CPU renderer. It is fast enough for the Expanded view now and reliable; the GPU field
+    // renderer is experimental (the sides can trail the middle while the camera moves, and sprites can
+    // drift while fast forwarding), so it is only used when picked.
+    default: return 0;
     }
 }
 void gsr_host_gpu_report_init(int ok) {
