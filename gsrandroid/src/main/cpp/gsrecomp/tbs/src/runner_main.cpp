@@ -6098,8 +6098,6 @@ int golden_sun_battle_bg_sample_provider(int bg, int output_x, int screen_y,
 // GSR_ANDROID_ENGINE: true when the game's windows hide every shown field layer (BG1-BG3) across the
 // whole native screen, as full-screen menus like the status screen do. The margins ignore the windows
 // (they draw the room), so they would show the field's tiles there with the menu's graphics and colours.
-// Also logs each new window/blend setup to gsr_perf_log.txt (GSR_PERF_LOG) so a case this misses can be
-// read back from the phone.
 extern "C" unsigned g_gsr_field_px_last, g_gsr_field_px_now;  // gba_ppu.cpp
 // Rows whose sides the menu rule below blacked out since the last present.
 unsigned g_android_menu_black_rows = 0;
@@ -6116,36 +6114,6 @@ bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* 
                  (!win0 || (winin & field) == 0u) &&
                  (!win1 || ((winin >> 8) & field) == 0u) &&
                  (!objwin || ((winout >> 8) & field) == 0u);
-    }
-    {   // diagnostics: one line per new setup, at most 300
-        static unsigned long long last = ~0ull;
-        static int lines = 0;
-        unsigned chk[4] = {}, mat[4] = {};
-        for (unsigned l = 1; l < 4; ++l) gsr::room_buffer_layer_check(l, &chk[l], &mat[l]);
-        const bool replaced = gsr::room_buffer_field_replaced();
-        unsigned long long key = 1469598103934665603ull;
-        for (unsigned v : {static_cast<unsigned>(dispcnt), winin, winout, rd(0x50), rd(0x08), rd(0x0A),
-                           rd(0x0C), rd(0x0E), hidden ? 1u : 0u, replaced ? 1u : 0u,
-                           g_gsr_field_px_last < 1500u ? 1u : 0u,
-                           gsr::room_buffer_row_is_room() ? 1u : 0u})
-            key = (key ^ v) * 1099511628211ull;
-        if (key != last && lines < 300) {
-            last = key;
-            if (const char* lp = std::getenv("GSR_PERF_LOG"); lp && *lp) {
-                if (std::FILE* f = std::fopen(lp, "a")) {
-                    ++lines;
-                    std::fprintf(f, "#win frame=%llu dispcnt=%04X win0h=%04X win0v=%04X win1h=%04X win1v=%04X "
-                                    "winin=%04X winout=%04X bldcnt=%04X bldy=%04X bgcnt=%04X,%04X,%04X,%04X "
-                                    "room=%d replaced=%d hidden=%d match=%u/%u,%u/%u,%u/%u field_px=%u\n",
-                                 static_cast<unsigned long long>(runtime_current_frame()), dispcnt, rd(0x40),
-                                 rd(0x44), rd(0x42), rd(0x46), winin, winout, rd(0x50), rd(0x54), rd(0x08),
-                                 rd(0x0A), rd(0x0C), rd(0x0E), gsr::room_buffer_row_is_room() ? 1 : 0,
-                                 replaced ? 1 : 0, hidden ? 1 : 0,
-                                 mat[1], chk[1], mat[2], chk[2], mat[3], chk[3], g_gsr_field_px_last);
-                    std::fclose(f);
-                }
-            }
-        }
     }
     return hidden;
 }
