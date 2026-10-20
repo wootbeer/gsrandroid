@@ -6117,9 +6117,14 @@ bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* 
     {   // diagnostics: one line per new setup, at most 300
         static unsigned long long last = ~0ull;
         static int lines = 0;
-        const unsigned long long key = (static_cast<unsigned long long>(dispcnt) << 48) ^
-            (static_cast<unsigned long long>(winin) << 32) ^ (static_cast<unsigned long long>(winout) << 16) ^
-            rd(0x50) ^ (hidden ? 0x8000000000000000ull : 0ull);
+        unsigned chk[4] = {}, mat[4] = {};
+        for (unsigned l = 1; l < 4; ++l) gsr::room_buffer_layer_check(l, &chk[l], &mat[l]);
+        const bool replaced = gsr::room_buffer_field_replaced();
+        unsigned long long key = 1469598103934665603ull;
+        for (unsigned v : {static_cast<unsigned>(dispcnt), winin, winout, rd(0x50), rd(0x08), rd(0x0A),
+                           rd(0x0C), rd(0x0E), hidden ? 1u : 0u, replaced ? 1u : 0u,
+                           gsr::room_buffer_row_is_room() ? 1u : 0u})
+            key = (key ^ v) * 1099511628211ull;
         if (key != last && lines < 300) {
             last = key;
             if (const char* lp = std::getenv("GSR_PERF_LOG"); lp && *lp) {
@@ -6127,11 +6132,12 @@ bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* 
                     ++lines;
                     std::fprintf(f, "#win frame=%llu dispcnt=%04X win0h=%04X win0v=%04X win1h=%04X win1v=%04X "
                                     "winin=%04X winout=%04X bldcnt=%04X bldy=%04X bgcnt=%04X,%04X,%04X,%04X "
-                                    "room=%d replaced=%d hidden=%d\n",
+                                    "room=%d replaced=%d hidden=%d match=%u/%u,%u/%u,%u/%u\n",
                                  static_cast<unsigned long long>(runtime_current_frame()), dispcnt, rd(0x40),
                                  rd(0x44), rd(0x42), rd(0x46), winin, winout, rd(0x50), rd(0x54), rd(0x08),
                                  rd(0x0A), rd(0x0C), rd(0x0E), gsr::room_buffer_row_is_room() ? 1 : 0,
-                                 gsr::room_buffer_field_replaced() ? 1 : 0, hidden ? 1 : 0);
+                                 replaced ? 1 : 0, hidden ? 1 : 0,
+                                 mat[1], chk[1], mat[2], chk[2], mat[3], chk[3]);
                     std::fclose(f);
                 }
             }

@@ -221,6 +221,11 @@ bool is_field_signature(const std::uint8_t* io) {
 // tiles with the menu's graphics and palettes in the margins, so the layer is not continued there.
 // Checked once per frame; see android_layer_replaced (after check_layer).
 bool g_layer_replaced[4] = {false, false, false, false};
+// Last check per layer (for the #win diagnostics) and the BGCNT the layer had the last time it clearly
+// matched the room: a menu that points the layer at other tiles or another map changes it.
+std::uint32_t g_layer_checked[4] = {}, g_layer_matched[4] = {};
+std::uint16_t g_layer_field_bgcnt[4] = {};
+bool g_layer_field_bgcnt_known[4] = {};
 bool android_layer_replaced(const gba::GbaBus& bus, const std::uint8_t* io, unsigned layer,
                             const Rect& rect, std::uint32_t cam_x, std::uint32_t cam_y);
 #endif
@@ -702,6 +707,16 @@ bool android_layer_replaced(const gba::GbaBus& bus, const std::uint8_t* io, unsi
     const Counters& after = g_counts[layer];
     const std::uint64_t checked = after.checked - before.checked;
     const std::uint64_t matched = after.matched - before.matched;
+    g_layer_checked[layer] = static_cast<std::uint32_t>(checked);
+    g_layer_matched[layer] = static_cast<std::uint32_t>(matched);
+    const std::uint16_t bgcnt = io_u16(io, 0x08u + layer * 2u);
+    if (checked >= 16u && matched * 4u >= checked * 3u) {
+        g_layer_field_bgcnt[layer] = bgcnt;  // clearly the room
+        g_layer_field_bgcnt_known[layer] = true;
+        return false;
+    }
+    // Pointed somewhere else than when it last showed the room.
+    if (g_layer_field_bgcnt_known[layer] && bgcnt != g_layer_field_bgcnt[layer]) return true;
     // Too few cells to judge (offset not understood, tiny room): leave the layer as it was.
     if (checked < 16u) return false;
     return matched * 2u < checked;
@@ -863,6 +878,11 @@ bool room_buffer_rendering() { return g_rendering; }
 
 // GSR_ANDROID_ENGINE: true when the most recently prepared row was a valid field room.
 bool room_buffer_row_is_room() { return g_prepared_row.prepared && g_prepared_row.scene_valid; }
+
+void room_buffer_layer_check(unsigned layer, unsigned* checked, unsigned* matched) {
+    *checked = layer < 4u ? g_layer_checked[layer] : 0u;
+    *matched = layer < 4u ? g_layer_matched[layer] : 0u;
+}
 
 bool room_buffer_field_replaced() {
     bool any = false;
