@@ -6101,6 +6101,8 @@ int golden_sun_battle_bg_sample_provider(int bg, int output_x, int screen_y,
 // Also logs each new window/blend setup to gsr_perf_log.txt (GSR_PERF_LOG) so a case this misses can be
 // read back from the phone.
 extern "C" unsigned g_gsr_field_px_last, g_gsr_field_px_now;  // gba_ppu.cpp
+// Rows whose sides the menu rule below blacked out since the last present.
+unsigned g_android_menu_black_rows = 0;
 bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* io) {
     if (!io) return false;
     const auto rd = [&](unsigned o) { return static_cast<unsigned>(io[o] | (io[o + 1] << 8)); };
@@ -6179,6 +6181,7 @@ unsigned golden_sun_room_buffer_margin_policy(std::uint16_t dispcnt,
     }
     if (gsr::room_buffer_field_replaced() || android_field_hidden_by_windows(dispcnt, io) ||
         g_gsr_field_px_last < 1500u) {  // field covered in the native area (status screen)
+        ++g_android_menu_black_rows;  // read by golden_sun_present_override (held sides)
         gba::g_ws_authored_margin_layers = 0;
         return gsr::widescreen::kPillarboxAll;
     }
@@ -11930,20 +11933,20 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
             }
             drawn = true;
         };
+        // Sides blacked by the menu rule this frame: never remember such a frame, show the held
+        // sides instead (this also covers the window wipes as menus open and close, and the first
+        // frame back, whose sides the rule still judged by the menu frame before it).
+        const bool sides_black = g_android_menu_black_rows > 0u;
+        g_android_menu_black_rows = 0u;
         if (!geometry || (!room && !keep_holding)) {
             last_field.clear();
             holding = false;
-        } else if (room && g_gsr_field_px_now >= 1500u && g_gsr_field_px_last < 1500u) {
-            // The first frame back: the field shows again in the middle, but this frame's sides
-            // were still drawn black (the margin rule judges by the previous frame).
-            if (have_last) paint_held_sides();
-            holding = false;
-        } else if (room && g_gsr_field_px_now >= 1500u) {  // this frame, now complete
+        } else if (!sides_black && room && g_gsr_field_px_now >= 1500u) {
             last_field.assign(rgb, rgb + bytes);  // a normal field frame: remember it
             last_w = width;
             last_h = height;
             holding = false;
-        } else if (((room && field_on) || keep_holding) && have_last) {
+        } else if (have_last && (sides_black || keep_holding || (room && field_on))) {
             if (!holding) hold_map = map_no;
             holding = true;
             paint_held_sides();
