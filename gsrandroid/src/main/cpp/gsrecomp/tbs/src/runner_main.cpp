@@ -6100,7 +6100,7 @@ int golden_sun_battle_bg_sample_provider(int bg, int output_x, int screen_y,
 // (they draw the room), so they would show the field's tiles there with the menu's graphics and colours.
 // Also logs each new window/blend setup to gsr_perf_log.txt (GSR_PERF_LOG) so a case this misses can be
 // read back from the phone.
-extern "C" unsigned g_gsr_field_px_last;  // gba_ppu.cpp
+extern "C" unsigned g_gsr_field_px_last, g_gsr_field_px_now;  // gba_ppu.cpp
 bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* io) {
     if (!io) return false;
     const auto rd = [&](unsigned o) { return static_cast<unsigned>(io[o] | (io[o + 1] << 8)); };
@@ -11890,6 +11890,43 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
     if (g_camera_inset_ramping && runtime_current_frame() <= g_camera_inset_ramp_frame + 2u) {
         std::memset(rgb, 0, static_cast<std::size_t>(width) * height * 3u);
         drawn = true;
+    }
+    // A full-screen menu over a field room (the status screen) covers the field in the native area,
+    // and the margin rule then blacks the sides out. Show the sides as they were just before the menu
+    // opened instead. Only while the field layers are on and the screen is not blanked, so a room
+    // change or fade never leaves the old room standing at the sides.
+    {
+        static std::vector<std::uint8_t> last_field;
+        static std::uint32_t last_w = 0, last_h = 0;
+        const std::uint32_t L = g_golden_sun_wide_extra_left, T = g_golden_sun_wide_extra_top;
+        const bool geometry = golden_sun_expanded_obj_view_active() &&
+            L + 240u + g_golden_sun_wide_extra_right == width &&
+            T + 160u + g_golden_sun_wide_extra_bottom == height && (L > 0u || T > 0u);
+        const std::uint16_t dispcnt = bus_read_u16(0x04000000u);
+        const bool field_on = (dispcnt & 0x0080u) == 0u && (dispcnt & 0x0E00u) != 0u;
+        const bool room = gsr::room_buffer_row_is_room();
+        const std::size_t bytes = static_cast<std::size_t>(width) * height * 3u;
+        if (!geometry || !room) {
+            last_field.clear();
+        } else if (g_gsr_field_px_now >= 1500u) {  // this frame, now complete
+            last_field.assign(rgb, rgb + bytes);  // a normal field frame: remember it
+            last_w = width;
+            last_h = height;
+        } else if (field_on && last_field.size() == bytes && last_w == width && last_h == height) {
+            const std::size_t row_bytes = static_cast<std::size_t>(width) * 3u;
+            for (std::uint32_t y = 0; y < height; ++y) {
+                std::uint8_t* d = rgb + y * row_bytes;
+                const std::uint8_t* s = last_field.data() + y * row_bytes;
+                if (y < T || y >= T + 160u) {
+                    std::memcpy(d, s, row_bytes);
+                } else {
+                    std::memcpy(d, s, L * 3u);
+                    std::memcpy(d + (L + 240u) * 3u, s + (L + 240u) * 3u,
+                                (width - L - 240u) * 3u);
+                }
+            }
+            drawn = true;
+        }
     }
 #endif
     if (settings) paint_settings_page(rgb, width, height);

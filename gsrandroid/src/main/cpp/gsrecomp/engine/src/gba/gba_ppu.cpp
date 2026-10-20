@@ -1078,7 +1078,7 @@ extern "C" unsigned long long g_gsr_wide_ns[3] = {0, 0, 0};
 // (BG1-BG3, on top or as the lower half of an alpha blend). A full-screen menu covers the field in
 // the native area; the game layer then stops continuing the room into the margins.
 extern "C" unsigned g_gsr_field_px_last = 0xFFFFFFFFu;
-unsigned g_gsr_field_px_now = 0;
+extern "C" unsigned g_gsr_field_px_now = 0;  // the frame being drawn (complete at present time)
 namespace {
 struct GsrWideTimer {
     using clk = std::chrono::steady_clock;
