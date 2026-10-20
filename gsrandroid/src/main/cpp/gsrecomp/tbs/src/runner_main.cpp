@@ -6099,7 +6099,6 @@ int golden_sun_battle_bg_sample_provider(int bg, int output_x, int screen_y,
 // whole native screen, as full-screen menus like the status screen do. The margins ignore the windows
 // (they draw the room), so they would show the field's tiles there with the menu's graphics and colours.
 extern "C" unsigned g_gsr_field_px_last, g_gsr_field_px_now;  // gba_ppu.cpp
-extern "C" int gsr_controls_fast_forward(void);  // gsr_controls.c (host)
 // Rows whose sides the menu rule below blacked out since the last present.
 unsigned g_android_menu_black_rows = 0;
 bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* io) {
@@ -9806,21 +9805,6 @@ void gpu_field_capture_hook() {
                     &g_gpu_field_capture.room_palette);
     g_gpu_field_capture.ewram.assign(bus->ewram_ptr(),
                                      bus->ewram_ptr() + 256 * 1024);
-#ifdef GSR_ANDROID_ENGINE
-    // GSR_ANDROID_ENGINE: the GPU renderer places the room in the margins by the game's camera, the
-    // middle by the BG scroll the frame was drawn with. Give it the camera of that same frame (as at its
-    // first row), not the one the game has already moved on at VBlank, so the sides do not trail the
-    // middle while the camera moves.
-    {
-        std::uint32_t cx = 0, cy = 0;
-        constexpr std::size_t kCameraOff = 0x02030DB0u - 0x02000000u;
-        if (gsr::room_buffer_frame_camera(&cx, &cy) &&
-            g_gpu_field_capture.ewram.size() >= kCameraOff + 8u) {
-            std::memcpy(g_gpu_field_capture.ewram.data() + kCameraOff, &cx, 4);
-            std::memcpy(g_gpu_field_capture.ewram.data() + kCameraOff + 4, &cy, 4);
-        }
-    }
-#endif
     g_gpu_field_capture.iwram.assign(bus->iwram_ptr(),
                                      bus->iwram_ptr() + 32 * 1024);
     g_gpu_field_capture.rom = bus->rom_ptr();
@@ -11807,14 +11791,7 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
         gbarecomp::spell_setup_torn_frame(*ppu);
     // Settings paint reads live window/font state. A torn spell picture and
     // settings therefore form explicit synchronous boundaries.
-#ifdef GSR_ANDROID_ENGINE
-    // GSR_ANDROID_ENGINE: while fast forwarding, read the GPU picture back at once instead of one
-    // presented frame late; with frames skipped in between, a late picture fell visibly behind.
-    const bool gpu_sync = settings || held || gsr_controls_fast_forward() != 0;
-#else
-    const bool gpu_sync = settings || held;
-#endif
-    bool drawn = gpu_field_present_override(rgb, width, height, frame, gpu_sync);
+    bool drawn = gpu_field_present_override(rgb, width, height, frame, settings || held);
 #ifndef GSR_ANDROID_ENGINE  // GSR_ANDROID: see above
     if (frame.scene.empty() && g_gpu_field_capture.valid) {
         frame.scene = gpu_field_dump_bytes(g_gpu_field_capture);

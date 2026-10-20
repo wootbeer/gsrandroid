@@ -67,9 +67,6 @@ bool room_buffer_row_is_room();
 // GSR_ANDROID_ENGINE: true when every shown field layer's tilemap has been rewritten (full-screen
 // menus such as the status screen), so the room must not be continued into the margins.
 bool room_buffer_field_replaced();
-// GSR_ANDROID_ENGINE: the game's camera (16.16 x, y) as it was when this frame's first row was drawn.
-// By VBlank the game may already have moved it on for the next frame.
-bool room_buffer_frame_camera(std::uint32_t* x_16_16, std::uint32_t* y_16_16);
 // GSR_ANDROID_ENGINE: the last per-frame self-check of a field layer (diagnostics).
 void room_buffer_layer_check(unsigned layer, unsigned* checked, unsigned* matched);
 

@@ -221,8 +221,6 @@ bool is_field_signature(const std::uint8_t* io) {
 // tiles with the menu's graphics and palettes in the margins, so the layer is not continued there.
 // Checked once per frame; see android_layer_replaced (after check_layer).
 bool g_layer_replaced[4] = {false, false, false, false};
-std::uint32_t g_row0_camera[2] = {0, 0};
-bool g_row0_camera_valid = false;
 // Last check per layer (for the #win diagnostics) and the BGCNT the layer had the last time it clearly
 // matched the room: a menu that points the layer at other tiles or another map changes it.
 std::uint32_t g_layer_checked[4] = {}, g_layer_matched[4] = {};
@@ -274,14 +272,6 @@ void prepare_row_state(int screen_y, std::uint16_t dispcnt,
     // register is a layer source coordinate and can differ from that camera.
     g_prepared_row.cam_x = static_cast<std::int32_t>(read_u16(*bus, kCamera + 2));
     g_prepared_row.cam_y = static_cast<std::int32_t>(read_u16(*bus, kCamera + 6));
-#ifdef GSR_ANDROID_ENGINE
-    // The camera as the frame's first row was drawn with it (see room_buffer_frame_camera).
-    if (screen_y == 0) {
-        g_row0_camera[0] = read_u32(*bus, kCamera);
-        g_row0_camera[1] = read_u32(*bus, kCamera + 4);
-        g_row0_camera_valid = true;
-    }
-#endif
     g_prepared_row.rect = read_room_rect(*bus);
     if (!rect_is_room(g_prepared_row.rect)) {
         g_prepared_row.scene_refusal = kNoRoom;
@@ -892,13 +882,6 @@ bool room_buffer_row_is_room() { return g_prepared_row.prepared && g_prepared_ro
 void room_buffer_layer_check(unsigned layer, unsigned* checked, unsigned* matched) {
     *checked = layer < 4u ? g_layer_checked[layer] : 0u;
     *matched = layer < 4u ? g_layer_matched[layer] : 0u;
-}
-
-bool room_buffer_frame_camera(std::uint32_t* x_16_16, std::uint32_t* y_16_16) {
-    if (!g_row0_camera_valid) return false;
-    *x_16_16 = g_row0_camera[0];
-    *y_16_16 = g_row0_camera[1];
-    return true;
 }
 
 bool room_buffer_field_replaced() {
