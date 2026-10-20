@@ -1068,6 +1068,31 @@ void render_scanline_internal(uint8_t* rgb,
 // decode and is tested against the expanded viewport, so wrapped-negative sprites
 // (left) and x>=240 sprites (right) both appear in the margins. `logical_y` is
 // the authentic hardware coordinate; output_y includes the top host margin.
+#ifdef __ANDROID__
+// GSR-ANDROID: time spent in the expanded compositor's three stages (background layers, sprites, final
+// mix), for the timing log (runtime.cpp, gsr_perf_log.txt). Two clock reads per stage per row.
+}  // namespace
+extern "C" unsigned long long g_gsr_wide_ns[3] = {0, 0, 0};
+namespace {
+struct GsrWideTimer {
+    using clk = std::chrono::steady_clock;
+    clk::time_point t = clk::now();
+    int stage = 0;
+    void next() {
+        const auto now = clk::now();
+        g_gsr_wide_ns[stage] += static_cast<unsigned long long>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now - t).count());
+        t = now;
+        if (stage < 2) ++stage;
+    }
+    ~GsrWideTimer() { next(); }
+};
+#define GSR_WIDE_TIMER() GsrWideTimer _gsr_wide_timer
+#define GSR_WIDE_NEXT() _gsr_wide_timer.next()
+#else
+#define GSR_WIDE_TIMER() (void)0
+#define GSR_WIDE_NEXT() (void)0
+#endif
 void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
                           uint16_t dispcnt,
                           const uint8_t* io, const uint8_t* vram,
@@ -1194,6 +1219,7 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
     }
     if (g_ws_field_tilemap_source && g_ws_field_tilemap_source_begin)
         g_ws_field_tilemap_source_begin(logical_y, dispcnt, io);
+    GSR_WIDE_TIMER();  // GSR-ANDROID
 
     // Deliberately WITHOUT default member initialisers. The two arrays below
     // are sized by kMaxCompositeWidth (2400, the native supersampler's
@@ -1921,6 +1947,7 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
         render_affine_bg(2, 0x0C, 0x20);
     }
 
+    GSR_WIDE_NEXT();  // GSR-ANDROID: backgrounds done, sprites next
     if (dispcnt & 0x1000u) {
         uint32_t obj_tile_base = (bg_mode >= 3) ? 0x14000u : 0x10000u;
         bool obj_1d_mapping = (dispcnt & 0x0040u) != 0;
@@ -2191,6 +2218,7 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
     std::uint32_t* census =
         (g_ws_row_state_dump_mode >= 0 && output_y < kRowCensusRows)
             ? &g_row_census[output_y][0] : nullptr;
+    GSR_WIDE_NEXT();  // GSR-ANDROID: sprites done, final mix next
     // Which side of the canvas a column is on, and whether this row's margins
     // are pillarboxed, do not change across the row. Asking them once here
     // instead of per pixel removes ~86,000 evaluations of a ten-term
