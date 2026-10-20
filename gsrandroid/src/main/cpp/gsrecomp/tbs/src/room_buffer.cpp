@@ -2,6 +2,7 @@
 
 #include "room_buffer.h"
 
+#include <algorithm>  // GSR-ANDROID: std::min (span answers)
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -275,16 +276,25 @@ void prepare_row_state(int screen_y, std::uint16_t dispcnt,
     g_prepared_row.scene_valid = true;
 }
 
+// GSR-ANDROID: *run (when given) = how many consecutive screen_x from this one
+// get exactly this answer; see g_ws_field_tilemap_source_span in gba_ppu.h.
+constexpr std::int32_t kWholeRow = 1 << 20;
 bool entry_for_prepared_row(unsigned layer, std::int32_t world_px,
                             std::int32_t world_py, std::int32_t screen_x,
-                            std::int32_t screen_y, std::uint16_t& out) {
+                            std::int32_t screen_y, std::uint16_t& out,
+                            std::int32_t* run = nullptr) {
+    std::int32_t run_dummy = 0;
+    if (!run) run = &run_dummy;
+    *run = 1;
     if (!g_prepared_row.scene_valid) {
         ++g_refuse[g_prepared_row.scene_refusal];
+        *run = kWholeRow;
         return false;
     }
     if (layer >= g_prepared_row.layers.size() ||
         !g_prepared_row.layers[layer].scroll_valid) {
         ++g_refuse[kBadOffset];
+        *run = kWholeRow;
         return false;
     }
 
@@ -297,8 +307,17 @@ bool entry_for_prepared_row(unsigned layer, std::int32_t world_px,
         world_px >= static_cast<std::int32_t>(rect.max_x) ||
         world_py >= static_cast<std::int32_t>(rect.max_y)) {
         ++g_refuse[kOutsideRoom];
+        // Left of the room: refused until the room's left edge; otherwise
+        // (above, below or right of it) for the rest of the row.
+        *run = (world_py >= static_cast<std::int32_t>(rect.min_y) &&
+                world_py < static_cast<std::int32_t>(rect.max_y) &&
+                world_px < static_cast<std::int32_t>(rect.min_x))
+            ? static_cast<std::int32_t>(rect.min_x) - world_px : kWholeRow;
         return false;
     }
+    // Inside the room: no answer below may hold past its right edge.
+    const std::int32_t to_room_edge =
+        static_cast<std::int32_t>(rect.max_x) - world_px;
 
     // Resolve the source tile from this layer's own unmasked HOFS/VOFS and
     // the pixel coordinate before dividing by 8. This preserves each layer's
@@ -308,8 +327,12 @@ bool entry_for_prepared_row(unsigned layer, std::int32_t world_px,
     const std::int32_t source_py = prepared.vofs + screen_y;
     if (source_px < 0 || source_py < 0) {
         ++g_refuse[kOffGrid];
+        *run = source_py < 0 ? to_room_edge : std::min(-source_px, to_room_edge);
         return false;
     }
+    // Everything below is decided per source tile: the answer holds for the
+    // rest of this tile (and never past the room edge).
+    *run = std::min(8 - (source_px & 7), to_room_edge);
     const std::int32_t source_tile_x = source_px >> 3;
     const std::int32_t source_tile_y = source_py >> 3;
 
@@ -799,6 +822,7 @@ void room_buffer_init() {
     // without the check, which is how it is normally played.
     if (gbarecomp::env_flag("GSR_ROOM_BUFFER_RENDER")) {
         gba::g_ws_field_tilemap_source = &gsr_field_tilemap_source;
+        gba::g_ws_field_tilemap_source_span = &gsr_field_tilemap_source_span;  // GSR-ANDROID
         gba::g_ws_field_tilemap_source_begin =
             &gsr_field_tilemap_source_begin;
         g_rendering = true;
@@ -844,6 +868,30 @@ bool room_buffer_supply(int bg, int screen_x, int screen_y,
     const std::int32_t world_py = g_prepared_row.cam_y + screen_y;
     return entry_for_prepared_row(static_cast<unsigned>(bg), world_px,
                                   world_py, screen_x, screen_y, *out_entry);
+}
+
+// GSR-ANDROID: room_buffer_supply plus the run of screen_x it holds for.
+bool room_buffer_supply_span(int bg, int screen_x, int screen_y,
+                             std::uint16_t* out_entry, int* out_run) {
+    *out_run = 1;
+    if (!g_rendering || out_entry == nullptr) { *out_run = kWholeRow; return false; }
+    if (bg < 1 || bg > 3) { *out_run = kWholeRow; return false; }
+    if (!g_prepared_row.prepared)
+        prepare_row_state(screen_y, 0, nullptr);
+    if (!g_prepared_row.scene_valid) {
+        if (g_prepared_row.bus != nullptr)
+            ++g_refuse[g_prepared_row.scene_refusal];
+        *out_run = kWholeRow;
+        return false;
+    }
+    const std::int32_t world_px = g_prepared_row.cam_x + screen_x;
+    const std::int32_t world_py = g_prepared_row.cam_y + screen_y;
+    std::int32_t run = 1;
+    const bool ok = entry_for_prepared_row(static_cast<unsigned>(bg), world_px,
+                                           world_py, screen_x, screen_y,
+                                           *out_entry, &run);
+    *out_run = run > 0 ? run : 1;
+    return ok;
 }
 
 void room_buffer_on_function_args(std::uint32_t entry_pc, std::uint32_t r0,
@@ -909,6 +957,12 @@ extern "C" int gsr_field_tilemap_source(int bg, int screen_x, int screen_y,
                                         std::uint16_t* out_entry) {
     if (!gsr::room_buffer_supply(bg, screen_x, screen_y, out_entry)) return 0;
     return 1;
+}
+
+extern "C" int gsr_field_tilemap_source_span(int bg, int screen_x, int screen_y,
+                                             std::uint16_t* out_entry,
+                                             int* out_run) {
+    return gsr::room_buffer_supply_span(bg, screen_x, screen_y, out_entry, out_run) ? 1 : 0;
 }
 
 extern "C" void gsr_field_tilemap_source_begin(int screen_y,

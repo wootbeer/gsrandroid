@@ -53,6 +53,9 @@ void room_buffer_on_function_args(std::uint32_t entry_pc, std::uint32_t r0,
 // means "not known"; the caller keeps its own answer.
 bool room_buffer_supply(int bg, int screen_x, int screen_y,
                         std::uint16_t* out_entry);
+// GSR-ANDROID: the same, plus *out_run = consecutive screen_x with this answer.
+bool room_buffer_supply_span(int bg, int screen_x, int screen_y,
+                             std::uint16_t* out_entry, int* out_run);
 
 // True when the field is being drawn from the room buffer. Runners use this to
 // stand down margin heuristics that exist only because there was no real
@@ -71,6 +74,10 @@ bool room_buffer_row_is_room();
 // PPU takes it as a plain C function pointer.
 extern "C" int gsr_field_tilemap_source(int bg, int screen_x, int screen_y,
                                         std::uint16_t* out_entry);
+// GSR-ANDROID: span form (g_ws_field_tilemap_source_span in gba_ppu.h).
+extern "C" int gsr_field_tilemap_source_span(int bg, int screen_x, int screen_y,
+                                             std::uint16_t* out_entry,
+                                             int* out_run);
 // Paired row-boundary hook. The PPU calls this once before invoking the source
 // for a render row; it prepares the row's register state plus the active bus
 // data and one-tile map cache used by the per-pixel callback.

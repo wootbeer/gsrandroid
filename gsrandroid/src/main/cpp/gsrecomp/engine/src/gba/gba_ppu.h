@@ -410,6 +410,15 @@ extern "C" int (*g_ws_field_tilemap_source)(int bg, int screen_x, int screen_y,
 extern "C" void (*g_ws_field_tilemap_source_begin)(int screen_y,
                                                      uint16_t dispcnt,
                                                      const uint8_t* io);
+// GSR-ANDROID: optional span form of g_ws_field_tilemap_source. Same answer for
+// (bg, screen_x, screen_y), plus *out_run = how many consecutive screen_x
+// (screen_x, screen_x + 1, ...) on this row give exactly the same answer (the
+// rest of the tile, or up to the room edge). The expanded compositor then asks
+// once per run instead of once per pixel. nullptr = per-pixel calls as before.
+extern "C" int (*g_ws_field_tilemap_source_span)(int bg, int screen_x,
+                                                 int screen_y,
+                                                 uint16_t* out_entry,
+                                                 int* out_run);
 // Temporary counters for diagnosing the expanded view, read by the game's
 // room-buffer report. [0] wide scanlines rendered, [1] entries supplied by the
 // game, [2] objects skipped as parked, [3] margin samples left blank.

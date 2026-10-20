@@ -25,6 +25,8 @@ extern "C" int (*g_ws_field_tilemap_source)(int bg, int screen_x,
 extern "C" void (*g_ws_field_tilemap_source_begin)(int screen_y,
                                                      uint16_t dispcnt,
                                                      const uint8_t* io) = nullptr;
+extern "C" int (*g_ws_field_tilemap_source_span)(int, int, int, uint16_t*,
+                                                 int*) = nullptr;  // GSR-ANDROID
 extern "C" unsigned long long g_ws_expanded_diag[4] = {0, 0, 0, 0};
 // Per-OBJ trust tally for the expanded-view margin defects: how many OBJ
 // entries (per frame, summed here as a running session total) had both axes
@@ -1502,6 +1504,11 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
         uint32_t width_px = width_tiles * 8u;
         uint32_t height_px = height_tiles * 8u;
         uint32_t block_cols = width_tiles / 32u;
+        // GSR-ANDROID: the last span answer of g_ws_field_tilemap_source_span
+        // for this layer and row: valid for world x in [span_begin, span_end).
+        int span_begin = 0, span_end = 0, span_y = 0;
+        int span_answer = 0;
+        uint16_t span_entry = 0;
         for (uint32_t x = 0; x < out_w; ++x) {
             int hx = logical_x(x);
             const bool authored_margin = g_ws_authored_margin_layers &&
@@ -1601,8 +1608,25 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
             // have nothing left to decide and are skipped.
             if (!remapped && g_ws_field_tilemap_source) {
                 uint16_t supplied = 0;
-                if (g_ws_field_tilemap_source(static_cast<int>(layer), world_hx,
-                                              world_y, &supplied)) {
+                int answered;
+                if (g_ws_field_tilemap_source_span) {  // GSR-ANDROID: one call per run
+                    if (world_y != span_y || world_hx < span_begin ||
+                        world_hx >= span_end) {
+                        int run = 1;
+                        span_answer = g_ws_field_tilemap_source_span(
+                            static_cast<int>(layer), world_hx, world_y,
+                            &span_entry, &run);
+                        span_begin = world_hx;
+                        span_end = world_hx + (run > 0 ? run : 1);
+                        span_y = world_y;
+                    }
+                    answered = span_answer;
+                    supplied = span_entry;
+                } else {
+                    answered = g_ws_field_tilemap_source(
+                        static_cast<int>(layer), world_hx, world_y, &supplied);
+                }
+                if (answered) {
                     entry = supplied;
                     entry_supplied = true;
                     field_source_answered = true;
