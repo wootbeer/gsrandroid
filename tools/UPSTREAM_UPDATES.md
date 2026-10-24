@@ -1,18 +1,20 @@
 # Upstream updates and credits
 
 This port vendors part of Golden Sun Recompiled ("GSRecomp") under `gsrandroid/src/main/cpp/gsrecomp/`.
-Since GSRecomp 0.5 upstream is a collection of two games on one engine; we vendor the engine and the first
-game only:
+Since GSRecomp 0.5 upstream is a collection of two games on one engine; we vendor the engine and both
+games:
 
 | Ours | Upstream (0.5+) | Before 0.5 |
 |---|---|---|
 | `gsrecomp/engine/` | `engine/` | `gbarecomp/` |
 | `gsrecomp/tbs/` | `The Broken Seal/` (src, config) | `src/`, `config/` |
 | `gsrecomp/player_builder/` | `player_builder/` | `tools/gsr_builder/` |
+| `gsrecomp/tla/` | `The Lost Age/` (src, config) | (new in 0.5) |
+| `gsrecomp/ATTRIBUTION.md` | `ATTRIBUTION.md` (one file for both games since 0.6) | |
 | `gsrecomp/launcher/` | `launcher/` (headers kept for reference, not built) | `src/launcher_main.cpp` |
 
-`tbs` is short for The Broken Seal (no spaces in build paths). The Lost Age (`The Lost Age/`) is not
-vendored. The Android-specific code lives beside it, so an engine
+`tbs` is short for The Broken Seal and `tla` for The Lost Age (no spaces in build paths). The
+Android-specific code lives beside them, so an engine
 update is mostly a folder swap plus re-applying the small marked patches below.
 
 ## Credits
@@ -39,6 +41,8 @@ remove or reword upstream copyright headers when updating.
   `gsr_main`, `gsr_engine`, `gsr_text`, `gpu_surface_android.cpp`)
 - `gsrecomp/engine/src/runtime/host_window_android.cpp` : the HostWindow backend (also the no-op window hand-over, Seamless screen-veil and local-music functions)
 - `descore/` additions: `descore_is_paused`, `descore_request_menu`
+- `gsr/gsr_game.c` (which game this launch is), `gsr/gsr_tla_builder.cpp`, `gsr/gsr_tla_engine_entry.cpp`
+  (The Lost Age builder and game layer entries; built like upstream's `tla_builder` / `TLARecomp`)
 - Java: `wootbeer.gsrandroid.*` (menu, native bridge, activity)
 
 ## Upstream files we patched (re-apply after every update)
@@ -71,6 +75,11 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `tbs/src/runner_main.cpp` (more) | `GSR_ANDROID_ENGINE`: margin policy pillarboxes non-room rows; GPU hands boot/title/intro frames to CPU; camera inset skipped for the title; boot/title/intro shown as the native 240x160 part of the canvas (`gsr_host_present_crop`, read in host_window_android.cpp); intro flare averaging; camera-glide blackout |
 | `tbs/src/runner_main.cpp` (Seamless) | `GSR_ANDROID_ENGINE`: Seamless mode (hand-over to The Lost Age, new in 0.5) is always off and the new-game prompt does not ask about it |
 | `tbs/src/settings_page.h` | `GSR_ANDROID_ENGINE`: the in-game settings page leaves out Screen and No Slowdown (the side menu owns them) |
+| `tbs/src/adventure_walkthrough.h` | `GSR_ANDROID_ENGINE`: the NDK's libc++ has no `std::atomic<std::shared_ptr>`; a small wrapper uses `std::atomic_load/atomic_store` (the guide is developer-only upstream) |
+| `tla/src/tla_rewind.cpp`, `tla_ram_images.cpp` | `GSR_ANDROID_ENGINE`: The Broken Seal's `unpacker_guard.h` is included from `tbs/` |
+| `tla/src/tla_gs_save_import.cpp` | `GSR_ANDROID_ENGINE`: no SDL; the save-file browser is the host's (`gsr_host_pick_gs_save_begin/poll`) |
+| `tla/src/tla_gpu_field.cpp` | `GSR_ANDROID_ENGINE`: the Renderer setting decides live (`gpu_on()` asks `gsr_host_gpu_wanted`; Auto uses the GPU in the Expanded view), init/frame results go to the host, and CPU-drawn frames get black sides (upstream has no CPU margin source for The Lost Age) |
+| `tla/src/tla_reloc_images.inc` (ours) | the builder's list of The Lost Age RAM routines (names, ROM addresses, sizes; no code), made once from the ROM; regenerate when `config/tla/reloc` changes |
 | `CMakeLists.txt` | source lists, include dirs, `GSR_ANDROID_*` defines, `gpu_surface_android.cpp` instead of upstream `gpu_surface.cpp` |
 
 Files we replace rather than patch: upstream `gpu_surface.cpp` (desktop GL + SDL) is not built; its
@@ -95,13 +104,17 @@ The view modes now come from `engine/src/runtime/view_config.h` (Original 240x16
 Extra Wide 480x320). The side menu's View setting still offers the first two; the Android HostWindow
 reports the Original aspect, so a mode's size is used as is.
 
-Vendored engine version: 0.5.3 (upstream commit 27fedb5), updated 2026-10-20 from https://github.com/Shmargus/GSRecomp
-(previously 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
+Vendored engine version: 0.6 (upstream commit c72ef00), updated 2026-10-24 from https://github.com/Shmargus/GSRecomp
+(previously 0.5.3 = 27fedb5, updated 2026-10-20; 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
 
 How the update is done (repeat this next time): a three-way git merge with base = the upstream commit we
 were on (only the files we vendor), ours = the vendored folder, theirs = the new upstream commit. Only files we
 patched can conflict. For 0.5.2 the base and ours trees were first moved to the new layout (table above) so
 git could match the renamed files. Then copy changed `config/usa` files into `assets/gsr_builder_data`, mirror any
 `runtime_arm.h` change into `gsr/hdr/runtime_arm.h` (C-only copy) and run `tools/embed_headers.py`, validate the
-`field_scene_renderer.cpp` shaders as GLSL ES 3.00, check the launcher's environment variables
+`field_scene_renderer.cpp` shaders as GLSL ES 3.00, copy changed `config/tla` files into `assets/gsr_builder_data_tla`, check the launcher's environment variables
 (upstream `launcher/session_environment.h` and `launcher/session_linux.cpp`) against `gsr/gsr_main.c`, and bump `GSR_BUILD_VERSION`.
+
+Music mods (0.6, `GBARECOMP_MUSIC_DIR`) are not offered on Android: the variable is never set,
+`local_music_available()` in `host_window_android.cpp` answers false, and upstream's `host_local_music.cpp`
+(dr_flac) is not built. `TLA_PLAYER_RELEASE` became `TLA_NO_HARVEST` in 0.6 (CMake define).

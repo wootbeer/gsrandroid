@@ -207,7 +207,7 @@ target_link_libraries(gsrengine gsgamebridge gsrhost ${log-lib} m)
 
 # ---- libgsrtlaengine.so: The Lost Age's game layer ----------------------------------------------
 # Like libgsrengine.so for Golden Sun: tla_runner.cpp and the rest of upstream's "The Lost Age/src", loaded
-# after the game libraries built from the player's Lost Age ROM. TLA_PLAYER_RELEASE as in upstream's player
+# after the game libraries built from the player's Lost Age ROM. TLA_NO_HARVEST as in upstream's player
 # release. tla_reloc_images.inc (in tla/src) lists the RAM routines the builder makes images of: names,
 # ROM addresses and sizes only, the same for every copy of the one ROM the builder accepts.
 set(GSRC_TLA ${GSRC}/tla)
@@ -225,6 +225,7 @@ add_library(gsrtlaengine SHARED
 		${GSRC_TLA}/src/tla_save_update.cpp
 		${GSRC_TLA}/src/gs_save.cpp
 		${GSRC_TLA}/src/tla_cheat_menu.cpp
+		${GSRC_TLA}/src/tla_local_music.cpp
 		${GSRC_TLA}/src/tla_spell_sparks.cpp
 		${GSRC_TLA}/src/tla_spell_mesh.cpp
 		${GSRC_TLA}/src/tla_text.cpp
@@ -247,6 +248,6 @@ target_include_directories(gsrtlaengine PRIVATE
 		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/runtime ${GSRC_GB}/src/debug
 		${GSRC_GB}/src/recompile)
 target_compile_options(gsrtlaengine PRIVATE -std=c++20 -w -fPIC -O3)
-target_compile_definitions(gsrtlaengine PRIVATE GBARECOMP_DEFAULT_DEBUG_PORT=19843 GSR_ANDROID_ENGINE TLA_PLAYER_RELEASE=1)
+target_compile_definitions(gsrtlaengine PRIVATE GBARECOMP_DEFAULT_DEBUG_PORT=19843 GSR_ANDROID_ENGINE TLA_NO_HARVEST=1)
 set_target_properties(gsrtlaengine PROPERTIES LINK_FLAGS "-Wl,-z,undefs -Wl,--no-as-needed")
 target_link_libraries(gsrtlaengine gsgamebridge gsrhost ${log-lib} m)

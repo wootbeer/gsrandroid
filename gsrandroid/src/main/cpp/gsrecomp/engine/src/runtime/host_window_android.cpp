@@ -239,6 +239,7 @@ void HostWindow::set_debug_overlay_audio_state(bool, bool) {}
 // The desktop's "local music" (WAV openings streamed beside the game audio) is not offered on Android.
 bool local_music_ready() { return false; }
 bool local_music_select(unsigned) { return false; }
+bool local_music_available() { return false; }  // music mods are not offered on Android
 void local_music_playback(bool, bool, float, bool) {}
 void HostWindow::set_local_music_paused(bool) {}
 // Seamless mode's black cover; Seamless mode is off on Android (runner_main.cpp), so nothing calls it.
