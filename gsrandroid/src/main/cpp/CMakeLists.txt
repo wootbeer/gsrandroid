@@ -241,10 +241,9 @@ add_library(gsrtlaengine SHARED
 		${GSRC_GB}/src/field/effect_capture.cpp
 		${GSRC_TBS}/src/unpacker_guard.cpp)
 set_source_files_properties(${GSRC_TLA}/src/tla_runner.cpp PROPERTIES COMPILE_DEFINITIONS "main=gsr_tla_engine_main_cpp")
-set_property(SOURCE ${GSRC_TBS}/src/unpacker_guard.cpp TARGET_DIRECTORY gsrtlaengine APPEND PROPERTY INCLUDE_DIRECTORIES ${GSRC_PB})
 target_include_directories(gsrtlaengine PRIVATE
 		gsr/shim_inc
-		${GSRC_TLA}/src ${GSRC_GB} ${GSRC_GB}/src/field
+		${GSRC_TLA}/src ${GSRC_GB} ${GSRC_GB}/src/field ${GSRC_PB}
 		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/runtime ${GSRC_GB}/src/debug
 		${GSRC_GB}/src/recompile)
 target_compile_options(gsrtlaengine PRIVATE -std=c++20 -w -fPIC -O3)
