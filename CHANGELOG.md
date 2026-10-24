@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4. (unreleased)]
+
+### Added
+- Golden Sun: The Lost Age support (same app; pick its ROM in the launcher)  
+
+### Changed
+- Bumped to the latest GSRecomp version (0.6)  
+- The game code is rebuilt once on first start after updating  
+- Renderer: Auto uses the GPU renderer for The Lost Age in Expanded view  
+
 ## [0.3. (10-10-2026)]
 
 ### Changed
