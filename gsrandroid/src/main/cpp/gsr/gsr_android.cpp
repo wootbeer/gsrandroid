@@ -13,7 +13,8 @@
 #include <filesystem>
 #include <string>
 
-int gsr_builder_main(int argc, char** argv);  // builder_main.cpp's main(), renamed with -Dmain=
+int gsr_builder_main(int argc, char** argv);      // builder_main.cpp's main(), renamed with -Dmain=
+int gsr_tla_builder_main(int argc, char** argv);  // the same, built for The Lost Age (gsr_tla_builder.cpp)
 
 namespace fs = std::filesystem;
 
@@ -56,3 +57,4 @@ bool gsr_android_compile_and_link(const std::string& gen, const std::string& out
 
 // For the C side (gsr_spike.c): run the whole builder as if it were `gsr_builder <args>`.
 extern "C" int gsr_run_builder(int argc, char** argv) { return gsr_builder_main(argc, argv); }
+extern "C" int gsr_run_tla_builder(int argc, char** argv) { return gsr_tla_builder_main(argc, argv); }

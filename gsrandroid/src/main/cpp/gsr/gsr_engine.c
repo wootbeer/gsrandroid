@@ -2,6 +2,7 @@
 #include "gsr_engine.h"
 #include "gsr_build.h"
 #include "gsr_host.h"
+#include "gsr_game.h"
 
 #include <dlfcn.h>
 #include <pthread.h>
@@ -38,14 +39,15 @@ static void *engine_thread(void *p) {
 }
 
 int gsr_engine_run(int argc, char **argv, char *err, size_t errlen) {
-	void *h = dlopen("libgsrengine.so", RTLD_NOW | RTLD_GLOBAL);
+	const GsrGame *game = gsr_game();
+	void *h = dlopen(game->engine_lib, RTLD_NOW | RTLD_GLOBAL);
 	if (!h) {
-		snprintf(err, errlen, "dlopen libgsrengine.so: %s", dlerror());
+		snprintf(err, errlen, "dlopen %s: %s", game->engine_lib, dlerror());
 		return -1;
 	}
-	int (*fn)(int, char **) = (int (*)(int, char **))dlsym(h, "gsr_engine_main");
+	int (*fn)(int, char **) = (int (*)(int, char **))dlsym(h, game->engine_entry);
 	if (!fn) {
-		snprintf(err, errlen, "gsr_engine_main missing in libgsrengine.so");
+		snprintf(err, errlen, "%s missing in %s", game->engine_entry, game->engine_lib);
 		return -1;
 	}
 	EngineCall call = { fn, argc, argv, 0 };
@@ -77,14 +79,15 @@ static void *engine_thread_async(void *p) {
 }
 
 int gsr_engine_start(int argc, char **argv, char *err, size_t errlen) {
-	void *h = dlopen("libgsrengine.so", RTLD_NOW | RTLD_GLOBAL);
+	const GsrGame *game = gsr_game();
+	void *h = dlopen(game->engine_lib, RTLD_NOW | RTLD_GLOBAL);
 	if (!h) {
-		snprintf(err, errlen, "dlopen libgsrengine.so: %s", dlerror());
+		snprintf(err, errlen, "dlopen %s: %s", game->engine_lib, dlerror());
 		return -1;
 	}
-	int (*fn)(int, char **) = (int (*)(int, char **))dlsym(h, "gsr_engine_main");
+	int (*fn)(int, char **) = (int (*)(int, char **))dlsym(h, game->engine_entry);
 	if (!fn) {
-		snprintf(err, errlen, "gsr_engine_main missing in libgsrengine.so");
+		snprintf(err, errlen, "%s missing in %s", game->engine_entry, game->engine_lib);
 		return -1;
 	}
 	if (argc > 30) argc = 30;

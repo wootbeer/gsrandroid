@@ -54,6 +54,21 @@ public final class DescoreGameConfig {
 			this.extensionAliases = extensionAliases;
 		}
 
+		/**
+		 * Optional content check for aliased files: when set, a file is only taken under its alias if these
+		 * ASCII bytes appear at aliasCheckOffset (for example a ROM header's game code). Lets two units both
+		 * alias ".gba" and still each get only their own ROM.
+		 */
+		public int aliasCheckOffset = -1;
+		public String aliasCheckBytes = null;
+
+		/** See {@link #aliasCheckOffset}. */
+		public Unit withAliasCheck(int offset, String asciiBytes) {
+			this.aliasCheckOffset = offset;
+			this.aliasCheckBytes = asciiBytes;
+			return this;
+		}
+
 		/** The name to store a found file under, or null when this unit does not alias it. */
 		String aliasFor(String lowerName) {
 			for (String[] a : extensionAliases) {

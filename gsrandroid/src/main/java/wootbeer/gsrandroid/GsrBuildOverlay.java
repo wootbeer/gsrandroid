@@ -36,6 +36,12 @@ final class GsrBuildOverlay {
 		}
 	};
 
+	/** The game this screen builds and plays (the launcher's unit). */
+	private String gameName() {
+		return activity.getIntent().getIntExtra(wootbeer.descore.DescoreGameActivity.EXTRA_UNIT_ID,
+				GsrConfig.UNIT_GAME) == GsrConfig.UNIT_TLA ? "Golden Sun: The Lost Age" : "Golden Sun";
+	}
+
 	GsrBuildOverlay(Activity a) {
 		activity = a;
 		root = new FrameLayout(a);
@@ -140,11 +146,11 @@ final class GsrBuildOverlay {
 		if ("rom_missing".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
 			set(title, "No usable ROM found");
-			set(detail, "Restart the app and pick your Golden Sun (USA or Europe) .gba file.");
+			set(detail, "Restart the app and pick your " + gameName() + " (USA or Europe) .gba file.");
 		} else if ("rom_wrong".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
 			set(title, "This is not the supported ROM");
-			set(detail, "Golden Sun (USA or Europe) is required. Press Back to open the menu and choose Change ROM.");
+			set(detail, gameName() + " (USA or Europe) is required. Press Back to open the menu and choose Change ROM.");
 		} else if ("failed".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
 			set(title, "Building the game failed");
@@ -165,7 +171,7 @@ final class GsrBuildOverlay {
 			set(detail, (cached ? "Loaded from the saved build" : "Built") + " in " + clock(elapsed) + ".");
 		} else { // building / waiting
 			title.setTextColor(Color.WHITE);
-			set(title, cached ? "Loading Golden Sun" : "Preparing Golden Sun for this device");
+			set(title, cached ? "Loading " + gameName() : "Preparing " + gameName() + " for this device");
 			set(detail, i[1]);
 			bar.setProgress(progress);
 			bar.setVisibility(View.VISIBLE);

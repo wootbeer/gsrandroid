@@ -353,6 +353,8 @@ public abstract class DescoreLauncherActivity extends Activity {
 					storeName = lowerName;
 				} else if (aliasesDone.contains(storeName)) {
 					continue; // first file with that extension wins
+				} else if (!aliasCheckPasses(unit, entry.getValue())) {
+					continue; // another unit's file with the same extension
 				}
 				sawAny = true;
 				//noinspection ResultOfMethodCallIgnored
@@ -368,6 +370,39 @@ public abstract class DescoreLauncherActivity extends Activity {
 		}
 		if (summary.isEmpty()) return null;
 		return "Copied " + join(summary) + ".";
+	}
+
+	/** True when the unit has no content check, or the file has the expected bytes at the expected offset. */
+	private boolean aliasCheckPasses(DescoreGameConfig.Unit unit, Uri uri) {
+		if (unit.aliasCheckBytes == null || unit.aliasCheckOffset < 0) return true;
+		byte[] want;
+		try {
+			want = unit.aliasCheckBytes.getBytes("US-ASCII");
+		} catch (java.io.UnsupportedEncodingException e) {
+			return false;
+		}
+		try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+			if (in == null) return false;
+			long skip = unit.aliasCheckOffset;
+			while (skip > 0) {
+				long n = in.skip(skip);
+				if (n <= 0) {
+					if (in.read() < 0) return false;
+					n = 1;
+				}
+				skip -= n;
+			}
+			byte[] got = new byte[want.length];
+			int off = 0;
+			while (off < got.length) {
+				int n = in.read(got, off, got.length - off);
+				if (n < 0) return false;
+				off += n;
+			}
+			return java.util.Arrays.equals(got, want);
+		} catch (IOException | SecurityException e) {
+			return false;
+		}
 	}
 
 	/**

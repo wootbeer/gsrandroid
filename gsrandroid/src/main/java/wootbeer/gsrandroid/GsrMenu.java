@@ -476,10 +476,20 @@ final class GsrMenu {
 
 	private static final int STATE_SLOTS = 3;
 
-	/** The engine writes slot n beside the ROM as golden_sun.state<n> (runtime.cpp slot_path). */
+	/** True when this screen plays The Lost Age (the launcher's unit). */
+	private boolean tla() {
+		return activity.getIntent().getIntExtra(wootbeer.descore.DescoreGameActivity.EXTRA_UNIT_ID,
+				GsrConfig.UNIT_GAME) == GsrConfig.UNIT_TLA;
+	}
+
+	/** This game's folder under files/gsr and the name its ROM is stored under there. */
+	private String gameDir() { return tla() ? "gsr/tla/" : "gsr/game/"; }
+	private String romName() { return tla() ? GsrConfig.TLA_ROM_NAME : GsrConfig.ROM_NAME; }
+
+	/** The engine writes slot n beside the ROM as <rom>.state<n> (runtime.cpp slot_path). */
 	private java.io.File stateFile(int slot) {
-		String base = GsrConfig.ROM_NAME.substring(0, GsrConfig.ROM_NAME.lastIndexOf('.'));
-		return new java.io.File(activity.getFilesDir(), "gsr/game/" + base + ".state" + slot);
+		String base = romName().substring(0, romName().lastIndexOf('.'));
+		return new java.io.File(activity.getFilesDir(), gameDir() + base + ".state" + slot);
 	}
 
 	private String stateLabel(int slot) {
@@ -553,9 +563,9 @@ final class GsrMenu {
 	}
 
 	/**
-	 * Change ROM: after a confirmation, removes only the stored ROM file and closes the app, so the next start
-	 * shows the ROM picker. The save (golden_sun.sav, beside the ROM) and the compiled game are kept: the only
-	 * ROM this release accepts always compiles to the same game, so picking it again does not rebuild.
+	 * Change ROM: after a confirmation, removes only this game's stored ROM file and closes the app, so the next
+	 * start asks for it again. The save (beside the ROM) and the compiled game are kept: the only ROM this
+	 * release accepts for each game always compiles to the same game, so picking it again does not rebuild.
 	 */
 	private void confirmChangeRom() {
 		new AlertDialog.Builder(activity)
@@ -565,7 +575,7 @@ final class GsrMenu {
 				.setNegativeButton("Cancel", null)
 				.setPositiveButton("Change ROM", new DialogInterface.OnClickListener() {
 					@Override public void onClick(DialogInterface d, int which) {
-						java.io.File rom = new java.io.File(activity.getFilesDir(), "gsr/game/" + GsrConfig.ROM_NAME);
+						java.io.File rom = new java.io.File(activity.getFilesDir(), gameDir() + romName());
 						if (rom.exists() && !rom.delete()) {
 							Toast.makeText(activity, "Could not remove the ROM", Toast.LENGTH_LONG).show();
 							return;

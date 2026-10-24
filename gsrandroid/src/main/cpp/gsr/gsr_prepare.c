@@ -2,6 +2,7 @@
 #include "gsr_prepare.h"
 #include "gsr_build.h"
 #include "gsr_engine.h"
+#include "gsr_game.h"
 
 #include <android/log.h>
 #include <dirent.h>
@@ -25,7 +26,8 @@
  * objects); the finished libraries are about 240 MB. Ask for headroom on top. */
 #define GSR_NEED_FREE_MB 800
 
-int gsr_run_builder(int argc, char **argv); /* gsr_android.cpp: GSRecomp's gsr_builder, in-process */
+int gsr_run_builder(int argc, char **argv);     /* gsr_android.cpp: GSRecomp's gsr_builder, in-process */
+int gsr_run_tla_builder(int argc, char **argv); /* the same for The Lost Age (tla_builder) */
 
 static atomic_int g_state = GSR_PREP_IDLE;
 static atomic_int g_progress = 0;
@@ -142,8 +144,8 @@ static int derive_dirs(const char *data_dir) {
 	const char *pkg = strrchr(head, '/');
 	snprintf(g_pkg, sizeof g_pkg, "%s", pkg ? pkg + 1 : head);
 	snprintf(g_root, sizeof g_root, "%s/gsr", g_files);
-	snprintf(g_builder_data, sizeof g_builder_data, "%s/builder_data", g_root);
-	snprintf(g_built, sizeof g_built, "%s/built", g_root);
+	snprintf(g_builder_data, sizeof g_builder_data, "%s/%s", g_root, gsr_game()->builder_data);
+	snprintf(g_built, sizeof g_built, "%s/%s", g_root, gsr_game()->built);
 	snprintf(g_tmp, sizeof g_tmp, "%s/build_tmp", g_root);
 	snprintf(g_status, sizeof g_status, "%s/build_status.txt", g_root);
 	snprintf(g_log, sizeof g_log, "/sdcard/Android/data/%s/files/gsr_build_log.txt", g_pkg);
@@ -217,7 +219,7 @@ static int pick_workers(void) {
 
 static int run_builder(int workers, double *wall_s) {
 	char rom[600], jobs[16], out[700], stdout_file[700];
-	snprintf(rom, sizeof rom, "%s/golden_sun.gba", g_data_dir);
+	snprintf(rom, sizeof rom, "%s/%s", g_data_dir, gsr_game()->rom_name);
 	snprintf(jobs, sizeof jobs, "%d", workers);
 	snprintf(stdout_file, sizeof stdout_file, "%s/builder_stdout.txt", g_root);
 	snprintf(out, sizeof out, "%s", g_built);
@@ -232,7 +234,7 @@ static int run_builder(int workers, double *wall_s) {
 		if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); }
 		char *argv[] = { "gsr_builder", "--rom", rom, "--data", g_builder_data, "--work", g_tmp, "--out", out,
 		                 "--jobs", jobs, NULL };
-		int rc = gsr_run_builder(11, argv);
+		int rc = gsr_game()->tla ? gsr_run_tla_builder(11, argv) : gsr_run_builder(11, argv);
 		fflush(NULL);
 		_exit(rc);
 	}
@@ -269,7 +271,7 @@ static int run_builder(int workers, double *wall_s) {
 }
 
 static void expected_stamp(char *buf, size_t n) {
-	snprintf(buf, n, "rom_sha1=%s\nbuilder=%s\n", g_rom_sha1, GSR_BUILD_VERSION);
+	snprintf(buf, n, "rom_sha1=%s\nbuilder=%s\n", g_rom_sha1, GSR_BUILD_VERSION);  /* the ROM names the game */
 }
 
 static int stamp_matches(void) {
@@ -308,7 +310,7 @@ static void run_headless_test(void) {
 	if (gsr_engine_bind(err, sizeof err) != 0) { rep("headless test: bind failed: %s", err); return; }
 	snprintf(run_dir, sizeof run_dir, "%s/run", g_root);
 	mkdir_p(run_dir);
-	snprintf(rom, sizeof rom, "%s/golden_sun.gba", g_data_dir);
+	snprintf(rom, sizeof rom, "%s/%s", g_data_dir, gsr_game()->rom_name);
 	{
 		char ext[700];
 		snprintf(ext, sizeof ext, "/sdcard/Android/data/%s/files", g_pkg);
@@ -358,7 +360,7 @@ static void *prepare_thread(void *arg) {
 	char err[700];
 	atomic_store(&g_t0_s, now_s());
 	write_status("running");
-	rep("== Golden Sun Recompiled: prepare (builder %s) ==", GSR_BUILD_VERSION);
+	rep("== %s Recompiled: prepare (builder %s) ==", gsr_game()->title, GSR_BUILD_VERSION);
 
 	/* Support / testing: a file named rebuild_game in the app's own folder on shared storage
 	 * (Android/data/<package>/files, reachable over USB) forces one fresh build. It is removed first. */
@@ -408,10 +410,14 @@ static void *prepare_thread(void *arg) {
 		if (n == -1) rm_rf(g_built); /* a bad build is rebuilt next launch; a bridge problem is not the build's fault */
 		goto fail;
 	}
-	void *f1 = gsr_game_sym("gf_irq_handler_03000000");
 	void *f2 = gsr_game_sym("kDispatchTable");
-	unsigned *vc = (unsigned *)gsr_game_sym("gsr_stamps_kVariantCount");
-	if (!f1 || !f2 || !vc || *vc != 256u) {
+	int complete = f2 != NULL;
+	if (!gsr_game()->tla) {  /* Golden Sun: also its interrupt handler and the spell-stamp variants */
+		void *f1 = gsr_game_sym("gf_irq_handler_03000000");
+		unsigned *vc = (unsigned *)gsr_game_sym("gsr_stamps_kVariantCount");
+		complete = complete && f1 && vc && *vc == 256u;
+	}
+	if (!complete) {
 		set_err("the built game is incomplete (missing symbols)");
 		rm_rf(g_built);
 		goto fail;

@@ -17,6 +17,7 @@
 #include "gsr_host.h"
 #include "gsr_settings.h"
 #include "gsr_text.h"
+#include "gsr_game.h"
 
 #include <GLES3/gl3.h>
 #include <android/log.h>
@@ -30,11 +31,10 @@
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "gsr", __VA_ARGS__)
 
-/* Name the launcher stores the picked ROM under (GsrConfig.ROM_NAME). */
-#define GSR_ROM_NAME "golden_sun.gba"
-/* Golden Sun (USA, Europe), the SHA-1 GSRecomp's launcher checks. */
-#define GSR_ROM_SHA1 "5c4695205413df7db52b9a184815a07783999971"
-#define GSR_ROM_SIZE 8388608L
+/* The stored ROM's name, its SHA-1 and size: per game, see gsr_game.c (GsrConfig.java names them too). */
+#define GSR_ROM_NAME (gsr_game()->rom_name)
+#define GSR_ROM_SHA1 (gsr_game()->rom_sha1)
+#define GSR_ROM_SIZE (gsr_game()->rom_size)
 
 /* ---- Compact SHA-1 (FIPS 180-1) ------------------------------------------------------------- */
 
@@ -271,7 +271,7 @@ static void start_engine(const char *data_dir)
 	/* The GBA's own left/right sound channels instead of the old mono route (the PC launcher sets this too). */
 	setenv("GBARECOMP_AUDIO_STEREO", "1", 0);
 	snprintf(g_rom_path, sizeof g_rom_path, "%s/%s", data_dir, GSR_ROM_NAME);
-	snprintf(g_run_dir, sizeof g_run_dir, "%s/../run", data_dir);
+	snprintf(g_run_dir, sizeof g_run_dir, "%s/../%s", data_dir, gsr_game()->run);
 	mkdir(g_run_dir, 0755);
 	if (chdir(g_run_dir) != 0) LOG("chdir %s failed", g_run_dir);
 	if (gsr_engine_bind(err, sizeof err) != 0 || gsr_engine_start(8, argv, err, sizeof err) != 0) {
@@ -294,7 +294,8 @@ static void draw_error_screen(int w, int h, const char *title, const char *detai
 
 int descore_game_main(const DescoreGameParams *params)
 {
-	char hex[41];
+	char hex[41], shared_dir[1100];
+	gsr_game_select(params->data_dir);
 	int status = check_rom(params->data_dir, hex);
 	g_rom_status = status;
 	unsigned frame = 0, settings_gen = 0;
@@ -305,9 +306,16 @@ int descore_game_main(const DescoreGameParams *params)
 	version = (GLubyte *) glGetString(GL_VERSION);
 	LOG("GL_VERSION %s", version ? (const char *) version : "(null)");
 
-	/* Options and controls live next to the ROM in the app's private folder. */
-	gsr_settings_init(params->data_dir);
-	gsr_controls_init(params->data_dir);
+	/* Options and controls live next to the Golden Sun ROM in the app's private folder (<files>/gsr/game),
+	 * and both games use the same ones. */
+	snprintf(shared_dir, sizeof shared_dir, "%s", params->data_dir);
+	if (gsr_game()->tla) {
+		char *slash = strrchr(shared_dir, '/');
+		if (slash) snprintf(slash + 1, sizeof shared_dir - (size_t)(slash + 1 - shared_dir), "game");
+		mkdir(shared_dir, 0755);
+	}
+	gsr_settings_init(shared_dir);
+	gsr_controls_init(shared_dir);
 	gsr_controls_layout(descore_surface_width(), descore_surface_height());
 
 	/* First launch builds the game code from the ROM (about ten minutes); later launches load the

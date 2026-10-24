@@ -17,11 +17,14 @@ final class GsrConfig {
 	}
 
 	static final int UNIT_GAME = 1;
-	/** Name the picked ROM is stored under (kept in sync with GSR_ROM_NAME in gsr_main.c). */
+	static final int UNIT_TLA = 2;
+	/** Names the picked ROMs are stored under (kept in sync with gsr_game.c). */
 	static final String ROM_NAME = "golden_sun.gba";
+	static final String TLA_ROM_NAME = "lost_age.gba";
 
 	static DescoreGameConfig create() {
 		List<DescoreGameConfig.Unit> units = new ArrayList<>();
+		// The GBA header's game code (offset 0xAC) tells the two ROMs apart, so either can be picked any time.
 		units.add(new DescoreGameConfig.Unit(
 				UNIT_GAME,
 				"Golden Sun",
@@ -29,16 +32,25 @@ final class GsrConfig {
 				new String[]{ROM_NAME},
 				new String[]{},
 				new String[]{},
-				new String[][]{{".gba", ROM_NAME}}));
+				new String[][]{{".gba", ROM_NAME}}).withAliasCheck(0xAC, "AGSE"));
+		units.add(new DescoreGameConfig.Unit(
+				UNIT_TLA,
+				"Golden Sun: The Lost Age",
+				"tla",
+				new String[]{TLA_ROM_NAME},
+				new String[]{},
+				new String[]{},
+				new String[][]{{".gba", TLA_ROM_NAME}}).withAliasCheck(0xAC, "AGFE"));
 		return new DescoreGameConfig(
 				"Golden Sun Recompiled",
 				"gsrhost",
 				"gsr",
-				"Select your own Golden Sun (USA or Europe) GBA ROM file.\n\n"
+				"Select your own Golden Sun or Golden Sun: The Lost Age (USA or Europe) GBA ROM file. "
+						+ "You can add the other game later.\n\n"
 						+ "The file can have any name, but it must end in .gba. Zipped ROMs "
 						+ "must be extracted first.",
 				units,
-				true)   // once the ROM is in place, skip the picker on every later launch
+				true)   // only for a single unit: with two games the launcher always asks which to play
 				.withFilePicker()
 				.withGles3(0, 0);
 	}

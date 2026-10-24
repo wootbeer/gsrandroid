@@ -66,6 +66,7 @@ add_library(gsrecomp_core STATIC
 		${GSRC_GB}/tools/gba_recompile/config.cpp
 		${GSRC_GB}/tools/gba_recompile/slim_pass.cpp
 		${GSRC_PB}/builder_main.cpp
+		gsr/gsr_tla_builder.cpp
 		${GSRC_PB}/guest_call.cpp
 		${GSRC_PB}/block_timing.cpp
 		# ---- the engine core: ARM runtime, bus bridge, host seam, debug server ----
@@ -114,6 +115,9 @@ set_source_files_properties(${GSRC_GB}/tools/gba_recompile/main.cpp
 		PROPERTIES COMPILE_DEFINITIONS "main=gba_recompile_main")
 set_source_files_properties(${GSRC_PB}/builder_main.cpp
 		PROPERTIES COMPILE_DEFINITIONS "main=gsr_builder_main;GSR_ANDROID_INPROCESS")
+# The Lost Age's builder: the same source again (gsr/gsr_tla_builder.cpp includes it).
+set_source_files_properties(gsr/gsr_tla_builder.cpp
+		PROPERTIES COMPILE_DEFINITIONS "main=gsr_tla_builder_main;GSR_ANDROID_INPROCESS;GSR_BUILDER_TLA=1")
 target_include_directories(gsrecomp_core PRIVATE
 		${GSRC_GB}
 		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/recompile ${GSRC_GB}/src/debug
@@ -132,6 +136,7 @@ set(GSR_SOURCES
 		gsr/gsr_shim.c
 		gsr/gsr_headers.c
 		gsr/gsr_engine.c
+		gsr/gsr_game.c
 		gsr/gsr_build.c
 		gsr/gsr_android.cpp
 		gsr/gsr_settings.c
@@ -200,9 +205,14 @@ set_target_properties(gsrengine PROPERTIES LINK_FLAGS "-Wl,-z,undefs -Wl,--no-as
 add_library(gsgamebridge SHARED gsr/bridge_stub.c)
 target_link_libraries(gsrengine gsgamebridge gsrhost ${log-lib} m)
 
-# ---- libgsrtlaengine.so: The Lost Age's game layer (experimental, cloud test) ----------------
+# ---- libgsrtlaengine.so: The Lost Age's game layer ----------------------------------------------
+# Like libgsrengine.so for Golden Sun: tla_runner.cpp and the rest of upstream's "The Lost Age/src", loaded
+# after the game libraries built from the player's Lost Age ROM. TLA_PLAYER_RELEASE as in upstream's player
+# release. tla_reloc_images.inc (in tla/src) lists the RAM routines the builder makes images of: names,
+# ROM addresses and sizes only, the same for every copy of the one ROM the builder accepts.
 set(GSRC_TLA ${GSRC}/tla)
 add_library(gsrtlaengine SHARED
+		gsr/gsr_tla_engine_entry.cpp
 		${GSRC_TLA}/src/tla_runner.cpp
 		${GSRC_TLA}/src/tla_ram_images.cpp
 		${GSRC_TLA}/src/tla_text_speed.cpp

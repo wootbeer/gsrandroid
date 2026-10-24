@@ -10,20 +10,25 @@ import java.io.InputStream;
 import java.io.OutputStream;
 
 /**
- * Unpacks assets/gsr_builder_data (GSRecomp's translator configuration: function addresses, section
- * ranges and hashes of the pinned ROM) to files/gsr/builder_data. Re-done after every app update.
- * Contains no game code and no ROM bytes; the ROM is the player's own file.
+ * Unpacks assets/gsr_builder_data and assets/gsr_builder_data_tla (GSRecomp's translator configuration for
+ * Golden Sun and The Lost Age: function addresses, section ranges and hashes of the pinned ROMs) to
+ * files/gsr/builder_data and files/gsr/builder_data_tla. Re-done after every app update.
+ * Contains no game code and no ROM bytes; the ROMs are the player's own files.
  */
 final class GsrBuilderData {
-	private static final String ASSET_DIR = "gsr_builder_data";
 	private static final String MARKER = ".extracted";
 
 	private GsrBuilderData() {
 	}
 
 	static void ensureExtracted(Context context) {
+		ensureExtracted(context, "gsr_builder_data", "builder_data");
+		ensureExtracted(context, "gsr_builder_data_tla", "builder_data_tla");
+	}
+
+	private static void ensureExtracted(Context context, String ASSET_DIR, String folder) {
 		try {
-			File root = new File(new File(context.getFilesDir(), "gsr"), "builder_data");
+			File root = new File(new File(context.getFilesDir(), "gsr"), folder);
 			String version = String.valueOf(context.getPackageManager()
 					.getPackageInfo(context.getPackageName(), 0).lastUpdateTime);
 			File marker = new File(root, MARKER);

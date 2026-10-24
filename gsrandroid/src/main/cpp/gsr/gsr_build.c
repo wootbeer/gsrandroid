@@ -89,17 +89,52 @@ int gsr_build_game(const GsrBuildParams *p, char *err, size_t errlen) {
 	mkdir_p(p->out_dir);
 	if (gsr_cc_write_headers(hdr) != 0) { fail_msg(err, errlen, "cannot write headers to %s", hdr); return -1; }
 
-	/* ---- enumerate shards ---- */
+	/* ---- enumerate shards ----
+	 * gen/<folder>/ holds a part's sources. The Lost Age also has gen/reloc/<folder>/ (one folder per
+	 * routine the game copies into RAM): a folder with no sources of its own is looked into once more, and
+	 * its sub-folders become parts named <folder>_<sub>. */
+	static char dirs_path[256][900], dirs_label[256][300];  /* static: about 300 KB */
+	int ndirs = 0;
 	DIR *gd = opendir(p->gen_dir);
 	if (!gd) { fail_msg(err, errlen, "no translated code at %s", p->gen_dir); return -1; }
 	struct dirent *de;
 	while ((de = readdir(gd))) {
 		if (de->d_name[0] == '.') continue;
-		char sub[900], subinc[900], rh[900];
+		char sub[900];
 		snprintf(sub, sizeof sub, "%s/%s", p->gen_dir, de->d_name);
 		DIR *sd = opendir(sub);
 		if (!sd) continue;
-		snprintf(subinc, sizeof subinc, "%s/%s", inc, de->d_name);
+		int has_src = 0;
+		struct dirent *fe;
+		while ((fe = readdir(sd))) if (ends_with(fe->d_name, ".cpp")) { has_src = 1; break; }
+		if (has_src) {
+			if (ndirs < 256) {
+				snprintf(dirs_path[ndirs], sizeof dirs_path[ndirs], "%s", sub);
+				snprintf(dirs_label[ndirs], sizeof dirs_label[ndirs], "%s", de->d_name);
+				ndirs++;
+			}
+		} else {
+			rewinddir(sd);
+			while ((fe = readdir(sd))) {
+				if (fe->d_name[0] == '.') continue;
+				char sub2[900];
+				snprintf(sub2, sizeof sub2, "%s/%s", sub, fe->d_name);
+				struct stat st2;
+				if (stat(sub2, &st2) != 0 || !S_ISDIR(st2.st_mode) || ndirs >= 256) continue;
+				snprintf(dirs_path[ndirs], sizeof dirs_path[ndirs], "%s", sub2);
+				snprintf(dirs_label[ndirs], sizeof dirs_label[ndirs], "%s_%s", de->d_name, fe->d_name);
+				ndirs++;
+			}
+		}
+		closedir(sd);
+	}
+	closedir(gd);
+	for (int di = 0; di < ndirs; di++) {
+		const char *sub = dirs_path[di], *label = dirs_label[di];
+		char subinc[900], rh[1000];
+		DIR *sd = opendir(sub);
+		if (!sd) continue;
+		snprintf(subinc, sizeof subinc, "%s/%s", inc, label);
 		mkdir_p(subinc);
 		snprintf(rh, sizeof rh, "%s/recompiled.h", sub);
 		if (exists(rh)) {
@@ -111,22 +146,22 @@ int gsr_build_game(const GsrBuildParams *p, char *err, size_t errlen) {
 		while ((fe = readdir(sd))) {
 			const char *n = fe->d_name;
 			int take = (!strncmp(n, "recompiled", 10) && ends_with(n, ".cpp")) ||
-			           !strcmp(n, "dispatch_table.cpp") || !strcmp(n, "stamp_registry.cpp");
+			           !strcmp(n, "dispatch_table.cpp") || !strcmp(n, "stamp_registry.cpp") ||
+			           !strcmp(n, "expected.cpp");
 			if (!take) continue;
 			if (nt == cap) { cap = cap ? cap * 2 : 1024; tasks = realloc(tasks, (size_t)cap * sizeof(Task)); }
 			Task *t = &tasks[nt++];
 			snprintf(t->src, sizeof t->src, "%s/%s", sub, n);
 			snprintf(t->inc1, sizeof t->inc1, "%s", subinc);
-			snprintf(t->dir, sizeof t->dir, "%s", de->d_name);
+			snprintf(t->dir, sizeof t->dir, "%s", label);
 			char base[300];
 			snprintf(base, sizeof base, "%s", n);
 			base[strlen(base) - 4] = 0;
-			snprintf(t->obj, sizeof t->obj, "%s/obj_%s__%s.o", p->work_dir, de->d_name, base);
+			snprintf(t->obj, sizeof t->obj, "%s/obj_%s__%s.o", p->work_dir, label, base);
 			t->part = 0;
 		}
 		closedir(sd);
 	}
-	closedir(gd);
 	if (nt == 0) { fail_msg(err, errlen, "no translated shards under %s", p->gen_dir); return -1; }
 	qsort(tasks, (size_t)nt, sizeof(Task), cmp_task);
 	logf_(p, "shards: %d, workers: %d", nt, workers);
