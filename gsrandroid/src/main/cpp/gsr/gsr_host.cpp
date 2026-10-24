@@ -383,3 +383,11 @@ void gsr_host_render(int sw, int sh) {
 }
 
 }  // extern "C"
+
+// ---- The Lost Age: Golden Sun save chooser (tla_gs_save_import.cpp) -------------------------------------
+// Placeholder until the Android chooser is wired: report that no browser could open.
+extern "C" int gsr_host_pick_gs_save_begin(void) { return 0; }
+extern "C" int gsr_host_pick_gs_save_poll(char* path, int path_size) {
+    if (path && path_size > 0) path[0] = 0;
+    return -1;
+}

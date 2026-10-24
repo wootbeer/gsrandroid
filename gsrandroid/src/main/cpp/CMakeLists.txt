@@ -199,3 +199,45 @@ set_target_properties(gsrengine PROPERTIES LINK_FLAGS "-Wl,-z,undefs -Wl,--no-as
 # through it. Never contains game code.
 add_library(gsgamebridge SHARED gsr/bridge_stub.c)
 target_link_libraries(gsrengine gsgamebridge gsrhost ${log-lib} m)
+
+# ---- libgsrtlaengine.so: The Lost Age's game layer (experimental, cloud test) ----------------
+set(GSRC_TLA ${GSRC}/tla)
+add_library(gsrtlaengine SHARED
+		${GSRC_TLA}/src/tla_runner.cpp
+		${GSRC_TLA}/src/tla_ram_images.cpp
+		${GSRC_TLA}/src/tla_text_speed.cpp
+		${GSRC_TLA}/src/tla_battle_speed.cpp
+		${GSRC_TLA}/src/tla_rewind.cpp
+		${GSRC_TLA}/src/tla_walk_speed.cpp
+		${GSRC_TLA}/src/tla_settings_page.cpp
+		${GSRC_TLA}/src/tla_hard_mode.cpp
+		${GSRC_TLA}/src/tla_gs_save_import.cpp
+		${GSRC_TLA}/src/tla_save_update.cpp
+		${GSRC_TLA}/src/gs_save.cpp
+		${GSRC_TLA}/src/tla_cheat_menu.cpp
+		${GSRC_TLA}/src/tla_spell_sparks.cpp
+		${GSRC_TLA}/src/tla_spell_mesh.cpp
+		${GSRC_TLA}/src/tla_text.cpp
+		${GSRC_TLA}/src/tla_encounters.cpp
+		${GSRC_TLA}/src/tla_widescreen.cpp
+		${GSRC_TLA}/src/tla_sprite_memory.cpp
+		${GSRC_TLA}/src/tla_gpu_field.cpp
+		${GSRC_GB}/src/field/field_scene.cpp
+		${GSRC_GB}/src/field/field_scene_renderer.cpp
+		${GSRC_TLA}/src/field_game_profile.cpp
+		${GSRC_TLA}/src/world_map_source.cpp
+		${GSRC_GB}/src/field/effect_particles.cpp
+		${GSRC_GB}/src/field/effect_burst.cpp
+		${GSRC_GB}/src/field/effect_capture.cpp
+		${GSRC_TBS}/src/unpacker_guard.cpp)
+set_source_files_properties(${GSRC_TLA}/src/tla_runner.cpp PROPERTIES COMPILE_DEFINITIONS "main=gsr_tla_engine_main_cpp")
+set_property(SOURCE ${GSRC_TBS}/src/unpacker_guard.cpp TARGET_DIRECTORY gsrtlaengine APPEND PROPERTY INCLUDE_DIRECTORIES ${GSRC_PB})
+target_include_directories(gsrtlaengine PRIVATE
+		gsr/shim_inc
+		${GSRC_TLA}/src ${GSRC_GB} ${GSRC_GB}/src/field
+		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/runtime ${GSRC_GB}/src/debug
+		${GSRC_GB}/src/recompile)
+target_compile_options(gsrtlaengine PRIVATE -std=c++20 -w -fPIC -O3)
+target_compile_definitions(gsrtlaengine PRIVATE GBARECOMP_DEFAULT_DEBUG_PORT=19843 GSR_ANDROID_ENGINE TLA_PLAYER_RELEASE=1)
+set_target_properties(gsrtlaengine PROPERTIES LINK_FLAGS "-Wl,-z,undefs -Wl,--no-as-needed")
+target_link_libraries(gsrtlaengine gsgamebridge gsrhost ${log-lib} m)
