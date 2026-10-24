@@ -1,5 +1,6 @@
 // gsr_host.cpp -- frame mailbox + GLES3 presenter, audio bridge into Descore's mixer, input poll.
 #include "gsr_host.h"
+#include "gsr_game.h"
 #include "gsr_controls.h"
 #include "gsr_settings.h"
 #include "gsr_screen_filter.h"
@@ -276,10 +277,12 @@ int gsr_host_gpu_wanted(void) {
     switch (gsr_settings_get(GSR_S_RENDERER)) {
     case 1: return 0;
     case 2: return 1;
-    // Auto: the CPU renderer. It is fast enough for the Expanded view now and reliable; the GPU field
-    // renderer is experimental (the sides can trail the middle while the camera moves, and sprites can
+    // Auto, Golden Sun: the CPU renderer. It is fast enough for the Expanded view now and reliable; the GPU
+    // field renderer is experimental (the sides can trail the middle while the camera moves, and sprites can
     // drift while fast forwarding), so it is only used when picked.
-    default: return 0;
+    // Auto, The Lost Age: the graphics card in the Expanded view. Upstream draws that game's widened view
+    // with the graphics card only; the CPU renderer has nothing to put at the sides there (they stay black).
+    default: return gsr_game()->tla && gsr_settings_get(GSR_S_VIEW_MODE) == 1 ? 1 : 0;
     }
 }
 void gsr_host_gpu_report_init(int ok) {

@@ -65,6 +65,19 @@ bool env_on(const char* name) {
 
 bool g_enabled = false;
 bool g_only = false;
+#ifdef GSR_ANDROID_ENGINE
+}  // namespace
+// GSR_ANDROID: the side menu's Renderer setting decides, live (gsr_host.cpp: for The Lost Age, Auto draws
+// the Expanded view with the graphics card, as upstream's launcher does), and the host is told whether the
+// renderer started and whether each frame was drawn.
+extern "C" int gsr_host_gpu_wanted(void);
+extern "C" void gsr_host_gpu_report_init(int ok);
+extern "C" void gsr_host_gpu_report_frame(int drew);
+namespace {
+bool gpu_on() { return gsr_host_gpu_wanted() != 0; }
+#else
+bool gpu_on() { return g_enabled; }
+#endif
 bool g_check = false;
 
 // Filled at VBlank start (the scene capture hook), read at present time.
@@ -305,7 +318,12 @@ void capture() {
 
     // Diagnostic capture alone must not enable placement overrides in the
     // console/Direct3D path; retain the existing renderer-owned hook behavior.
-    if (g_enabled) tla_widescreen_frame(game_window_open(bus, io));
+#ifdef GSR_ANDROID_ENGINE
+    // The console compositor has no margin source for The Lost Age (upstream draws its Expanded view
+    // with the graphics card only): keep the margins of a frame it draws black, not wrapped garbage.
+    gba::g_ws_margin_policy = [](std::uint16_t, const std::uint8_t*) -> unsigned { return 0xFu; };
+#endif
+    if (gpu_on()) tla_widescreen_frame(game_window_open(bus, io));
     gsr::FieldScene scene{};
     gsr::field_scene_capture(&scene, ppu->frame_count(), io.data(), bus->oam_ptr(),
                              bus->pal_ptr(), ppu->latched_native_line_io(),
@@ -462,6 +480,9 @@ bool draw_capture(const Capture& capture, std::uint8_t* rgb,
     if (!init_attempted) {
         init_attempted = true;
         init_ok = surface.init() && renderer.init(&surface);
+#ifdef GSR_ANDROID_ENGINE
+        gsr_host_gpu_report_init(init_ok ? 1 : 0);
+#endif
         if (!init_ok)
             std::fprintf(stderr,
                          "[gpu-field] renderer unavailable (%s); staying on the "
@@ -712,10 +733,25 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
 
 // Called first by the present hook (src/tla_rewind.cpp). True when `rgb`
 // now holds the graphics card's picture (or the refusal colour).
+#ifdef GSR_ANDROID_ENGINE
+static bool tla_gpu_field_present_impl(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height,
+                                       gbarecomp::HistoryFrame& frame, bool synchronous);
 bool tla_gpu_field_present(std::uint8_t* rgb, std::uint32_t width,
                            std::uint32_t height,
                            gbarecomp::HistoryFrame& frame, bool synchronous) {
-    if (!g_enabled) { g_readback.invalidate(); return false; }
+    const bool drew = tla_gpu_field_present_impl(rgb, width, height, frame, synchronous);
+    gsr_host_gpu_report_frame(drew ? 1 : 0);
+    return drew;
+}
+static bool tla_gpu_field_present_impl(std::uint8_t* rgb, std::uint32_t width,
+                                       std::uint32_t height,
+                                       gbarecomp::HistoryFrame& frame, bool synchronous) {
+#else
+bool tla_gpu_field_present(std::uint8_t* rgb, std::uint32_t width,
+                           std::uint32_t height,
+                           gbarecomp::HistoryFrame& frame, bool synchronous) {
+#endif
+    if (!gpu_on()) { g_readback.invalidate(); return false; }
     ++g_presented;
     if (g_check && g_presented % 300u == 0u)
         std::fprintf(stderr,
