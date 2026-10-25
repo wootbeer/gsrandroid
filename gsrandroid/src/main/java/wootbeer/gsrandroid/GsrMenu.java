@@ -55,7 +55,7 @@ final class GsrMenu {
 	private TextView title;
 	private ScrollView scroll;
 	private boolean open;
-	private int page; // 0 main, 1 gamepad buttons, 2 credits, 3 cheats, 4 save states
+	private int page; // 0 main, 1 gamepad buttons, 2 credits, 3 cheats, 4 save states, 5 saves
 
 	GsrMenu(Activity activity) {
 		this.activity = activity;
@@ -402,6 +402,9 @@ final class GsrMenu {
 		action("Save states", ">", new Runnable() {
 			@Override public void run() { showStates(); }
 		});
+		action("Saves", ">", new Runnable() {
+			@Override public void run() { showSaves(); }
+		});
 		action("Cheats", ">", new Runnable() {
 			@Override public void run() { showCheats(); }
 		});
@@ -546,6 +549,154 @@ final class GsrMenu {
 		section("");
 		backRow();
 		focusFirst();
+	}
+
+	// ---- Saves: the games' own saves (import, export, backup) ------------------------------------------------
+
+	static final int REQUEST_EXPORT = 4721, REQUEST_IMPORT = 4722, REQUEST_BACKUP_ALL = 4723;
+	private GsrSaves saves;
+
+	private GsrSaves saves() {
+		if (saves == null) saves = new GsrSaves(activity);
+		return saves;
+	}
+
+	private static String when(java.io.File f) {
+		return java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
+				.format(new java.util.Date(f.lastModified()));
+	}
+
+	private String gameTitle() { return tla() ? "The Lost Age" : "Golden Sun"; }
+
+	private void showSaves() {
+		clear("Saves", 5);
+		final java.io.File cur = saves().saveFile(tla());
+		final boolean have = cur.isFile() && cur.length() > 0;
+		section(gameTitle() + " save  (" + (have ? "saved " + when(cur) : "none yet") + ")");
+		Row export = action("Export save...", "", new Runnable() {
+			@Override public void run() {
+				if (!have) return;
+				android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
+				i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+				i.setType("application/octet-stream");
+				i.putExtra(android.content.Intent.EXTRA_TITLE, GsrSaves.saveName(tla()));
+				startForResult(i, REQUEST_EXPORT);
+			}
+		});
+		if (!have) export.setAlpha(0.45f);
+		action("Import save...", "", new Runnable() {
+			@Override public void run() {
+				new AlertDialog.Builder(activity)
+						.setTitle("Import a " + gameTitle() + " save?")
+						.setMessage("Pick a .sav file from a GBA emulator, a flash cart or an export. It replaces the "
+								+ "save in this app; the current one is kept as a backup first.\n\n"
+								+ "The game closes afterwards. Open it again to play with the imported save.")
+						.setNegativeButton("Cancel", null)
+						.setPositiveButton("Choose file", new DialogInterface.OnClickListener() {
+							@Override public void onClick(DialogInterface d, int w) {
+								android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
+								i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+								i.setType("*/*");
+								startForResult(i, REQUEST_IMPORT);
+							}
+						})
+						.show();
+			}
+		});
+		final java.io.File[] old = saves().backups(tla());
+		if (old.length > 0) {
+			action("Restore a backup...", "", new Runnable() {
+				@Override public void run() { chooseBackup(old); }
+			});
+		}
+
+		section("Backup");
+		action("Back up all saves to a folder...", "", new Runnable() {
+			@Override public void run() {
+				startForResult(new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_BACKUP_ALL);
+			}
+		});
+		info("Copies both games' saves into a new folder in the place you pick (for example Downloads, or a "
+				+ "cloud drive), so they survive uninstalling the app. Save states are not included.", DIM, 13);
+		section("");
+		backRow();
+		focusFirst();
+	}
+
+	private void startForResult(android.content.Intent i, int code) {
+		try {
+			activity.startActivityForResult(i, code);
+		} catch (RuntimeException e) {
+			Toast.makeText(activity, "No file browser on this device", Toast.LENGTH_LONG).show();
+		}
+	}
+
+	private void chooseBackup(final java.io.File[] old) {
+		String[] names = new String[old.length];
+		for (int i = 0; i < old.length; i++) names[i] = "Replaced " + when(old[i]);
+		new AlertDialog.Builder(activity)
+				.setTitle("Restore which save?")
+				.setItems(names, new DialogInterface.OnClickListener() {
+					@Override public void onClick(DialogInterface d, final int which) {
+						new AlertDialog.Builder(activity)
+								.setTitle("Restore this save?")
+								.setMessage("The current save is kept as a backup. The game closes afterwards; "
+										+ "open it again to play.")
+								.setNegativeButton("Cancel", null)
+								.setPositiveButton("Restore", new DialogInterface.OnClickListener() {
+									@Override public void onClick(DialogInterface d2, int w) {
+										try {
+											saves().restore(tla(), old[which]);
+											closeGame("Save restored.");
+										} catch (java.io.IOException e) {
+											Toast.makeText(activity, "Could not restore: " + e.getMessage(), Toast.LENGTH_LONG).show();
+										}
+									}
+								})
+								.show();
+					}
+				})
+				.setNegativeButton("Cancel", null)
+				.show();
+	}
+
+	/** After a new save is in place: the running game still has the old one in memory and would write it back. */
+	private void closeGame(String what) {
+		new AlertDialog.Builder(activity)
+				.setTitle(what)
+				.setMessage("The game closes now. Open it again to play.")
+				.setCancelable(false)
+				.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+					@Override public void onClick(DialogInterface d, int w) {
+						activity.finishAffinity();
+						Process.killProcess(Process.myPid());
+					}
+				})
+				.show();
+	}
+
+	/** From the activity's onActivityResult; true if it was one of the Saves page's requests. */
+	boolean onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
+		if (requestCode != REQUEST_EXPORT && requestCode != REQUEST_IMPORT && requestCode != REQUEST_BACKUP_ALL) return false;
+		android.net.Uri uri = resultCode == Activity.RESULT_OK && data != null ? data.getData() : null;
+		if (uri == null) return true;
+		try {
+			if (requestCode == REQUEST_EXPORT) {
+				saves().exportTo(tla(), uri);
+				Toast.makeText(activity, "Save exported", Toast.LENGTH_SHORT).show();
+			} else if (requestCode == REQUEST_IMPORT) {
+				saves().importFrom(tla(), uri);
+				closeGame("Save imported.");
+			} else {
+				int n = saves().backupAllTo(uri);
+				Toast.makeText(activity, n == 0 ? "There are no saves yet" : "Backed up " + n + (n == 1 ? " save" : " saves"),
+						Toast.LENGTH_LONG).show();
+			}
+		} catch (Exception e) {
+			Toast.makeText(activity, "Could not do that: " + e.getMessage(), Toast.LENGTH_LONG).show();
+		}
+		if (open && page == 5) showSaves();
+		return true;
 	}
 
 	private void saveState(final int slot) {

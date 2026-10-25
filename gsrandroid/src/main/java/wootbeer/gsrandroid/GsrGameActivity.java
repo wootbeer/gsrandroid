@@ -103,6 +103,7 @@ public class GsrGameActivity extends DescoreGameActivity {
 	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 		super.onActivityResult(requestCode, resultCode, data);
 		if (requestCode == GsrSession.REQUEST_PICK_SAVE && session != null) session.onPickResult(resultCode, data);
+		else if (menu != null) menu.onActivityResult(requestCode, resultCode, data);
 	}
 
 	@Override
