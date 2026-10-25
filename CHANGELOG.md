@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.1. (10-25-2026)]
 
 ### Fixed
 - The Lost Age: with the CPU renderer, Expanded view now fills the screen with Stretch / Zoom (shows the normal picture; the wider view needs the GPU renderer)  
