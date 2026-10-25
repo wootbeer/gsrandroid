@@ -4,6 +4,9 @@
 
 ### Added
 - Golden Sun: The Lost Age support (same app; pick its ROM in the launcher)  
+- Transfer your Golden Sun party to The Lost Age: "Load a Golden Sun save file?" on a new game uses this app's Golden Sun save or a .sav file you pick  
+- Seamless mode: finishing Golden Sun continues straight into The Lost Age (asked on a new Golden Sun game when The Lost Age is installed)  
+- Saves page in the menu: export and import .sav files (GBA emulator / flash cart saves), restore the save an import replaced, back up both games' saves to a folder  
 
 ### Changed
 - Bumped to the latest GSRecomp version (0.6)  
