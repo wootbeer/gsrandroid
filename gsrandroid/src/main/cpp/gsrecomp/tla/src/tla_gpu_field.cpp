@@ -774,10 +774,13 @@ bool tla_gpu_field_present(std::uint8_t* rgb, std::uint32_t width,
     gsr_host_gpu_report_frame(drew ? 1 : 0);
     // The console compositor has nothing for The Lost Age's margins (they are black), so on the CPU renderer
     // the host shows just the native 240x160 part of an Expanded frame: Stretch and Zoom then fill the
-    // screen with the picture, as in the Native view. A single frame the graphics card declines keeps its
-    // black margins instead, so the picture does not jump in size.
+    // screen with the picture, as in the Native view. The same once the graphics card has declined half a
+    // second of frames in a row (a scene it cannot draw); a few declined frames keep their black margins
+    // instead, so the picture does not jump in size.
+    static unsigned declined_run = 0;
+    declined_run = drew ? 0u : declined_run + 1u;
     gsr_host_present_crop = 0;
-    if (!drew && !gpu_on()) {
+    if (!drew && (!gpu_on() || declined_run >= 30u)) {
         if (const auto* ppu = gbarecomp::active_ppu()) {
             if ((width > 240u || height > 160u) &&
                 ppu->view_extra_left() + 240u + ppu->view_extra_right() == width &&
