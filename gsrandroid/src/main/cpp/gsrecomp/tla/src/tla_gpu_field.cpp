@@ -67,6 +67,8 @@ bool g_only = false;
 extern "C" int gsr_host_gpu_wanted(void);
 extern "C" void gsr_host_gpu_report_init(int ok);
 extern "C" void gsr_host_gpu_report_frame(int drew);
+extern "C" int gsr_host_present_crop;  // host_window_android.cpp: show only the native part of the frame
+extern "C" unsigned gsr_host_present_crop_x, gsr_host_present_crop_y;
 namespace {
 bool gpu_on() { return gsr_host_gpu_wanted() != 0; }
 #else
@@ -770,6 +772,22 @@ bool tla_gpu_field_present(std::uint8_t* rgb, std::uint32_t width,
                            gbarecomp::HistoryFrame& frame, bool synchronous) {
     const bool drew = tla_gpu_field_present_impl(rgb, width, height, frame, synchronous);
     gsr_host_gpu_report_frame(drew ? 1 : 0);
+    // The console compositor has nothing for The Lost Age's margins (they are black), so on the CPU renderer
+    // the host shows just the native 240x160 part of an Expanded frame: Stretch and Zoom then fill the
+    // screen with the picture, as in the Native view. A single frame the graphics card declines keeps its
+    // black margins instead, so the picture does not jump in size.
+    gsr_host_present_crop = 0;
+    if (!drew && !gpu_on()) {
+        if (const auto* ppu = gbarecomp::active_ppu()) {
+            if ((width > 240u || height > 160u) &&
+                ppu->view_extra_left() + 240u + ppu->view_extra_right() == width &&
+                ppu->view_extra_top() + 160u + ppu->view_extra_bottom() == height) {
+                gsr_host_present_crop_x = ppu->view_extra_left();
+                gsr_host_present_crop_y = ppu->view_extra_top();
+                gsr_host_present_crop = 1;
+            }
+        }
+    }
     return drew;
 }
 static bool tla_gpu_field_present_impl(std::uint8_t* rgb, std::uint32_t width,
