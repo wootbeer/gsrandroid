@@ -82,18 +82,49 @@ final class GsrSaves {
 	}
 
 	/**
-	 * Accepts a 64 KB flash save, or a 128 KB one whose second half is unused (some emulators write that size).
-	 * Returns the 64 KB the game reads, or throws with a reason the player can read.
+	 * Accepts a 64 KB flash save, or a 128 KB one whose second half is unused (some emulators write that size),
+	 * of the game it is for. Returns the 64 KB the game reads, or throws with a reason the player can read.
 	 */
-	static byte[] checkSave(byte[] data) throws IOException {
-		if (data.length == FLASH_BYTES) return data;
+	static byte[] checkSave(byte[] data, boolean tla) throws IOException { return checkSave(data, tla, true); }
+
+	static byte[] checkSave(byte[] data, boolean tla, boolean checkGame) throws IOException {
+		byte[] flash = null;
+		if (data.length == FLASH_BYTES) flash = data;
 		if (data.length == 2 * FLASH_BYTES) {
 			boolean unused = true;
 			byte first = data[FLASH_BYTES];
 			for (int i = FLASH_BYTES; i < data.length && unused; i++) unused = data[i] == first && (first == 0 || first == (byte) 0xFF);
-			if (unused) return Arrays.copyOf(data, FLASH_BYTES);
+			if (unused) flash = Arrays.copyOf(data, FLASH_BYTES);
 		}
-		throw new IOException("this is not a Golden Sun save (" + data.length + " bytes; a save is 64 KB)");
+		if (flash == null) throw new IOException("this is not a Golden Sun save (" + data.length + " bytes; a save is 64 KB)");
+		if (!checkGame) return flash;
+		int gs = blocks(flash, 0x1000, 0x1000 - 8), lost = blocks(flash, 0x3000, 0x3000);
+		if (gs == 0 && lost == 0) throw new IOException("there is no saved game in this file");
+		boolean isTla = lost > gs;
+		if (isTla != tla) {
+			throw new IOException("this is a " + (isTla ? "Lost Age" : "Golden Sun") + " save. Open "
+					+ (isTla ? "The Lost Age" : "Golden Sun") + " to import it there");
+		}
+		return flash;
+	}
+
+	/**
+	 * How many intact save blocks the file has in one game's layout. Both games start a block with "CAMELOT" and
+	 * a 16-bit sum of the block after its 16-byte header: Golden Sun writes 4 KB blocks (summing up to 8 bytes
+	 * before the end), The Lost Age 12 KB ones (tla_save_update.cpp, gs_save.cpp), so a block only adds up in
+	 * the layout of the game that wrote it.
+	 */
+	private static int blocks(byte[] f, int size, int sumEnd) {
+		int n = 0;
+		for (int off = 0; off + size <= f.length; off += size) {
+			if (f[off] != 'C' || f[off + 1] != 'A' || f[off + 2] != 'M' || f[off + 3] != 'E' || f[off + 4] != 'L'
+					|| f[off + 5] != 'O' || f[off + 6] != 'T') continue;
+			int sum = 0;
+			for (int i = 16; i < sumEnd; i++) sum += f[off + i] & 0xFF;
+			int stored = (f[off + 8] & 0xFF) | (f[off + 9] & 0xFF) << 8;
+			if ((sum & 0xFFFF) == stored) n++;
+		}
+		return n;
 	}
 
 	/** Writes this game's save to a document the player created. */
@@ -110,7 +141,7 @@ final class GsrSaves {
 		byte[] data;
 		try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
 			if (in == null) throw new IOException("could not read that file");
-			data = checkSave(readAll(in, 4 * FLASH_BYTES));
+			data = checkSave(readAll(in, 4 * FLASH_BYTES), tla);
 		}
 		backupCurrent(tla);
 		write(saveFile(tla), data);
@@ -118,7 +149,8 @@ final class GsrSaves {
 
 	/** Puts a backup back as the game's save (the current one is backed up too). */
 	void restore(boolean tla, File backup) throws IOException {
-		byte[] data = checkSave(readFile(backup));
+		// The game's own earlier save (it may hold no saved game yet): only the size is checked.
+		byte[] data = checkSave(readFile(backup), tla, false);
 		backupCurrent(tla);
 		write(saveFile(tla), data);
 	}
