@@ -327,7 +327,11 @@ private:
 #endif
     uint16_t latched_native_dispcnt_ = 0;
     std::array<uint8_t, 0x400> latched_native_io_{};
+#ifdef __ANDROID__  // GSR-ANDROID: also the second sprite page (gba_bus.h set_obj_extra) for the console compositor
+    std::array<uint8_t, 128 * 1024> latched_native_vram_{};
+#else
     std::array<uint8_t, 96 * 1024> latched_native_vram_{};
+#endif
     std::array<uint8_t, 0x400> latched_native_oam_{};
     std::array<uint8_t, 0x400> latched_native_pal_{};
     using LineIo = std::array<uint8_t, kLineIoBytes>;

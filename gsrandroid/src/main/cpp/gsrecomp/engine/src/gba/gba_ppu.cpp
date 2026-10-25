@@ -418,6 +418,25 @@ static inline int32_t read_s28_ref(const uint8_t* io, uint32_t off) {
 
 namespace {
 
+// GSR-ANDROID: a tile in the second sprite page (0x400..0x7FF, gba_bus.h set_obj_extra) wraps inside that
+// page and may read up to its end, as the graphics card renderer does; console tiles are unchanged.
+inline uint32_t gsr_obj_tile_wrap(uint32_t tile_num, uint32_t this_tile) {
+#ifdef __ANDROID__
+    if (tile_num & 0x400u) return 0x400u | (this_tile & 0x3FFu);
+#else
+    (void)tile_num;
+#endif
+    return this_tile;
+}
+inline uint32_t gsr_obj_vram_end(uint32_t tile_num) {
+#ifdef __ANDROID__
+    if (tile_num & 0x400u) return 128u * 1024u;
+#else
+    (void)tile_num;
+#endif
+    return 96u * 1024u;
+}
+
 bool obj_texel_opaque(const uint8_t* vram,
                       uint32_t obj_tile_base,
                       bool obj_1d_mapping,
@@ -439,14 +458,14 @@ bool obj_texel_opaque(const uint8_t* vram,
         this_tile = tile_num + (tile_y_in_sprite * 32u) +
                     tile_x_in_sprite * (color256 ? 2u : 1u);
     }
-    uint32_t tile_off = obj_tile_base + this_tile * 32u;
+    uint32_t tile_off = obj_tile_base + gsr_obj_tile_wrap(tile_num, this_tile) * 32u;
     if (color256) {
         uint32_t off = tile_off + py_in_tile * 8 + px_in_tile;
-        if (off + 1 > 96u * 1024u) return false;
+        if (off + 1 > gsr_obj_vram_end(tile_num)) return false;
         return vram[off] != 0;
     }
     uint32_t off = tile_off + py_in_tile * 4 + (px_in_tile / 2);
-    if (off + 1 > 96u * 1024u) return false;
+    if (off + 1 > gsr_obj_vram_end(tile_num)) return false;
     uint8_t b = vram[off];
     uint8_t pal_index = (px_in_tile & 1) ? (b >> 4) : (b & 0x0F);
     return pal_index != 0;
@@ -490,7 +509,11 @@ void mark_obj_window_scanline(bool* mask,
         if (sx & 0x100) sx -= 0x200;
 
         bool color256 = (attr0 & 0x2000u) != 0;
+#ifdef __ANDROID__  // GSR-ANDROID: the second sprite page (gba_bus.h set_obj_extra) for this compositor too
+        uint32_t tile_num = ws_obj_tile(idx, attr0, attr1, attr2);
+#else
         uint32_t tile_num = attr2 & 0x3FFu;
+#endif
         int tiles_w = sw / 8;
         int tiles_h = sh / 8;
 
@@ -912,7 +935,11 @@ void render_scanline_internal(uint8_t* rgb,
             if (sy >= 160) sy -= 256;
             if (sx & 0x100) sx -= 0x200;
             bool color256 = (attr0 & 0x2000u) != 0;
+#ifdef __ANDROID__  // GSR-ANDROID: the second sprite page (gba_bus.h set_obj_extra) for this compositor too
+            uint32_t tile_num = ws_obj_tile(idx, attr0, attr1, attr2);
+#else
             uint32_t tile_num = attr2 & 0x3FFu;
+#endif
             uint32_t palette_bank = (attr2 >> 12) & 0xFu;
             int tiles_w = sw / 8;
             int tiles_h = sh / 8;
@@ -943,11 +970,11 @@ void render_scanline_internal(uint8_t* rgb,
                     this_tile = tile_num + (tile_y_in_sprite * 32u) +
                                 tile_x_in_sprite * (color256 ? 2u : 1u);
                 }
-                uint32_t tile_off = obj_tile_base + this_tile * 32u;
+                uint32_t tile_off = obj_tile_base + gsr_obj_tile_wrap(tile_num, this_tile) * 32u;
                 uint8_t pal_index;
                 if (color256) {
                     uint32_t off = tile_off + py_in_tile * 8 + px_in_tile;
-                    if (off + 1 > 96u * 1024u) return;
+                    if (off + 1 > gsr_obj_vram_end(tile_num)) return;
                     pal_index = vram[off];
                     if (pal_index == 0) {
                         if (priority < obj_lift[ux0]) obj_lift[ux0] = static_cast<uint8_t>(priority);
@@ -955,7 +982,7 @@ void render_scanline_internal(uint8_t* rgb,
                     }
                 } else {
                     uint32_t off = tile_off + py_in_tile * 4 + (px_in_tile / 2);
-                    if (off + 1 > 96u * 1024u) return;
+                    if (off + 1 > gsr_obj_vram_end(tile_num)) return;
                     uint8_t b = vram[off];
                     pal_index = (px_in_tile & 1) ? (b >> 4) : (b & 0x0F);
                     if (pal_index == 0) {
@@ -1973,6 +2000,7 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
             int sy = 0, sx = 0;
             bool sy_trusted = false, sx_trusted = false;
             int8_t parked = -1;  // -1 = not asked yet this frame
+            int tile = -1;       // GSR-ANDROID: full OBJ tile (ws_obj_tile), -1 = not asked yet this frame
         };
         static ObjAnswer obj_answers[128];
         static uint32_t obj_gen = 1;
@@ -2096,7 +2124,12 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
             }
             sx -= g_ws_view_shift_x;
             bool color256 = (attr0 & 0x2000u) != 0;
+#ifdef __ANDROID__  // GSR-ANDROID: the second sprite page (gba_bus.h set_obj_extra) for this compositor too
+            if (answer.tile < 0) answer.tile = static_cast<int>(ws_obj_tile(idx, attr0, attr1, attr2));
+            uint32_t tile_num = static_cast<uint32_t>(answer.tile);
+#else
             uint32_t tile_num = attr2 & 0x3FFu;
+#endif
             uint32_t palette_bank = (attr2 >> 12) & 0xFu;
             int tiles_w = sw / 8;
             int tiles_h = sh / 8;
@@ -2187,11 +2220,11 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
                     this_tile = tile_num + (tile_y_in_sprite * 32u) +
                                 tile_x_in_sprite * (color256 ? 2u : 1u);
                 }
-                uint32_t tile_off = obj_tile_base + this_tile * 32u;
+                uint32_t tile_off = obj_tile_base + gsr_obj_tile_wrap(tile_num, this_tile) * 32u;
                 uint8_t pal_index;
                 if (color256) {
                     uint32_t off = tile_off + py_in_tile * 8 + px_in_tile;
-                    if (off + 1 > 96u * 1024u) return;
+                    if (off + 1 > gsr_obj_vram_end(tile_num)) return;
                     pal_index = vram[off];
                     if (pal_index == 0) {
                         lift_run();
@@ -2199,7 +2232,7 @@ void render_scanline_wide(uint8_t* rgb, int logical_y, uint32_t output_y,
                     }
                 } else {
                     uint32_t off = tile_off + py_in_tile * 4 + (px_in_tile / 2);
-                    if (off + 1 > 96u * 1024u) return;
+                    if (off + 1 > gsr_obj_vram_end(tile_num)) return;
                     uint8_t b = vram[off];
                     pal_index = (px_in_tile & 1) ? (b >> 4) : (b & 0x0F);
                     if (pal_index == 0) {
