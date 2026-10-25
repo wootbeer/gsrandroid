@@ -402,8 +402,12 @@ void capture() {
     // The console compositor has no margin source for The Lost Age (upstream draws its Expanded view
     // with the graphics card only): keep the margins of a frame it draws black, not wrapped garbage.
     gba::g_ws_margin_policy = [](std::uint16_t, const std::uint8_t*) -> unsigned { return 0xFu; };
-#endif
+    // The sprite hooks (placement and the Expanded view's sprite tile memory) are needed by the console
+    // compositor too when the side menu switches renderers live; without them its sprites read the wrong tiles.
+    tla_widescreen_frame(game_window_open(bus, io));
+#else
     if (gpu_on()) tla_widescreen_frame(game_window_open(bus, io));
+#endif
     gsr::FieldScene scene{};
     gsr::field_scene_capture(&scene, ppu->frame_count(), io.data(), bus->oam_ptr(),
                              bus->pal_ptr(), ppu->latched_native_line_io(),
