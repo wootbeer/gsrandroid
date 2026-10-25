@@ -5,6 +5,7 @@
 ### Fixed
 - The Lost Age: with the CPU renderer, Expanded view now fills the screen with Stretch / Zoom (shows the normal picture; the wider view needs the GPU renderer)  
 - The Lost Age: the same on the GPU renderer in places it can't draw the wider view, instead of black bars  
+- The Lost Age: garbled character sprites with the CPU renderer in Expanded view  
 
 ## [0.4. (10-24-2026)]
 
