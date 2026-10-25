@@ -11497,12 +11497,15 @@ bool g_hard_prompt_seamless = false;  // the second question is showing
 int g_hard_prompt_row = 0;
 std::uint16_t g_hard_prompt_held = 0;
 
-bool seamless_mode_on() {
-#ifdef GSR_ANDROID_ENGINE  // GSR_ANDROID: no The Lost Age to hand over to, so Seamless mode is always off
-    return false;
-#else
-    return gbarecomp::game_option_get(gbarecomp::seamless::kOptionKey, 0) != 0;
+#ifdef GSR_ANDROID_ENGINE
+extern "C" int gsr_host_tla_installed(void);  // GSR_ANDROID: gsr_main.c
 #endif
+
+bool seamless_mode_on() {
+#ifdef GSR_ANDROID_ENGINE  // GSR_ANDROID: Seamless mode needs The Lost Age's ROM in the app to hand over to
+    if (!gsr_host_tla_installed()) return false;
+#endif
+    return gbarecomp::game_option_get(gbarecomp::seamless::kOptionKey, 0) != 0;
 }
 
 void hard_mode_prompt_open() {
@@ -11524,10 +11527,12 @@ void hard_mode_prompt_close(bool yes) {
     const std::uint8_t value = yes ? kHardModeValue : 0u;
     bus_write_u8(kSavedFlag, value);
     bus_write_u8(kAutoSleepFlag, value);
-#ifdef GSR_ANDROID_ENGINE  // GSR_ANDROID: Seamless mode is off, so its question is not asked
-    g_hard_prompt_open = false;
-    g_cheat_menu_swallow = true;
-    return;
+#ifdef GSR_ANDROID_ENGINE  // GSR_ANDROID: without The Lost Age's ROM in the app, Seamless mode is not asked about
+    if (!gsr_host_tla_installed()) {
+        g_hard_prompt_open = false;
+        g_cheat_menu_swallow = true;
+        return;
+    }
 #endif
     // The key that answered is still held; the next question takes only a
     // new press (the filter compares against g_hard_prompt_held).

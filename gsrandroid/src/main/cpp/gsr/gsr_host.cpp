@@ -21,6 +21,7 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <string>
 #include <vector>
 
 // Engine core (libgsrhost.so): the infinite HP / PP switches used by the Cheats page.
@@ -49,6 +50,7 @@ std::atomic<int> g_running{0};
 std::atomic<int> g_quit{0};
 std::atomic<int> g_frames{0};
 std::atomic<int> g_menu_open{0};
+std::atomic<int> g_veil{0};
 std::atomic<int> g_state_request{0};  // gsr_host_request_state
 
 // ---- GL ------------------------------------------------------------------------------------------------
@@ -253,6 +255,8 @@ void gsr_host_engine_state(int running) {
 int gsr_host_frame_count(void) { return g_frames.load(); }
 void gsr_host_request_quit(void) { g_quit.store(1); }
 void gsr_host_set_menu_open(int open) { g_menu_open.store(open ? 1 : 0); }
+void gsr_host_set_veil(int covered) { g_veil.store(covered ? 1 : 0); }
+int gsr_host_veil(void) { return g_veil.load(); }
 
 void gsr_host_request_state(int slot, int save) {
     if (slot < 1 || slot > 9) return;
@@ -321,7 +325,7 @@ void gsr_host_render(int sw, int sh) {
             g_fw = g_qw; g_fh = g_qh;
             g_upload = true;
         }
-        if (g_fw <= 0) return;
+        if (g_fw <= 0 || g_veil.load()) return;  // the Seamless hand-over covers the picture with black
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, g_tex);
         if (g_upload) {
@@ -388,9 +392,39 @@ void gsr_host_render(int sw, int sh) {
 }  // extern "C"
 
 // ---- The Lost Age: Golden Sun save chooser (tla_gs_save_import.cpp) -------------------------------------
-// Placeholder until the Android chooser is wired: report that no browser could open.
-extern "C" int gsr_host_pick_gs_save_begin(void) { return 0; }
+// The game asks (begin), the Java side sees the request (gsr_host_pick_take_request), shows its chooser and
+// answers with a path, or "" when the player cancelled (gsr_host_pick_answer); the game polls for that.
+namespace {
+std::mutex g_pick_mtx;
+int g_pick_state = 0;  // 0 idle, 1 asked, 2 chooser showing, 3 answered
+std::string g_pick_path;
+}
+
+extern "C" int gsr_host_pick_gs_save_begin(void) {
+    std::lock_guard<std::mutex> lock(g_pick_mtx);
+    g_pick_state = 1;
+    g_pick_path.clear();
+    return 1;
+}
+
 extern "C" int gsr_host_pick_gs_save_poll(char* path, int path_size) {
-    if (path && path_size > 0) path[0] = 0;
-    return -1;
+    std::lock_guard<std::mutex> lock(g_pick_mtx);
+    if (g_pick_state != 3) return 0;
+    if (path && path_size > 0) std::snprintf(path, (size_t)path_size, "%s", g_pick_path.c_str());
+    g_pick_state = 0;
+    return 1;
+}
+
+int gsr_host_pick_take_request(void) {
+    std::lock_guard<std::mutex> lock(g_pick_mtx);
+    if (g_pick_state != 1) return 0;
+    g_pick_state = 2;
+    return 1;
+}
+
+void gsr_host_pick_answer(const char* path) {
+    std::lock_guard<std::mutex> lock(g_pick_mtx);
+    if (g_pick_state != 2) return;
+    g_pick_path = path ? path : "";
+    g_pick_state = 3;
 }

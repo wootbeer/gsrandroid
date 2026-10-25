@@ -54,6 +54,15 @@
 			android:exported="false"
 			android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
 
+		<!-- Seamless mode: ends the game's process and starts The Lost Age in a fresh one. -->
+		<activity
+			android:name="wootbeer.gsrandroid.GsrRestartActivity"
+			android:process=":restart"
+			android:theme="@android:style/Theme.Translucent.NoTitleBar"
+			android:excludeFromRecents="true"
+			android:noHistory="true"
+			android:exported="false" />
+
 		<service
 			android:name="wootbeer.gsrandroid.GsrBuildService"
 			android:exported="false" />

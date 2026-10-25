@@ -40,6 +40,13 @@ void gsr_host_render(int surface_w, int surface_h);
 void gsr_host_request_quit(void);
 /* The settings menu is open over the game: the guest is paused while it is. */
 void gsr_host_set_menu_open(int open);
+/* Seamless mode's black cover over the picture (runtime.h set_screen_veil); no fade on Android. */
+void gsr_host_set_veil(int covered);
+int gsr_host_veil(void);
+/* The Lost Age's "Load a Golden Sun save file?": 1 once when the game wants the chooser shown; then the
+ * chooser's answer (a save file's path, or "" when cancelled). */
+int gsr_host_pick_take_request(void);
+void gsr_host_pick_answer(const char *path);
 /* Save states (side menu): ask the engine to save (save != 0) or load slot 1..9 at its next input pump. The engine
  * keeps them beside the ROM as golden_sun.state<slot> (runtime.cpp slot_path). */
 void gsr_host_request_state(int slot, int save);

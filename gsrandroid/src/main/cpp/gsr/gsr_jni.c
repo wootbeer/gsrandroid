@@ -121,3 +121,18 @@ JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_requestState(JNIEnv *e
 	(void) env; (void) c;
 	gsr_host_request_state(slot, save ? 1 : 0);
 }
+
+/* The Lost Age's "Load a Golden Sun save file?" chooser (gsr_host.cpp). */
+JNIEXPORT jboolean JNICALL Java_wootbeer_gsrandroid_GsrNative_pickTakeRequest(JNIEnv *env, jclass c)
+{
+	(void) env; (void) c;
+	return gsr_host_pick_take_request() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_pickAnswer(JNIEnv *env, jclass c, jstring path)
+{
+	const char *p = path ? (*env)->GetStringUTFChars(env, path, NULL) : NULL;
+	(void) c;
+	gsr_host_pick_answer(p ? p : "");
+	if (p) (*env)->ReleaseStringUTFChars(env, path, p);
+}

@@ -254,6 +254,47 @@ static void forward_stderr(void)
 	pthread_detach(t);
 }
 
+/* The other game's folder beside this one's (<files>/gsr/game and <files>/gsr/tla). */
+static char g_other_dir[1100];
+
+/* Golden Sun's Seamless mode hands over to The Lost Age, so it is only offered when that ROM is in the app. */
+int gsr_host_tla_installed(void)
+{
+	char p[1200];
+	struct stat st;
+	if (gsr_game()->tla) return 1;
+	snprintf(p, sizeof p, "%s/lost_age.gba", g_other_dir);
+	return stat(p, &st) == 0 && st.st_size == 16777216;
+}
+
+/* The Lost Age gets Golden Sun's save (GSR_SEAMLESS_GS_SAVE, as upstream's launcher sets it) whenever there is
+ * one, for "Load a Golden Sun save file?". After Golden Sun's Seamless ending the Java side leaves the chosen
+ * slot in seamless_slot.txt; that is passed on once (GSR_SEAMLESS_GS_SLOT) and the file removed. */
+static void seamless_environment(const char *data_dir)
+{
+	char save[1200], marker[1200];
+	struct stat st;
+	FILE *f;
+	unsetenv("GSR_SEAMLESS_GS_SAVE");
+	unsetenv("GSR_SEAMLESS_GS_SLOT");
+	if (!gsr_game()->tla) return;
+	snprintf(save, sizeof save, "%s/golden_sun.sav", g_other_dir);
+	if (stat(save, &st) == 0 && st.st_size > 0) setenv("GSR_SEAMLESS_GS_SAVE", save, 1);
+	snprintf(marker, sizeof marker, "%s/seamless_slot.txt", data_dir);
+	f = fopen(marker, "r");
+	if (f) {
+		int slot = 0;
+		if (fscanf(f, "%d", &slot) == 1 && slot >= 1 && slot <= 3 && getenv("GSR_SEAMLESS_GS_SAVE")) {
+			char v[4];
+			snprintf(v, sizeof v, "%d", slot);
+			setenv("GSR_SEAMLESS_GS_SLOT", v, 1);
+			LOG("seamless: continuing Golden Sun slot %d", slot);
+		}
+		fclose(f);
+		remove(marker);
+	}
+}
+
 static void start_engine(const char *data_dir)
 {
 	char err[400] = "";
@@ -270,6 +311,7 @@ static void start_engine(const char *data_dir)
 	setenv("GBARECOMP_EXPERIMENTAL_FIXES", "1", 0);
 	/* The GBA's own left/right sound channels instead of the old mono route (the PC launcher sets this too). */
 	setenv("GBARECOMP_AUDIO_STEREO", "1", 0);
+	seamless_environment(data_dir);
 	snprintf(g_rom_path, sizeof g_rom_path, "%s/%s", data_dir, GSR_ROM_NAME);
 	snprintf(g_run_dir, sizeof g_run_dir, "%s/../%s", data_dir, gsr_game()->run);
 	mkdir(g_run_dir, 0755);
@@ -313,6 +355,11 @@ int descore_game_main(const DescoreGameParams *params)
 		char *slash = strrchr(shared_dir, '/');
 		if (slash) snprintf(slash + 1, sizeof shared_dir - (size_t)(slash + 1 - shared_dir), "game");
 		mkdir(shared_dir, 0755);
+	}
+	snprintf(g_other_dir, sizeof g_other_dir, "%s", params->data_dir);
+	{
+		char *slash = strrchr(g_other_dir, '/');
+		if (slash) snprintf(slash + 1, sizeof g_other_dir - (size_t)(slash + 1 - g_other_dir), "%s", gsr_game()->tla ? "game" : "tla");
 	}
 	gsr_settings_init(shared_dir);
 	gsr_controls_init(shared_dir);

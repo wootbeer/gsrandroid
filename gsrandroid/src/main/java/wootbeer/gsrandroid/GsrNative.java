@@ -31,4 +31,8 @@ final class GsrNative {
 	static native int gpuActive();
 	/** Save (save=true) or load save-state slot 1..9; done by the engine at its next input pump. */
 	static native void requestState(int slot, boolean save);
+	/** True once when The Lost Age asks for its Golden Sun save chooser. */
+	static native boolean pickTakeRequest();
+	/** The chooser's answer: a save file's path, or "" when the player cancelled. */
+	static native void pickAnswer(String path);
 }

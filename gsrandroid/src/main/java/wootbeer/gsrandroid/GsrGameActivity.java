@@ -24,6 +24,7 @@ public class GsrGameActivity extends DescoreGameActivity {
 
 	private GsrMenu menu;
 	private GsrBuildOverlay overlay;
+	private GsrSession session;
 	private final DisplayManager.DisplayListener displayListener = new DisplayManager.DisplayListener() {
 		@Override public void onDisplayAdded(int id) {}
 		@Override public void onDisplayRemoved(int id) {}
@@ -74,6 +75,8 @@ public class GsrGameActivity extends DescoreGameActivity {
 		}
 		overlay = new GsrBuildOverlay(this);
 		overlay.show();
+		session = new GsrSession(this);
+		session.start();
 		Intent service = new Intent(this, GsrBuildService.class);
 		try {
 			if (Build.VERSION.SDK_INT >= 26) {
@@ -97,8 +100,15 @@ public class GsrGameActivity extends DescoreGameActivity {
 	}
 
 	@Override
+	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		super.onActivityResult(requestCode, resultCode, data);
+		if (requestCode == GsrSession.REQUEST_PICK_SAVE && session != null) session.onPickResult(resultCode, data);
+	}
+
+	@Override
 	protected void onDestroy() {
 		if (overlay != null) overlay.stop();
+		if (session != null) session.stop();
 		super.onDestroy();
 		// The engine thread belongs to the process. If the game screen goes away (swiped out of the recent apps, or
 		// dropped by the system) the process can linger with the old engine still in it, and pressing Play again would

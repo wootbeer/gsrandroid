@@ -243,8 +243,8 @@ bool local_music_available() { return false; }  // music mods are not offered on
 void local_music_playback(bool, bool, float, bool) {}
 void HostWindow::set_local_music_paused(bool) {}
 // Seamless mode's black cover; Seamless mode is off on Android (runner_main.cpp), so nothing calls it.
-void set_screen_veil(bool, bool) {}
-bool screen_veil_covered() { return true; }
+void set_screen_veil(bool covered, bool) { gsr_host_set_veil(covered ? 1 : 0); }
+bool screen_veil_covered() { return gsr_host_veil() != 0; }
 // One app, one game: no window hand-over between games.
 void HostWindow::give_window(void*) {}
 void HostWindow::keep_window_on_close(bool) {}
