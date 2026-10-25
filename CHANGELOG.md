@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4. (unreleased)]
+## [0.4. (10-24-2026)]
 
 ### Added
 - Golden Sun: The Lost Age support (same app; pick its ROM in the launcher)  

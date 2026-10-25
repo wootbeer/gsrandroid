@@ -754,7 +754,7 @@ final class GsrMenu {
 
 		section("Notices");
 		info("Free and noncommercial. Contains no Golden Sun game data: your own ROM is translated and compiled "
-				+ "on this device and never leaves it. Golden Sun belongs to Nintendo and Camelot Software Planning.",
+				+ "on this device and never leaves it. Golden Sun and Golden Sun: The Lost Age belong to Nintendo and Camelot Software Planning.",
 				Color.LTGRAY, 13);
 		info("Built with mGBA and JRickey/gba-recomp (via gbarecomp) and TinyCC (LGPL). Full credits and licences "
 				+ "are in the COPYING file of the source.", Color.LTGRAY, 13);
