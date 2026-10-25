@@ -3,22 +3,30 @@ Golden Sun Recompiled for Android
 
 Based on [Golden Sun Recompiled](https://github.com/Shmargus/GSRecomp). ty. Brought to Android with my Descore framework.  
 
-**Noncommercial, free forever. This app contains no Golden Sun code, ROM or assets.**
+**Noncommercial, free forever. This app contains no Golden Sun code, ROM or assets.**  
+
+Plays Golden Sun and Golden Sun: The Lost Age, with your party carried over from the first game to the second.
 
 Added various rendering and quality of life features.  
 
-You will need the game file from a licensed copy in order to play it.  
+You will need the game files from licensed copies in order to play them.  
 
 Game Files
 -------
-Make sure to have 800mb free on your device for processing.  
+Make sure to have 800mb free on your device for processing each game.  
 Place files onto your device in an accessible folder.  
+
 Your own legally obtained Golden Sun GBA ROM (USA/Europe).  
 SHA-1:  
 5c4695205413df7db52b9a184815a07783999971  
 
-On first launch the game will ask you to select the file. If it closes or errors you are not using the correct version of the file.  
-It then translates and compiles the game code on your device, into the app's storage. Depending on your device this will take 2-10 minutes.  
+Optional: your own legally obtained Golden Sun: The Lost Age GBA ROM (USA/Europe).  
+SHA-1:  
+b500663220cb9bf56b9f8e8c0c544f1d6fa3a824  
+
+On first launch the app will ask you to select the files. Each game is recognised whatever its file name. If it closes or errors you are not using the correct version of the file.  
+The first time you play each game it translates and compiles the game code on your device, into the app's storage. Depending on your device this will take 2-10 minutes per game.  
+After an app update this happens once more.  
 
 Controls
 -------
@@ -33,7 +41,11 @@ Make sure controller style is set to Retro or whatever your devices default is. 
 
 Features
 -------
-- Renderer choice: Auto, CPU or GPU. Auto uses the GPU only in Expanded view and drops back to the CPU renderer if the device can't keep up.  
+- Golden Sun: The Lost Age in the same app.  
+- Party transfer: on a new Lost Age game, "Load a Golden Sun save file?" uses the Golden Sun save in the app or a .sav file you pick.  
+- Seamless mode: finish Golden Sun and continue straight into The Lost Age (asked when starting a new Golden Sun game, once The Lost Age is installed).  
+- Saves page: export and import .sav files (GBA emulators, flash carts), undo an import, and back up both games' saves to a folder of your choice.  
+- Renderer choice: Auto, CPU or GPU (experimental). Auto uses the CPU for Golden Sun and the GPU for The Lost Age in Expanded view.  
 - Side menu for settings: view mode, scaling, filter, fast forward, frame interpolation, etc.  
 - Screen filters  
 - Save states  
@@ -44,6 +56,7 @@ Issues and Limitations
 ----------------------
 Known:  
 - Super beta status. Tested on Retroid Pocket 6.  And 4 gen 1 phone.  
+- Seamless mode is new and not fully tested yet.  
 
 Else:  
 - Some issues may match: https://github.com/Shmargus/GSRecomp unless Android specific.  
