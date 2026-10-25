@@ -55,6 +55,6 @@ bool gsr_android_compile_and_link(const std::string& gen, const std::string& out
     return true;
 }
 
-// For the C side (gsr_spike.c): run the whole builder as if it were `gsr_builder <args>`.
+// For the C side (gsr_prepare.c): run the whole builder as if it were `gsr_builder <args>`.
 extern "C" int gsr_run_builder(int argc, char** argv) { return gsr_builder_main(argc, argv); }
 extern "C" int gsr_run_tla_builder(int argc, char** argv) { return gsr_tla_builder_main(argc, argv); }

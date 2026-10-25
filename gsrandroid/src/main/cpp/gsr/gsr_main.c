@@ -324,14 +324,12 @@ static void start_engine(const char *data_dir)
 	LOG("engine started");
 }
 
-static void draw_error_screen(int w, int h, const char *title, const char *detail)
+/* The error texts are shown by GsrBuildOverlay (Java); the game surface stays black under it. */
+static void draw_black(void)
 {
-	int scale = w / 380 < 2 ? 2 : w / 380;
-	int margin = w / 20, maxc = (w - 2 * margin) / gsr_text_cell_w(scale);
 	glDisable(GL_SCISSOR_TEST);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
-	(void) title; (void) detail; (void) margin; (void) maxc; (void) scale; /* shown by GsrBuildOverlay */
 }
 
 int descore_game_main(const DescoreGameParams *params)
@@ -379,9 +377,7 @@ int descore_game_main(const DescoreGameParams *params)
 
 		if (g_engine_started && g_engine_err[0] == 0) {
 			if (gsr_engine_finished(&fin_rc)) {
-				char msg[80];
-				snprintf(msg, sizeof msg, "THE GAME ENGINE STOPPED (CODE %d).", fin_rc);
-				draw_error_screen(w, h, msg, "CLOSE AND REOPEN THE APP. IF THIS KEEPS HAPPENING, THE LOG IN THE APP FOLDER SAYS WHY.");
+				draw_black();
 				descore_swap_buffers();
 				usleep(100000);
 				continue;
@@ -396,7 +392,7 @@ int descore_game_main(const DescoreGameParams *params)
 			}
 			/* engine is starting: fall through to show the status screen */
 		} else if (g_engine_err[0]) {
-			draw_error_screen(w, h, "THE GAME ENGINE COULD NOT START", g_engine_err);
+			draw_black();
 			descore_swap_buffers();
 			usleep(100000);
 			continue;

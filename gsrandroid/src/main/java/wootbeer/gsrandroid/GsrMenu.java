@@ -311,7 +311,7 @@ final class GsrMenu {
 
 	private static final String[] RENDERER = { "Auto", "CPU", "GPU (experimental)" };
 
-	/** Auto (the CPU renderer) / CPU / GPU (experimental). When the GPU renderer could not start on this device the row is greyed and stays on CPU. */
+	/** Auto (Golden Sun: CPU; The Lost Age: GPU in the Expanded view) / CPU / GPU (experimental). When the GPU renderer could not start on this device the row is greyed and stays on CPU. */
 	private Row renderer() {
 		Row r = new Row("Renderer") {
 			private boolean gpuOff() { return GsrNative.gpuStatus() == 2; }
@@ -325,7 +325,6 @@ final class GsrMenu {
 				if (gpuOff()) return;
 				int i = (GsrNative.getSetting(GsrNative.RENDERER) + dir + 3) % 3;
 				GsrNative.setSetting(GsrNative.RENDERER, i);
-				if (i == 0) GsrNative.setSetting(GsrNative.AUTO_CPU, 0);  // picking Auto again re-tests the GPU path
 				refresh();
 			}
 			@Override void refresh() {

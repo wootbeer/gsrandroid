@@ -8,9 +8,10 @@ import wootbeer.descore.DescoreGameConfig;
 /**
  * Golden Sun Recompiled's description for the shared descore launcher.
  *
- * The only thing the player supplies is their own Golden Sun (USA/Europe) GBA ROM. It can have any
- * file name: the launcher takes the first .gba it is given and stores it as golden_sun.gba in the
- * game's private folder, where the native side checks its SHA-1 before starting.
+ * The player supplies their own Golden Sun and (optionally) Golden Sun: The Lost Age (USA/Europe) GBA ROMs,
+ * under any file names: the launcher tells them apart by the game code in the ROM header and stores them as
+ * golden_sun.gba and lost_age.gba in each game's private folder, where the native side checks the SHA-1
+ * before starting.
  */
 final class GsrConfig {
 	private GsrConfig() {

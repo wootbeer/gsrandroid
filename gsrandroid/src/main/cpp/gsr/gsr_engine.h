@@ -10,11 +10,9 @@ extern "C" {
  * Returns 0, or -1 with a message in err. */
 int gsr_engine_bind(char *err, size_t errlen);
 
-/* Run the engine (libgsrengine.so, which references the game libraries' symbols and so can only be
- * loaded after them) as if it were its command line. Returns its exit code, or -1 with err set. */
-int gsr_engine_run(int argc, char **argv, char *err, size_t errlen);
-
-/* Start the engine on a thread of its own and return at once (the shell presents its frames). */
+/* Start the engine (the game layer library, which references the game libraries' symbols and so can only be
+ * loaded after them) on a thread of its own, as if it were its command line, and return at once (the shell
+ * presents its frames). Returns 0, or -1 with err set. */
 int gsr_engine_start(int argc, char **argv, char *err, size_t errlen);
 /* 1 once the engine's main has returned (its exit code in *rc). */
 int gsr_engine_finished(int *rc);

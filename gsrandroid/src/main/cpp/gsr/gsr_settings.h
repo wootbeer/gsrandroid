@@ -27,7 +27,7 @@ typedef enum {
 	GSR_S_TOUCH_SCALE,   /* descore touch scale step 0..8 */
 	GSR_S_TOUCH_OPACITY, /* percent, 30..100 */
 	GSR_S_RENDERER,      /* 0 auto (GPU for the expanded view), 1 CPU, 2 GPU */
-	GSR_S_AUTO_CPU,      /* hidden: Auto found the GPU path too slow on this device (remembered; reset by re-picking Auto) */
+	GSR_S_AUTO_CPU,      /* no longer used (Auto does not switch by itself any more); kept so the setting numbers stay the same */
 	GSR_S_TOUCH_DPAD,    /* touch direction control: 0 joystick, 1 D-pad */
 	GSR_S_SCREEN_FILTER, /* 0 off, 1 LCD, 2 CRT (flat), 3 xBR, 4 scanlines (gsr_screen_filter.h) */
 	/* Everything from here on is a cheat: kept for this play session only (gsr_settings.c neither saves nor loads

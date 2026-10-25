@@ -294,67 +294,6 @@ static long free_mb(const char *dir) {
 }
 
 
-/* ---- headless engine test (developer aid) ------------------------------------------------------
- * If files/gsr/HEADLESS_TEST exists (its first number is the frame count, default 600), run the
- * engine without a window on the freshly loaded game, in a child process, and report speed and a
- * screenshot to the log: that is what proves the game code runs under the real engine on this CPU. */
-static void run_headless_test(void) {
-	char path[800], run_dir[800], rom[800], png[800], outf[800], frames_s[32];
-	snprintf(path, sizeof path, "%s/HEADLESS_TEST", g_root);
-	FILE *tf = fopen(path, "r");
-	if (!tf) return;
-	int frames = 600;
-	if (fscanf(tf, "%d", &frames) != 1 || frames < 1) frames = 600;
-	fclose(tf);
-	char err[400];
-	if (gsr_engine_bind(err, sizeof err) != 0) { rep("headless test: bind failed: %s", err); return; }
-	snprintf(run_dir, sizeof run_dir, "%s/run", g_root);
-	mkdir_p(run_dir);
-	snprintf(rom, sizeof rom, "%s/%s", g_data_dir, gsr_game()->rom_name);
-	{
-		char ext[700];
-		snprintf(ext, sizeof ext, "/sdcard/Android/data/%s/files", g_pkg);
-		snprintf(png, sizeof png, "%s/gsr_headless.png", ext);
-	}
-	snprintf(outf, sizeof outf, "%s/engine_stdout.txt", run_dir);
-	snprintf(frames_s, sizeof frames_s, "%d", frames);
-	char replay[800];
-	snprintf(replay, sizeof replay, "%s/replay.txt", g_root);
-	if (exists(replay)) setenv("GBARECOMP_INPUT_REPLAY", replay, 1);
-	rep("headless test: %d frames, rom %s", frames, rom);
-	long t0 = now_s();
-	pid_t pid = fork();
-	if (pid == 0) {
-		int fd = open(outf, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-		if (fd >= 0) { dup2(fd, 1); dup2(fd, 2); close(fd); }
-		if (chdir(run_dir) != 0) _exit(120);
-		char *argv[] = { "gsr", "--rom", rom, "--no-window", "--no-bios", "--frames", frames_s,
-		                 "--dump-png", png, NULL };
-		char e2[400] = "";
-		int rc = gsr_engine_run(9, argv, e2, sizeof e2);
-		if (rc == -1 && e2[0]) dprintf(2, "ENGINE-LOAD-ERROR: %s\n", e2);
-		fflush(NULL);
-		_exit(rc < 0 ? 121 : rc);
-	}
-	int st = 0; struct rusage ru;
-	while (wait4(pid, &st, 0, &ru) < 0) {}
-	rep("headless test: finished in %ld s, exit %d (signal %d), peak RSS %ld MB", now_s() - t0,
-		WIFEXITED(st) ? WEXITSTATUS(st) : -1, WIFSIGNALED(st) ? WTERMSIG(st) : 0, ru.ru_maxrss / 1024);
-	FILE *f = fopen(outf, "r");
-	if (f) {
-		char line[400]; int shown = 0;
-		while (fgets(line, sizeof line, f)) {
-			line[strcspn(line, "\r\n")] = 0;
-			if (strstr(line, "ENGINE-LOAD-ERROR") || strstr(line, "ppu_render") || strstr(line, "error") ||
-			    strstr(line, "wall") || strstr(line, "frames") || strstr(line, "Frame") || strstr(line, "dispatch")) {
-				if (shown++ < 40) rep("  engine: %s", line);
-			}
-		}
-		fclose(f);
-	}
-	if (exists(png)) rep("headless test: screenshot written to %s", png);
-}
-
 static void *prepare_thread(void *arg) {
 	(void)arg;
 	char err[700];
@@ -428,7 +367,6 @@ static void *prepare_thread(void *arg) {
 	set_msg("Ready");
 	write_status("done");
 	atomic_store(&g_state, GSR_PREP_READY);
-	run_headless_test();
 	return NULL;
 fail: {
 		char e[400]; gsr_prepare_error(e, sizeof e);

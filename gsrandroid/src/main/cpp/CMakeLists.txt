@@ -27,7 +27,7 @@ set(DESCORE_SOURCES
 )
 
 # tcc (libtcc, LGPL) compiled in-process as a static library: it turns the game code that is
-# translated from the player's own ROM into a native library on the device (see tools/ONDEVICE_SPIKE.md).
+# translated from the player's own ROM into a native library on the device.
 add_library(tcc STATIC tcc/libtcc.c)
 target_include_directories(tcc PUBLIC tcc)
 target_compile_definitions(tcc PRIVATE ONE_SOURCE=1 TCC_TARGET_ARM64=1 TCC_IS_NATIVE=1 CONFIG_TCC_STATIC=1)

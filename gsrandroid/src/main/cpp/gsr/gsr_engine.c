@@ -32,37 +32,6 @@ int gsr_engine_bind(char *err, size_t errlen) {
 
 typedef struct { int (*fn)(int, char **); int argc; char **argv; int rc; } EngineCall;
 
-static void *engine_thread(void *p) {
-	EngineCall *c = (EngineCall *)p;
-	c->rc = c->fn(c->argc, c->argv);
-	return NULL;
-}
-
-int gsr_engine_run(int argc, char **argv, char *err, size_t errlen) {
-	const GsrGame *game = gsr_game();
-	void *h = dlopen(game->engine_lib, RTLD_NOW | RTLD_GLOBAL);
-	if (!h) {
-		snprintf(err, errlen, "dlopen %s: %s", game->engine_lib, dlerror());
-		return -1;
-	}
-	int (*fn)(int, char **) = (int (*)(int, char **))dlsym(h, game->engine_entry);
-	if (!fn) {
-		snprintf(err, errlen, "%s missing in %s", game->engine_entry, game->engine_lib);
-		return -1;
-	}
-	EngineCall call = { fn, argc, argv, 0 };
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-	pthread_attr_setstacksize(&attr, GSR_ENGINE_STACK_BYTES);
-	pthread_t th;
-	if (pthread_create(&th, &attr, engine_thread, &call) != 0) {
-		snprintf(err, errlen, "cannot create the engine thread (%u MB stack)", GSR_ENGINE_STACK_BYTES >> 20);
-		return -1;
-	}
-	pthread_join(th, NULL);
-	return call.rc;
-}
-
 /* ---- in-process, non-blocking start (the Android shell presents the engine's frames itself) ------------- */
 
 static EngineCall g_async_call;

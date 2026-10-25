@@ -83,7 +83,6 @@ CLAUDE.md
 *.iso
 *.bin
 !gradle/wrapper/*
-gsrandroid/src/main/cpp/gsr_generated/
 # Reference art kept locally.
 icon_source/
 # Python scratch.

@@ -210,36 +210,20 @@ void gsr_host_poll(GsrHostInput* o) {
     o->paused = descore_is_paused() || g_menu_open.load();
     o->quit = g_quit.load();
 
-    // Once a second: what the engine is doing, so a slow or stuck fast-forward shows up in logcat.
+    // Every two seconds (debuggable builds): what the engine is doing, so a slow or stuck fast-forward shows up in logcat.
     static auto last = std::chrono::steady_clock::now();
     static int last_frames = 0;
     auto now = std::chrono::steady_clock::now();
     if (now - last >= std::chrono::seconds(2)) {
         int f = g_frames.load();
         double secs = std::chrono::duration<double>(now - last).count();
-        // Smart Auto: if Auto is on the GPU path and the engine has no spare time for two windows in a row,
-        // this device is too slow for it (readback cost) - use the CPU renderer from now on.
-        {
-            static int slow_windows = 0;
-            double headroom = (double)g_stat_idle_ns.load() / (secs * 1e9);
-            bool judge = gsr_settings_get(GSR_S_RENDERER) == 0 && g_gpu_active.load() && !gsr_settings_get(GSR_S_AUTO_CPU) &&
-                         !o->fast_forward && !o->paused;
-            if (judge && headroom < 0.08) {
-                if (++slow_windows >= 2) {
-                    gsr_settings_set(GSR_S_AUTO_CPU, 1);  // saved: next launch starts on CPU
-                    LOG("Auto renderer: GPU path too slow on this device, switching to CPU");
-                }
-            } else {
-                slow_windows = 0;
-            }
-        }
         if (g_debug.load()) {
-        LOG("presented %.1f fps, fast_forward=%d paused=%d keyinput=%04x", (f - last_frames) / secs,
-            o->fast_forward, o->paused, o->keyinput);
-        LOG("engine headroom: %.0f%% of the time spent waiting for the frame limiter (low = struggling to keep up)",
-            100.0 * (double)g_stat_idle_ns.exchange(0) / (secs * 1e9));
-        LOG("queue: submitted=%d dropped=%d screen-repeated-last-frame=%d (per %.1f s, interpolating=%d)",
-            g_stat_submitted.exchange(0), g_stat_dropped.exchange(0), g_stat_repeated.exchange(0), secs, g_interp_on.load());
+            LOG("presented %.1f fps, fast_forward=%d paused=%d keyinput=%04x", (f - last_frames) / secs,
+                o->fast_forward, o->paused, o->keyinput);
+            LOG("engine headroom: %.0f%% of the time spent waiting for the frame limiter (low = struggling to keep up)",
+                100.0 * (double)g_stat_idle_ns.exchange(0) / (secs * 1e9));
+            LOG("queue: submitted=%d dropped=%d screen-repeated-last-frame=%d (per %.1f s, interpolating=%d)",
+                g_stat_submitted.exchange(0), g_stat_dropped.exchange(0), g_stat_repeated.exchange(0), secs, g_interp_on.load());
         } else {
             g_stat_idle_ns.store(0); g_stat_submitted.store(0); g_stat_dropped.store(0); g_stat_repeated.store(0);
         }

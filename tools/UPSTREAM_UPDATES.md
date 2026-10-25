@@ -39,7 +39,7 @@ remove or reword upstream copyright headers when updating.
 
 - `gsr/` : host seam and Android glue (`gsr_host`, `gsr_controls`, `gsr_settings`, `gsr_jni`,
   `gsr_main`, `gsr_engine`, `gsr_text`, `gpu_surface_android.cpp`)
-- `gsrecomp/engine/src/runtime/host_window_android.cpp` : the HostWindow backend (also the no-op window hand-over, Seamless screen-veil and local-music functions)
+- `gsrecomp/engine/src/runtime/host_window_android.cpp` : the HostWindow backend (also the no-op window hand-over and local-music functions, and the Seamless screen veil, drawn black by gsr_host.cpp)
 - `descore/` additions: `descore_is_paused`, `descore_request_menu`
 - `gsr/gsr_game.c` (which game this launch is), `gsr/gsr_tla_builder.cpp`, `gsr/gsr_tla_engine_entry.cpp`
   (The Lost Age builder and game layer entries; built like upstream's `tla_builder` / `TLARecomp`)
@@ -73,7 +73,7 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `tbs/src/runner_main.cpp` (cheats) | `GSR_ANDROID_CHEATS`: the side menu's Cheats page owns the reward multipliers |
 | `tbs/src/room_buffer.cpp` | `GSR_ANDROID_ENGINE`: map numbers 0/1 and the title's BGCNT set are not rooms; `room_buffer_row_is_room()` |
 | `tbs/src/runner_main.cpp` (more) | `GSR_ANDROID_ENGINE`: margin policy pillarboxes non-room rows; GPU hands boot/title/intro frames to CPU; camera inset skipped for the title; boot/title/intro shown as the native 240x160 part of the canvas (`gsr_host_present_crop`, read in host_window_android.cpp); intro flare averaging; camera-glide blackout |
-| `tbs/src/runner_main.cpp` (Seamless) | `GSR_ANDROID_ENGINE`: Seamless mode (hand-over to The Lost Age, new in 0.5) is always off and the new-game prompt does not ask about it |
+| `tbs/src/runner_main.cpp` (Seamless) | `GSR_ANDROID_ENGINE`: Seamless mode (hand-over to The Lost Age) is only on, and its new-game question only asked, when The Lost Age's ROM is in the app (`gsr_host_tla_installed`, gsr_main.c). The exit code 75 + slot is caught by `GsrSession.java`, which restarts into The Lost Age (`GsrRestartActivity`, own process) with the slot in `tla/seamless_slot.txt`; gsr_main.c turns that and Golden Sun's save into `GSR_SEAMLESS_GS_SLOT` / `GSR_SEAMLESS_GS_SAVE` like upstream's launcher |
 | `tbs/src/settings_page.h` | `GSR_ANDROID_ENGINE`: the in-game settings page leaves out Screen and No Slowdown (the side menu owns them) |
 | `tbs/src/adventure_walkthrough.h` | `GSR_ANDROID_ENGINE`: the NDK's libc++ has no `std::atomic<std::shared_ptr>`; a small wrapper uses `std::atomic_load/atomic_store` (the guide is developer-only upstream) |
 | `tla/src/tla_rewind.cpp`, `tla_ram_images.cpp` | `GSR_ANDROID_ENGINE`: The Broken Seal's `unpacker_guard.h` is included from `tbs/` |
