@@ -64,6 +64,7 @@ public class GsrGameActivity extends DescoreGameActivity {
 		// The build can take ten minutes; do not let the screen sleep while it is on screen.
 		getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 		super.onCreate(savedInstanceState);
+		GsrDisplay.applyOrientation(this);
 		// Creates Android/data/<package>/files on shared storage: the build log (gsr_build_log.txt) is written
 		// there, and Android only makes that folder when the app asks for it.
 		getExternalFilesDir(null);

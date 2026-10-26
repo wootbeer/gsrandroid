@@ -75,8 +75,11 @@ final class GsrMenu {
 		w.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND);
 		w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
 
+		// Landscape: the panel on the right. Portrait: the panel below the picture, full width.
+		final boolean upright = activity.getResources().getConfiguration().orientation
+				== android.content.res.Configuration.ORIENTATION_PORTRAIT;
 		LinearLayout root = new LinearLayout(activity);
-		root.setOrientation(LinearLayout.HORIZONTAL);
+		root.setOrientation(upright ? LinearLayout.VERTICAL : LinearLayout.HORIZONTAL);
 
 		View outside = new View(activity); // tapping the game area closes the menu
 		outside.setOnClickListener(new View.OnClickListener() {
@@ -86,7 +89,9 @@ final class GsrMenu {
 		// "default focus highlight" (the 1 px coloured frame around the visible game area). Same fix as DescoreView.
 		noFocusHighlight(outside);
 		outside.setFocusable(false);
-		root.addView(outside, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.55f));
+		root.addView(outside, upright
+				? new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.35f)
+				: new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.55f));
 
 		LinearLayout panel = new LinearLayout(activity);
 		panel.setOrientation(LinearLayout.VERTICAL);
@@ -94,7 +99,9 @@ final class GsrMenu {
 		noFocusHighlight(panel);
 		noFocusHighlight(root);
 		panel.setPadding(dp(14), dp(10), dp(14), dp(8));
-		root.addView(panel, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.45f));
+		root.addView(panel, upright
+				? new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 0.65f)
+				: new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 0.45f));
 
 		title = new TextView(activity);
 		title.setTextColor(TEXT);
@@ -256,6 +263,26 @@ final class GsrMenu {
 		return choice(label, setting, v, labels);
 	}
 
+	private static final String[] ORIENTATION = { "Landscape", "Portrait" };
+
+	/** Landscape (the default) or Portrait with the touch controls below the picture. The menu reopens upright. */
+	private Row orientation() {
+		Row r = new Row("Orientation") {
+			@Override String value() { return ORIENTATION[GsrDisplay.portrait(activity) ? 1 : 0]; }
+			@Override void step(int dir) {
+				GsrDisplay.setPortrait(activity, !GsrDisplay.portrait(activity));
+				refresh();
+				// The menu was laid out for the old shape of the screen: lay it out again once the screen has turned.
+				close();
+				activity.getWindow().getDecorView().postDelayed(new Runnable() {
+					@Override public void run() { show(); }
+				}, 500);
+			}
+		};
+		r.refresh();
+		return r;
+	}
+
 	/** 2x frame interpolation: only offered on a screen that has a 120 Hz mode, and only used in the Native view. */
 	private Row interpolation() {
 		Row r = new Row("Frame interpolation") {
@@ -352,6 +379,7 @@ final class GsrMenu {
 
 		section("Display");
 		choice("Screen view", GsrNative.VIEW_MODE, VIEW);
+		orientation();
 		renderer();
 		choice("Scaling", GsrNative.SCALE_MODE, SCALE);
 		choice("Pixels", GsrNative.FILTER, FILTER);

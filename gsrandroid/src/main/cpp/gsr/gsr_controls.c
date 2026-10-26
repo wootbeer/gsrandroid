@@ -1,5 +1,6 @@
 #include "gsr_controls.h"
 #include "gsr_settings.h"
+#include "gsr_host.h"
 #include "gsr_text.h"
 #include "descore.h"
 #include "touch/descore_touch.h"
@@ -241,6 +242,29 @@ static void touch_stick(int idx, float x, float y) {
 	atomic_store(&g_touch_dirs, d);
 }
 
+/* Portrait: the same controls in the space below the picture, laid out like the handheld itself: L and R
+ * (with FF and MENU between them) along the top of that space, the stick or d-pad on the left and A/B on the
+ * right in the middle, SELECT and START at the bottom. */
+static void portrait_layout(int w, int h, float cell, float m, float r, float sb) {
+	float y0 = (float) gsr_host_portrait_picture_h(w, h);
+	float *a = g_tb_rect[TB_A], *b = g_tb_rect[TB_B], *l = g_tb_rect[TB_L], *rr = g_tb_rect[TB_R];
+	float *st = g_tb_rect[TB_START], *se = g_tb_rect[TB_SELECT], *ff = g_tb_rect[TB_FF], *mn = g_tb_rect[TB_MENU];
+	float top = y0 + m, bottom = h - m - cell * 0.8f;
+	float mid = (top + cell * 0.95f + bottom) * 0.5f;  /* between the shoulder row and SELECT/START */
+	float rx = w - m - sb * 2.4f, ry = mid - sb * 0.9f;
+	descore_touch_set_stick(0, m + r * 1.05f, mid, r, touch_stick);
+	descore_touch_set_stick_style(0, gsr_settings_get(GSR_S_TOUCH_DPAD) ? DESCORE_TOUCH_STICK_DPAD : DESCORE_TOUCH_STICK_ANALOG);
+	a[0] = rx + sb * 1.15f; a[1] = ry; a[2] = sb; a[3] = sb;
+	b[0] = rx; b[1] = ry + sb * 0.85f; b[2] = sb; b[3] = sb;
+	l[0] = m; l[1] = top; l[2] = cell * 1.8f; l[3] = cell * 0.95f;
+	rr[0] = w - m - cell * 1.8f; rr[1] = top; rr[2] = cell * 1.8f; rr[3] = cell * 0.95f;
+	/* narrower than in landscape, so they clear L and R on a narrow screen */
+	ff[0] = w * 0.5f - cell * 1.25f; ff[1] = top; ff[2] = cell * 1.2f; ff[3] = cell * 0.8f;
+	mn[0] = w * 0.5f + cell * 0.05f; mn[1] = top; mn[2] = cell * 1.2f; mn[3] = cell * 0.8f;
+	se[0] = w * 0.5f - cell * 1.9f; se[1] = bottom; se[2] = cell * 1.8f; se[3] = cell * 0.8f;
+	st[0] = w * 0.5f + cell * 0.1f; st[1] = bottom; st[2] = cell * 1.8f; st[3] = cell * 0.8f;
+}
+
 void gsr_controls_layout(int w, int h) {
 	float cell, m, r, sb;
 	float scale = descore_touch_scale_value(gsr_settings_get(GSR_S_TOUCH_SCALE));
@@ -251,6 +275,9 @@ void gsr_controls_layout(int w, int h) {
 	m = cell * 0.35f;
 	r = cell * 1.45f;
 	sb = cell * 1.25f;
+	if (gsr_host_portrait_picture_h(w, h) > 0) {
+		portrait_layout(w, h, cell, m, r, sb);
+	} else {
 	descore_touch_set_stick(0, m + r * 1.05f, h - m - r * 1.05f, r, touch_stick);
 	descore_touch_set_stick_style(0, gsr_settings_get(GSR_S_TOUCH_DPAD) ? DESCORE_TOUCH_STICK_DPAD : DESCORE_TOUCH_STICK_ANALOG);
 	{
@@ -265,6 +292,7 @@ void gsr_controls_layout(int w, int h) {
 		st[0] = w * 0.5f + cell * 0.1f; st[1] = se[1]; st[2] = cell * 1.8f; st[3] = cell * 0.8f;
 		ff[0] = w * 0.5f - cell * 1.9f; ff[1] = m; ff[2] = cell * 1.8f; ff[3] = cell * 0.8f;
 		mn[0] = w * 0.5f + cell * 0.1f; mn[1] = m; mn[2] = cell * 1.8f; mn[3] = cell * 0.8f;
+	}
 	}
 	for (int i = 0; i < TB_COUNT; i++) {
 		unsigned char key = k_tb_action[i];

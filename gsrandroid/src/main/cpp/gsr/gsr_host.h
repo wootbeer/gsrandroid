@@ -40,6 +40,9 @@ void gsr_host_render(int surface_w, int surface_h);
 void gsr_host_request_quit(void);
 /* The settings menu is open over the game: the guest is paused while it is. */
 void gsr_host_set_menu_open(int open);
+/* Portrait screens (taller than wide): the picture sits at the top, full width, and the touch controls go
+ * below it. The picture area's height in pixels, or 0 on a landscape screen. */
+int gsr_host_portrait_picture_h(int w, int h);
 /* Seamless mode's black cover over the picture (runtime.h set_screen_veil); no fade on Android. */
 void gsr_host_set_veil(int covered);
 int gsr_host_veil(void);

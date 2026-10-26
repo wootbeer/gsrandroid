@@ -59,6 +59,26 @@ final class GsrDisplay {
 		});
 	}
 
+	// ---- Orientation: Landscape (the default) or Portrait, a fixed choice (no following the sensor) -------
+
+	private static final String PREFS = "gsr_display", KEY_PORTRAIT = "portrait";
+
+	static boolean portrait(Activity a) {
+		return a.getSharedPreferences(PREFS, Activity.MODE_PRIVATE).getBoolean(KEY_PORTRAIT, false);
+	}
+
+	static void setPortrait(Activity a, boolean on) {
+		a.getSharedPreferences(PREFS, Activity.MODE_PRIVATE).edit().putBoolean(KEY_PORTRAIT, on).apply();
+		applyOrientation(a);
+	}
+
+	/** Landscape either way up (as before), or upright portrait with the controls below the picture. */
+	static void applyOrientation(Activity a) {
+		a.setRequestedOrientation(portrait(a)
+				? android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+				: android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+	}
+
 	/** Tell the native side the refresh rate the display is running at right now. */
 	static void publish(Activity a) {
 		try {

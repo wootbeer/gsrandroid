@@ -239,6 +239,11 @@ void gsr_host_engine_state(int running) {
 int gsr_host_frame_count(void) { return g_frames.load(); }
 void gsr_host_request_quit(void) { g_quit.store(1); }
 void gsr_host_set_menu_open(int open) { g_menu_open.store(open ? 1 : 0); }
+int gsr_host_portrait_picture_h(int w, int h) {
+    if (w <= 0 || h <= w) return 0;
+    // Both views are 3:2 (240x160, 360x240); leave at least 45% of the screen for the controls.
+    return std::min(w * 2 / 3, h * 55 / 100);
+}
 void gsr_host_set_veil(int covered) { g_veil.store(covered ? 1 : 0); }
 int gsr_host_veil(void) { return g_veil.load(); }
 
@@ -336,7 +341,9 @@ void gsr_host_render(int sw, int sh) {
         g_tex_filter = filter;
     }
 
-    Layout L = compute_layout(sw, sh, fw, fh, gsr_settings_get(GSR_S_SCALE_MODE));
+    // Portrait: the picture fills the area at the top of the screen; the touch controls are below it.
+    const int portrait_h = gsr_host_portrait_picture_h(sw, sh);
+    Layout L = compute_layout(sw, portrait_h ? portrait_h : sh, fw, fh, gsr_settings_get(GSR_S_SCALE_MODE));
     glBindVertexArray(0);
     const float rect[4] = {L.x / sw * 2.0f - 1.0f, (sh - (L.y + L.h)) / sh * 2.0f - 1.0f,
                            (L.x + L.w) / sw * 2.0f - 1.0f, (sh - L.y) / sh * 2.0f - 1.0f};
