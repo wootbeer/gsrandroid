@@ -239,8 +239,12 @@ void gsr_host_engine_state(int running) {
 int gsr_host_frame_count(void) { return g_frames.load(); }
 void gsr_host_request_quit(void) { g_quit.store(1); }
 void gsr_host_set_menu_open(int open) { g_menu_open.store(open ? 1 : 0); }
+static std::atomic<int> g_top_inset{0};
+void gsr_host_set_top_inset(int px) { g_top_inset.store(px > 0 ? px : 0); }
+int gsr_host_portrait_top(int w, int h) { return w > 0 && h > w ? g_top_inset.load() : 0; }
 int gsr_host_portrait_picture_h(int w, int h) {
     if (w <= 0 || h <= w) return 0;
+    h -= g_top_inset.load();
     // Both views are 3:2 (240x160, 360x240); leave at least 45% of the screen for the controls.
     return std::min(w * 2 / 3, h * 55 / 100);
 }
@@ -344,6 +348,7 @@ void gsr_host_render(int sw, int sh) {
     // Portrait: the picture fills the area at the top of the screen; the touch controls are below it.
     const int portrait_h = gsr_host_portrait_picture_h(sw, sh);
     Layout L = compute_layout(sw, portrait_h ? portrait_h : sh, fw, fh, gsr_settings_get(GSR_S_SCALE_MODE));
+    if (portrait_h) L.y += gsr_host_portrait_top(sw, sh);  // below a camera cutout
     glBindVertexArray(0);
     const float rect[4] = {L.x / sw * 2.0f - 1.0f, (sh - (L.y + L.h)) / sh * 2.0f - 1.0f,
                            (L.x + L.w) / sw * 2.0f - 1.0f, (sh - L.y) / sh * 2.0f - 1.0f};

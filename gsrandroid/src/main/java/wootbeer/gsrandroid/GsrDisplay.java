@@ -72,6 +72,24 @@ final class GsrDisplay {
 		applyOrientation(a);
 	}
 
+	/** Portrait: tell the native side how far down a camera cutout reaches, so the picture starts below it. */
+	static void publishTopInset(final Activity a) {
+		if (Build.VERSION.SDK_INT < 28) return;
+		final android.view.View d = a.getWindow().getDecorView();
+		d.postDelayed(new Runnable() {
+			@Override public void run() {
+				int top = 0;
+				android.view.WindowInsets wi = d.getRootWindowInsets();
+				if (wi != null && wi.getDisplayCutout() != null) top = wi.getDisplayCutout().getSafeInsetTop();
+				try {
+					GsrNative.setTopInset(top);
+				} catch (Throwable ignored) {
+					// native library not loaded yet
+				}
+			}
+		}, 300);
+	}
+
 	/** Landscape either way up (as before), or upright portrait with the controls below the picture. */
 	static void applyOrientation(Activity a) {
 		a.setRequestedOrientation(portrait(a)

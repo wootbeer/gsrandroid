@@ -339,6 +339,7 @@ int descore_game_main(const DescoreGameParams *params)
 	int status = check_rom(params->data_dir, hex);
 	g_rom_status = status;
 	unsigned frame = 0, settings_gen = 0;
+	int top_inset = 0;
 	GLubyte *version;
 
 	LOG("descore_game_main: data_dir=%s surface=%dx%d status=%d", params->data_dir,
@@ -369,6 +370,11 @@ int descore_game_main(const DescoreGameParams *params)
 
 	while (descore_pump()) {
 		int w = descore_surface_width(), h = descore_surface_height(), fin_rc;
+		/* Portrait: the camera cutout's inset arrives from Java after a turn; lay the controls out under it. */
+		if (gsr_host_portrait_top(w, h) != top_inset) {
+			top_inset = gsr_host_portrait_top(w, h);
+			gsr_controls_layout(w, h);
+		}
 		if (gsr_settings_generation() != settings_gen) {
 			settings_gen = gsr_settings_generation();
 			gsr_controls_touch_settings_changed();

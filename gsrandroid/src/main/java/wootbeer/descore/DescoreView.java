@@ -154,7 +154,12 @@ public class DescoreView extends SurfaceView implements SurfaceHolder.Callback,
 	@Override
 	public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
 		// Re-pin the buffer size: a transient bounds change (system bars) shouldn't leave a
-		// stale-sized buffer compositing against new bounds.
+		// stale-sized buffer compositing against new bounds. A real turn of the screen (the game
+		// switched between landscape and portrait) takes the view's new size instead.
+		int vw = getWidth(), vh = getHeight();
+		if (size != null && vw > 0 && vh > 0 && (vw > vh) != (size.x > size.y)) {
+			size = new Point(vw, vh);
+		}
 		if (size != null && holder != null) {
 			holder.setFixedSize(size.x, size.y);
 		}

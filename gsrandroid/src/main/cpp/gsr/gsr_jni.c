@@ -122,6 +122,12 @@ JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_requestState(JNIEnv *e
 	gsr_host_request_state(slot, save ? 1 : 0);
 }
 
+JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_setTopInset(JNIEnv *env, jclass c, jint px)
+{
+	(void) env; (void) c;
+	gsr_host_set_top_inset(px);
+}
+
 /* The Lost Age's "Load a Golden Sun save file?" chooser (gsr_host.cpp). */
 JNIEXPORT jboolean JNICALL Java_wootbeer_gsrandroid_GsrNative_pickTakeRequest(JNIEnv *env, jclass c)
 {

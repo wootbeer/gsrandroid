@@ -246,7 +246,7 @@ static void touch_stick(int idx, float x, float y) {
  * (with FF and MENU between them) along the top of that space, the stick or d-pad on the left and A/B on the
  * right in the middle, SELECT and START at the bottom. */
 static void portrait_layout(int w, int h, float cell, float m, float r, float sb) {
-	float y0 = (float) gsr_host_portrait_picture_h(w, h);
+	float y0 = (float) (gsr_host_portrait_top(w, h) + gsr_host_portrait_picture_h(w, h));
 	float *a = g_tb_rect[TB_A], *b = g_tb_rect[TB_B], *l = g_tb_rect[TB_L], *rr = g_tb_rect[TB_R];
 	float *st = g_tb_rect[TB_START], *se = g_tb_rect[TB_SELECT], *ff = g_tb_rect[TB_FF], *mn = g_tb_rect[TB_MENU];
 	float top = y0 + m, bottom = h - m - cell * 0.8f;

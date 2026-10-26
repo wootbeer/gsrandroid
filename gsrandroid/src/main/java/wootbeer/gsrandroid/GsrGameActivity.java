@@ -38,6 +38,7 @@ public class GsrGameActivity extends DescoreGameActivity {
 		if (dm != null) dm.registerDisplayListener(displayListener, new Handler(Looper.getMainLooper()));
 		GsrDisplay.publish(this);
 		GsrDisplay.apply(this);
+		GsrDisplay.publishTopInset(this);
 	}
 
 	@Override
@@ -98,6 +99,12 @@ public class GsrGameActivity extends DescoreGameActivity {
 		} catch (Throwable t) {
 			return false;
 		}
+	}
+
+	@Override
+	public void onConfigurationChanged(android.content.res.Configuration c) {
+		super.onConfigurationChanged(c);
+		GsrDisplay.publishTopInset(this);  // the cutout's inset changes when the screen turns
 	}
 
 	@Override
