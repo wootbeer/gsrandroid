@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Portrait mode: Settings > Display > Orientation. The picture sits at the top with the touch controls below it  
+
+### Fixed
+- Swiping the game away in recent apps left the game picker behind instead of closing the app  
+
 ## [0.4.1. (10-25-2026)]
 
 ### Fixed
