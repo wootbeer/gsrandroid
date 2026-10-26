@@ -251,6 +251,17 @@ static void portrait_layout(int w, int h, float cell, float m, float r, float sb
 	float *st = g_tb_rect[TB_START], *se = g_tb_rect[TB_SELECT], *ff = g_tb_rect[TB_FF], *mn = g_tb_rect[TB_MENU];
 	float top = y0 + m, bottom = h - m - cell * 0.8f;
 	float mid = (top + cell * 0.95f + bottom) * 0.5f;  /* between the shoulder row and SELECT/START */
+	if (gsr_settings_get(GSR_S_PORTRAIT_COMPACT) == 1) {
+		/* Compact, under the picture: the rows packed right below it, the rest of the screen left free */
+		mid = top + cell * 0.95f + m + r;
+		bottom = mid + r + m;
+		if (bottom + cell * 0.8f > h - m) bottom = h - m - cell * 0.8f;
+	} else if (gsr_settings_get(GSR_S_PORTRAIT_COMPACT) == 2) {
+		/* Compact, at the bottom: the same block against the bottom edge (comfortable to hold), the middle free */
+		mid = bottom - m - r;
+		top = mid - r - m - cell * 0.95f;
+		if (top < y0 + m) top = y0 + m;
+	}
 	float rx = w - m - sb * 2.4f, ry = mid - sb * 0.9f;
 	descore_touch_set_stick(0, m + r * 1.05f, mid, r, touch_stick);
 	descore_touch_set_stick_style(0, gsr_settings_get(GSR_S_TOUCH_DPAD) ? DESCORE_TOUCH_STICK_DPAD : DESCORE_TOUCH_STICK_ANALOG);
@@ -271,7 +282,11 @@ void gsr_controls_layout(int w, int h) {
 	g_w = w; g_h = h;
 	descore_touch_set_screen_size(w, h);
 	cell = (w < h ? w : h) * 0.13f * scale;
-	if (cell < descore_touch_min_cell_px()) cell = descore_touch_min_cell_px();
+	if (gsr_host_portrait_picture_h(w, h) > 0 && gsr_settings_get(GSR_S_PORTRAIT_COMPACT)) {
+		/* Compact portrait: smaller buttons (down to 36 dp instead of 44) */
+		cell = w * 0.105f * scale;
+		if (cell < descore_touch_min_cell_px() * (36.0f / 44.0f)) cell = descore_touch_min_cell_px() * (36.0f / 44.0f);
+	} else if (cell < descore_touch_min_cell_px()) cell = descore_touch_min_cell_px();
 	m = cell * 0.35f;
 	r = cell * 1.45f;
 	sb = cell * 1.25f;

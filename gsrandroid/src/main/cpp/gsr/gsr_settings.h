@@ -37,6 +37,7 @@ typedef enum {
 	GSR_S_CHEAT_EXP,     /* cheats: experience multiplier step 0..8 (0x 0.5x 1x 2x 5x 10x 25x 50x 100x), 2 = normal */
 	GSR_S_CHEAT_COIN,    /* cheats: coins multiplier step, same steps */
 	GSR_S_CHEAT_DROP,    /* cheats: item drop chance step 0..5 (0x .. 10x), 2 = normal */
+	GSR_S_PORTRAIT_COMPACT, /* portrait touch controls: 0 spread over the space below the picture, 1 compact right under it, 2 compact at the bottom */
 	GSR_S_COUNT
 } GsrSetting;
 

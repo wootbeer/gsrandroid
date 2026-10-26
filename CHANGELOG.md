@@ -4,6 +4,8 @@
 
 ### Added
 - Portrait mode: Settings > Display > Orientation. The picture sits at the top with the touch controls below it  
+- Portrait controls (Settings > Controls, in portrait): Spread, Compact under the picture, or Compact at the bottom, with smaller buttons in the compact layouts  
+- The game resizes properly in split screen and pop-up windows  
 
 ### Fixed
 - Swiping the game away in recent apps left the game picker behind instead of closing the app  

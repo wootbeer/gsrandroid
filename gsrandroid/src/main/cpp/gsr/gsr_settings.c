@@ -36,6 +36,7 @@ static const Spec k_spec[GSR_S_COUNT] = {
 	[GSR_S_CHEAT_EXP]     = { "cheat_exp", 2, 0, 8 },
 	[GSR_S_CHEAT_COIN]    = { "cheat_coin", 2, 0, 8 },
 	[GSR_S_CHEAT_DROP]    = { "cheat_drop", 2, 0, 5 },
+	[GSR_S_PORTRAIT_COMPACT] = { "portrait_compact", 0, 0, 2 },
 };
 
 static atomic_int g_val[GSR_S_COUNT];

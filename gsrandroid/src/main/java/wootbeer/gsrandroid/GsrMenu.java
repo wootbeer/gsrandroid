@@ -420,6 +420,12 @@ final class GsrMenu {
 		for (int i = 0; i < 9; i++) sizes[i] = i;
 		choice("Touch pad", GsrNative.TOUCH_DPAD, new String[] { "Joystick", "D-pad" });
 		choice("Touch controls size", GsrNative.TOUCH_SCALE, sizes, TOUCH_SIZE);
+		if (GsrDisplay.portrait(activity)) {
+			// Compact: smaller and packed together, right under the picture or at the bottom of the screen, leaving
+			// the rest of the screen free (for another app in a pop-up window, say).
+			choice("Portrait controls", GsrNative.PORTRAIT_COMPACT,
+					new String[] { "Spread", "Compact, under the picture", "Compact, at the bottom" });
+		}
 		int[] ops = new int[8];
 		String[] opLabels = new String[8];
 		for (int i = 0; i < 8; i++) { ops[i] = 30 + i * 10; opLabels[i] = ops[i] + "%"; }
