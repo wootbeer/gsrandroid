@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.4.2. (10-26-2026)]
 
 ### Added
 - Portrait mode: Settings > Display > Orientation. The picture sits at the top with the touch controls below it  
