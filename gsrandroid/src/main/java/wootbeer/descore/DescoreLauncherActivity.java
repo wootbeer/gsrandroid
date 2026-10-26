@@ -224,6 +224,9 @@ public abstract class DescoreLauncherActivity extends Activity {
 								getGameActivityClass());
 						intent.putExtra(DescoreGameActivity.EXTRA_UNIT_ID, unit.id);
 						startActivity(intent);
+						// As launchIfComplete: the picker does not stay behind the game, so swiping the game
+						// away in the recent apps closes the app instead of leaving the picker there.
+						finish();
 					}
 				});
 				layout.addView(play, buttonParams(buttonWidth));
