@@ -46,6 +46,7 @@ Features
 - Seamless mode: finish Golden Sun and continue straight into The Lost Age (asked when starting a new Golden Sun game, once The Lost Age is installed).  
 - Saves page: export and import .sav files (GBA emulators, flash carts), undo an import, and back up both games' saves to a folder of your choice.  
 - Renderer choice: Auto, CPU or GPU (experimental). Auto uses the CPU for Golden Sun and the GPU for The Lost Age in Expanded view.  
+- Portrait mode for phones (Settings > Display > Orientation), with the controls spread out, compact under the picture, or compact at the bottom.  
 - Side menu for settings: view mode, scaling, filter, fast forward, frame interpolation, etc.  
 - Screen filters  
 - Save states  
