@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.5. (11-07-2026)]
 
 ### Added
 - Spanish, Italian, French and German versions of both games. Add the ROM and it shows up in the launcher; each language has its own game build, save and save states  

@@ -45,6 +45,8 @@ Make sure controller style is set to Retro or whatever your devices default is. 
 Features
 -------
 - Golden Sun: The Lost Age in the same app.  
+- Spanish, Italian, French and German versions of both games, each with its own save.  
+- Option to start your last game straight away, and Switch game in the menu.  
 - Party transfer: on a new Lost Age game, "Load a Golden Sun save file?" uses the Golden Sun save in the app or a .sav file you pick.  
 - Seamless mode: finish Golden Sun and continue straight into The Lost Age (asked when starting a new Golden Sun game, once The Lost Age is installed).  
 - Saves page: export and import .sav files (GBA emulators, flash carts), undo an import, and back up both games' saves to a folder of your choice.  
