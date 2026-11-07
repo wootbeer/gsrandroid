@@ -350,7 +350,8 @@ static void *prepare_thread(void *arg) {
 		goto fail;
 	}
 	void *f2 = gsr_game_sym("kDispatchTable");
-	int complete = f2 != NULL;
+	/* Which ROM the game code was made from (the builder's rom_identity.cpp); the engine picks the language by it. */
+	int complete = f2 != NULL && gsr_game_sym("gsr_game_rom_sha1") != NULL;
 	if (!gsr_game()->tla) {  /* Golden Sun: also its interrupt handler and the spell-stamp variants */
 		void *f1 = gsr_game_sym("gf_irq_handler_03000000");
 		unsigned *vc = (unsigned *)gsr_game_sym("gsr_stamps_kVariantCount");

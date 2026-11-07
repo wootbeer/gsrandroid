@@ -1,3 +1,6 @@
+// The engine plug-in calls this runner's main directly.
+#define SDL_MAIN_HANDLED
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -6,6 +9,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <tuple>
@@ -18,6 +22,7 @@
 #include "env_flag.h"
 #include "game_exit.h"
 #include <memory>
+#include "frame_capture.h"
 #include "frame_history.h"
 #include "texture_readback_queue.h"
 #include "crash_handler.h"
@@ -30,15 +35,20 @@
 #include "obj_y_continuity.h"
 #include "effect_capture.h"
 #include "unpacker_catch.h"
-#include "unpacker_guard.h"
+#include "../../shared_game/unpacker_guard.h"
 #include "field_scene_renderer.h"
 #include "intro_music.h"
 #include "world_map_source.h"
 #include "rain_margins.h"
 #include "tile_ring_redraw.h"
 #include "cheat_menu.h"
-#include "adventure_guide.h"
+#include "trackers_tbs.h"
 #include "hard_mode.h"
+#include "../../shared_game/custom_battle.h"
+#include "../../shared_game/custom_battle_panel.h"
+#include "custom_battle_tbs.h"
+#include "retreat_travel_tbs.h"
+#include "../../shared_game/held_palette_effect.h"
 #include "host_config_ui.h"
 #include "seamless_mode.h"
 #include "gpu_surface.h"
@@ -54,7 +64,15 @@
 #include "developer_session.h"
 #include "text_speed_cheat.h"
 #include "settings_page.h"
+#include "../../shared_game/settings_help.h"
 #include "battle_speed.h"
+#include "../../shared_game/enemy_hp_bar.h"
+#include "../../shared_game/field_character.h"
+#include "../../shared_game/spanish_menu.h"
+#include "../../shared_game/menu_text.h"
+#include "../../shared_game/italian_menu.h"
+#include "../../shared_game/french_menu.h"
+#include "../../shared_game/german_menu.h"
 #include "obj_placements.h"
 #include "runtime.h"
 #include "memory_snapshot.h"
@@ -69,6 +87,7 @@
 #include "sha1.h"
 #include "widescreen_policy.h"
 #include "field_game_profile.h"
+#include "rom_version.h"
 
 extern "C" unsigned g_ws_active;
 extern "C" unsigned long long runtime_current_frame();
@@ -321,9 +340,6 @@ extern "C" RuntimeGuestFn overlay_resolve(std::uint32_t pc, int thumb);
 }
 
 namespace {
-
-constexpr const char* kRomSha1 =
-    "5c4695205413df7db52b9a184815a07783999971";
 
 // View sizes and aspect rules are shared with The Lost Age in view_config.h.
 
@@ -972,7 +988,7 @@ struct GoldenSunObjB328ParentlessToken {
     std::uint32_t r7 = 0;
     std::uint32_t call_depth = 0;
     std::uint32_t return_pc = 0;
-    std::uint32_t entry_pc = 0x0800B328u;
+    std::uint32_t entry_pc = GS_ROM(0x0800B328u);
     bool attr_valid = false;
     std::uint16_t attr0 = 0;
     std::uint16_t attr1 = 0;
@@ -1494,7 +1510,7 @@ void record_golden_sun_b27e_parent_route(std::uint32_t original_decision,
     auto* route = find_golden_sun_obj_b27e_parent(g_cpu.R[7]);
     if (!route) return;
     route->valid = true;
-    route->pc = 0x0800B27Eu;
+    route->pc = GS_ROM(0x0800B27Eu);
     route->frame = runtime_current_frame();
     route->operand = operand;
     route->original_decision = original_decision;
@@ -3419,8 +3435,8 @@ void record_golden_sun_signed_y_cull(
     std::uint32_t original_decision, std::uint32_t final_decision,
     bool overridden) {
     if (!golden_sun_expanded_obj_view_active() ||
-        (pc != 0x0800B3E6u && pc != 0x0800B3ECu &&
-         pc != 0x0800C702u && pc != 0x0800C708u)) return;
+        (pc != GS_ROM(0x0800B3E6u) && pc != GS_ROM(0x0800B3ECu) &&
+         pc != GS_ROM(0x0800C702u) && pc != GS_ROM(0x0800C708u))) return;
     GoldenSunObjSignedCullObservation observation{};
     observation.valid = true;
     observation.frame = runtime_current_frame();
@@ -3439,8 +3455,8 @@ void record_golden_sun_signed_y_cull(
         observation.call_depth);
     observation.sequence = ++g_golden_sun_obj_signed_cull_sequence;
     g_golden_sun_obj_signed_cull_observations[
-        pc == 0x0800B3E6u ? 0u : pc == 0x0800B3ECu ? 1u
-        : pc == 0x0800C702u ? 2u : 3u] = observation;
+        pc == GS_ROM(0x0800B3E6u) ? 0u : pc == GS_ROM(0x0800B3ECu) ? 1u
+        : pc == GS_ROM(0x0800C702u) ? 2u : 3u] = observation;
 }
 
 GoldenSunObjYCorrelation capture_golden_sun_obj_y_correlation(
@@ -3449,7 +3465,7 @@ GoldenSunObjYCorrelation capture_golden_sun_obj_y_correlation(
     if (!golden_sun_expanded_obj_view_active() || operand < 160 ||
         operand > 199) return result;
     result.valid = true;
-    result.b328_pc = 0x0800B328u;
+    result.b328_pc = GS_ROM(0x0800B328u);
     result.b328_operand = operand;
     result.b328_r1 = g_cpu.R[1];
     result.b328_r3 = g_cpu.R[3];
@@ -3476,7 +3492,7 @@ GoldenSunObjYCorrelation capture_golden_sun_obj_y_correlation(
         }
     }
     const std::uint32_t pcs[] = {
-        0x0800B3E6u, 0x0800B3ECu, 0x0800C702u, 0x0800C708u};
+        GS_ROM(0x0800B3E6u), GS_ROM(0x0800B3ECu), GS_ROM(0x0800C702u), GS_ROM(0x0800C708u)};
     for (std::size_t i = 0; i < result.preceding.size(); ++i) {
         const auto& candidate = g_golden_sun_obj_signed_cull_observations[i];
         if (candidate.valid && candidate.frame == runtime_current_frame() &&
@@ -3498,8 +3514,8 @@ void trace_golden_sun_obj_y_cull_decision(
     // precull routes are retained in the existing four-entry correlation
     // table, where their decisions can be joined to a later B328 object.
     // This is diagnostics-only: no cull result or fallback path is changed.
-    const bool object_y_route = branch_pc == 0x0800B27Eu ||
-        branch_pc == 0x0800B328u;
+    const bool object_y_route = branch_pc == GS_ROM(0x0800B27Eu) ||
+        branch_pc == GS_ROM(0x0800B328u);
     if (!object_y_route) return;
     const auto policy_lower = static_cast<std::int32_t>(
         gsr::widescreen::kNativeHeight);
@@ -3518,7 +3534,7 @@ void trace_golden_sun_obj_y_cull_decision(
         g_golden_sun_obj_y_cull_decision_logs_in_frame = 0;
         g_golden_sun_obj_y_cull_decision_frame = frame;
     }
-    const auto correlation = branch_pc == 0x0800B328u && in_policy_band
+    const auto correlation = branch_pc == GS_ROM(0x0800B328u) && in_policy_band
         ? capture_golden_sun_obj_y_correlation(operand)
         : GoldenSunObjYCorrelation{};
     const std::uint32_t staging_address = g_cpu.R[7];
@@ -6709,7 +6725,7 @@ void record_golden_sun_obj_staging(std::uint32_t instruction_pc,
         staging->y_writer_branch_pc = instruction_pc;
         golden_sun_obj_position_probe_sample(g_cpu.R[7], false,
                                              staging->logical_y);
-        if (instruction_pc == 0x0800B328u && logical_coordinate >= 160 &&
+        if (instruction_pc == GS_ROM(0x0800B328u) && logical_coordinate >= 160 &&
             logical_coordinate <= 199) {
             staging->y_correlation = capture_golden_sun_obj_y_correlation(
                 logical_coordinate);
@@ -7537,7 +7553,7 @@ constexpr int kGoldenSunWorldSideFirstRawY = 128;
 // dz = actor z - focus z: positive is below the player on screen (town 162.2 at
 // frame 0086 -> raw 206; 72.7 at 0087 -> raw 116), negative is above.
 // The same block-number test as world_map_margin_hold() decides "world map".
-constexpr std::uint32_t kGoldenSunActorContextPtr = 0x03001EBCu;
+const std::uint32_t kGoldenSunActorContextPtr = gs::ram(0x03001EBCu);
 constexpr std::uint32_t kGoldenSunActorTableOffset = 0x14u;
 constexpr std::uint32_t kGoldenSunActorFocusOffset = 0x1E0u;
 constexpr int kGoldenSunWorldActorFirst = 8;
@@ -8035,7 +8051,7 @@ bool golden_sun_obj_track_lookup(int oam_index, std::uint16_t attr0,
 // game stores next (0x0800B2A6..0x0800B2B6). ROM reading, FACTS.md
 // 2026-10-15. Report 10 (characters above the top edge at 480x320): the
 // fallback refuses raw Y 160..247, which a recorded placement answers.
-constexpr std::uint32_t kGoldenSunFieldStateSlot = 0x03001EBCu;
+const std::uint32_t kGoldenSunFieldStateSlot = gs::ram(0x03001EBCu);
 constexpr std::uint32_t kGoldenSunMapNumber = 0x02000408u;
 gbarecomp::ObjPlacements g_obj_placements;
 
@@ -8052,13 +8068,13 @@ void golden_sun_sync_obj_placements(gba::GbaBus& bus) {
 // offsets. Capture that position in the same table as the field builder.
 // F12 0051: the cave's true Y reaches 256; its byte alone becomes row 0.
 // Func_94820's rain queues the same way (`bl Func_3dec` at 0x08094942).
-constexpr std::uint32_t kGoldenSunRainQueueReturn = 0x08094946u;
+const std::uint32_t kGoldenSunRainQueueReturn = gs::rom(0x08094946u);
 void golden_sun_note_projected_obj_placement(std::uint32_t entry_pc) {
-    if (entry_pc != 0x08003DECu ||
+    if (entry_pc != GS_ROM(0x08003DECu) ||
         !golden_sun_expanded_obj_view_active()) return;
     const std::uint32_t caller = g_cpu.R[14] & ~1u;
-    const bool projected_shadow = caller == 0x0800B64Eu || caller == 0x0800B656u;
-    if (caller != 0x0800B5C2u && caller != 0x0800B5CCu && !projected_shadow &&
+    const bool projected_shadow = caller == GS_ROM(0x0800B64Eu) || caller == GS_ROM(0x0800B656u);
+    if (caller != GS_ROM(0x0800B5C2u) && caller != GS_ROM(0x0800B5CCu) && !projected_shadow &&
         caller != kGoldenSunRainQueueReturn) return;
     gba::GbaBus* bus = gbarecomp::active_bus();
     if (!bus) return;
@@ -8115,7 +8131,7 @@ void golden_sun_note_obj_placement(std::uint32_t pc) {
     if (!bus || !golden_sun_expanded_obj_view_active()) return;
     golden_sun_sync_obj_placements(*bus);
     const int y = static_cast<std::int32_t>(g_cpu.R[6]);
-    if (pc == 0x0800B328u) {
+    if (pc == GS_ROM(0x0800B328u)) {
         g_obj_placements.note(*bus, runtime_current_frame(), g_cpu.R[7],
                               static_cast<std::int32_t>(g_cpu.R[4]), y);
     } else {
@@ -8428,9 +8444,9 @@ struct GoldenSunCullTrace {
 };
 
 std::array<GoldenSunCullTrace, 10> g_golden_sun_cull_trace{{
-    {0x0800B27Eu}, {0x0800B324u}, {0x0800B328u},
-    {0x0800B3D2u}, {0x0800B3DCu}, {0x0800B3E6u}, {0x0800B3ECu},
-    {0x0800C6FAu}, {0x0800C702u}, {0x0800C708u},
+    {gs::rom(0x0800B27Eu)}, {gs::rom(0x0800B324u)}, {gs::rom(0x0800B328u)},
+    {gs::rom(0x0800B3D2u)}, {gs::rom(0x0800B3DCu)}, {gs::rom(0x0800B3E6u)}, {gs::rom(0x0800B3ECu)},
+    {gs::rom(0x0800C6FAu)}, {gs::rom(0x0800C702u)}, {gs::rom(0x0800C708u)},
 }};
 
 std::uint64_t g_golden_sun_cull_last_report_frame = UINT64_MAX;
@@ -8558,15 +8574,15 @@ void record_golden_sun_cull_trace(std::uint32_t pc) {
         static_cast<std::size_t>(site)];
     ++stat.calls;
     std::int32_t coord = 0;
-    if (pc == 0x0800B324u) coord = static_cast<std::int32_t>(g_cpu.R[4]);
-    else if (pc == 0x0800B27Eu || pc == 0x0800B328u)
+    if (pc == GS_ROM(0x0800B324u)) coord = static_cast<std::int32_t>(g_cpu.R[4]);
+    else if (pc == GS_ROM(0x0800B27Eu) || pc == GS_ROM(0x0800B328u))
         coord = static_cast<std::int32_t>(g_cpu.R[6]);
-    else if (pc == 0x0800B3D2u || pc == 0x0800B3DCu ||
-             pc == 0x0800B3E6u || pc == 0x0800B3ECu)
+    else if (pc == GS_ROM(0x0800B3D2u) || pc == GS_ROM(0x0800B3DCu) ||
+             pc == GS_ROM(0x0800B3E6u) || pc == GS_ROM(0x0800B3ECu))
         coord = static_cast<std::int32_t>(g_cpu.R[3]);
-    else if (pc == 0x0800C6FAu)
+    else if (pc == GS_ROM(0x0800C6FAu))
         coord = static_cast<std::int32_t>(g_cpu.R[3]);
-    else if (pc == 0x0800C702u || pc == 0x0800C708u)
+    else if (pc == GS_ROM(0x0800C702u) || pc == GS_ROM(0x0800C708u))
         coord = static_cast<std::int32_t>(g_cpu.R[2]);
     stat.min_coord = std::min(stat.min_coord, coord);
     stat.max_coord = std::max(stat.max_coord, coord);
@@ -8601,30 +8617,30 @@ int golden_sun_wide_conditional_branch(std::uint32_t instruction_pc,
     const std::uint32_t height = gsr::widescreen::kNativeHeight +
         g_golden_sun_wide_extra_top + g_golden_sun_wide_extra_bottom;
     std::int32_t compared_operand = 0;
-    if (instruction_pc == 0x0800B324u) {
+    if (instruction_pc == GS_ROM(0x0800B324u)) {
         // Generated disassembly: B322 is `cmp r4,#239`; B324 consumes r4.
         compared_operand = static_cast<std::int32_t>(g_cpu.R[4]);
-    } else if (instruction_pc == 0x0800B27Eu ||
-               instruction_pc == 0x0800B328u) {
+    } else if (instruction_pc == GS_ROM(0x0800B27Eu) ||
+               instruction_pc == GS_ROM(0x0800B328u)) {
         // Generated disassembly: B27C/B326 are `cmp r6,#159`; both consume r6.
         compared_operand = static_cast<std::int32_t>(g_cpu.R[6]);
-    } else if (instruction_pc == 0x0800B3D2u ||
-               instruction_pc == 0x0800B3DCu ||
-               instruction_pc == 0x0800B3E6u ||
-               instruction_pc == 0x0800B3ECu ||
-               instruction_pc == 0x0800C6FAu) {
+    } else if (instruction_pc == GS_ROM(0x0800B3D2u) ||
+               instruction_pc == GS_ROM(0x0800B3DCu) ||
+               instruction_pc == GS_ROM(0x0800B3E6u) ||
+               instruction_pc == GS_ROM(0x0800B3ECu) ||
+               instruction_pc == GS_ROM(0x0800C6FAu)) {
         // Func_b388 and C6FA consume signed r3 at their reviewed branches.
         // C6FA's policy converts the preserved bit pattern back to unsigned.
         compared_operand = static_cast<std::int32_t>(g_cpu.R[3]);
-    } else if (instruction_pc == 0x0800C702u ||
-               instruction_pc == 0x0800C708u) {
+    } else if (instruction_pc == GS_ROM(0x0800C702u) ||
+               instruction_pc == GS_ROM(0x0800C708u)) {
         // Func_c62c's lower/upper Y routes consume signed r2.
         compared_operand = static_cast<std::int32_t>(g_cpu.R[2]);
     }
     GoldenSunObjB328ParentClassification b328_classification =
         GoldenSunObjB328ParentClassification::NoParent;
     unsigned b328_mismatch_flags = 0u;
-    if (instruction_pc == 0x0800B328u &&
+    if (instruction_pc == GS_ROM(0x0800B328u) &&
         golden_sun_expanded_obj_view_active() && compared_operand >= 160 &&
         compared_operand <= 199) {
         const std::uint64_t frame = runtime_current_frame();
@@ -8650,7 +8666,7 @@ int golden_sun_wide_conditional_branch(std::uint32_t instruction_pc,
             g_golden_sun_wide_extra_left, g_golden_sun_wide_extra_right,
             g_golden_sun_wide_extra_top, g_golden_sun_wide_extra_bottom,
             compared_operand, out_decision);
-    if (!overridden && instruction_pc == 0x0800B328u) {
+    if (!overridden && instruction_pc == GS_ROM(0x0800B328u)) {
         const std::uint64_t frame = runtime_current_frame();
         const std::uint32_t call_depth = runtime_call_stack_depth();
         const std::uint32_t call_return_pc =
@@ -8705,7 +8721,7 @@ int golden_sun_wide_conditional_branch(std::uint32_t instruction_pc,
     }
     const std::uint32_t final_decision =
         overridden ? *out_decision : original_decision;
-    if ((instruction_pc == 0x0800B27Eu || instruction_pc == 0x0800B328u) &&
+    if ((instruction_pc == GS_ROM(0x0800B27Eu) || instruction_pc == GS_ROM(0x0800B328u)) &&
         final_decision == 0u)
         golden_sun_note_obj_placement(instruction_pc);
     // World-map sprite decisions near the right edge, one line each (VRAM
@@ -8715,10 +8731,10 @@ int golden_sun_wide_conditional_branch(std::uint32_t instruction_pc,
     // 2026-09-24). C6FA's operand is 16.16 fixed point.
     if (golden_sun_wide_diagnostics_enabled() &&
         bus_read_u16(0x02000408u) == 2u &&
-        (instruction_pc == 0x0800B324u || instruction_pc == 0x0800B3D2u ||
-         instruction_pc == 0x0800B3DCu || instruction_pc == 0x0800C6FAu)) {
+        (instruction_pc == GS_ROM(0x0800B324u) || instruction_pc == GS_ROM(0x0800B3D2u) ||
+         instruction_pc == GS_ROM(0x0800B3DCu) || instruction_pc == GS_ROM(0x0800C6FAu))) {
         static unsigned logged = 0;
-        const std::int32_t px = instruction_pc == 0x0800C6FAu
+        const std::int32_t px = instruction_pc == GS_ROM(0x0800C6FAu)
             ? static_cast<std::int32_t>(
                   static_cast<std::uint32_t>(compared_operand) >> 16)
             : compared_operand;
@@ -8735,12 +8751,12 @@ int golden_sun_wide_conditional_branch(std::uint32_t instruction_pc,
     record_golden_sun_signed_y_cull(
         instruction_pc, compared_operand, original_decision, final_decision,
         overridden);
-    if (instruction_pc == 0x0800B27Eu || instruction_pc == 0x0800B328u) {
+    if (instruction_pc == GS_ROM(0x0800B27Eu) || instruction_pc == GS_ROM(0x0800B328u)) {
         trace_golden_sun_obj_y_cull_decision(
             instruction_pc, original_decision, final_decision, overridden,
             compared_operand);
     }
-    if (instruction_pc == 0x0800B328u) {
+    if (instruction_pc == GS_ROM(0x0800B328u)) {
         if (gsr::widescreen::golden_sun_obj_y_branch_writes_oam(
                 instruction_pc, original_decision, overridden,
                 final_decision)) {
@@ -8757,7 +8773,7 @@ int golden_sun_wide_conditional_branch(std::uint32_t instruction_pc,
         }
     }
     if (golden_sun_expanded_obj_view_active() &&
-        instruction_pc == 0x0800B27Eu) {
+        instruction_pc == GS_ROM(0x0800B27Eu)) {
         record_golden_sun_b27e_parent_route(
             original_decision, overridden, final_decision, compared_operand);
     }
@@ -8765,13 +8781,13 @@ int golden_sun_wide_conditional_branch(std::uint32_t instruction_pc,
     // decision point and does not itself write the record, so provenance must
     // not be attached there.
     const bool expanded_obj_view = golden_sun_expanded_obj_view_active();
-    if (expanded_obj_view && instruction_pc == 0x0800B324u &&
+    if (expanded_obj_view && instruction_pc == GS_ROM(0x0800B324u) &&
         ((!overridden && !original_decision) ||
          (overridden && *out_decision == 0u))) {
         record_golden_sun_obj_staging(
             instruction_pc, true, compared_operand);
     }
-    if (expanded_obj_view && instruction_pc == 0x0800B328u &&
+    if (expanded_obj_view && instruction_pc == GS_ROM(0x0800B328u) &&
         gsr::widescreen::golden_sun_obj_y_branch_writes_oam(
             instruction_pc, original_decision, overridden,
             overridden ? *out_decision : original_decision)) {
@@ -8780,14 +8796,14 @@ int golden_sun_wide_conditional_branch(std::uint32_t instruction_pc,
     }
     // A rejected final Y branch means no staging record is written. Retire
     // the X candidate captured at B324 so a later OAM slot cannot inherit it.
-    if (expanded_obj_view && instruction_pc == 0x0800B328u &&
+    if (expanded_obj_view && instruction_pc == GS_ROM(0x0800B328u) &&
         !gsr::widescreen::golden_sun_obj_y_branch_writes_oam(
             instruction_pc, original_decision, overridden,
             overridden ? *out_decision : original_decision)) {
         clear_golden_sun_obj_staging(g_cpu.R[7]);
     }
     if (!overridden) {
-        if (instruction_pc == 0x0800B27Eu || instruction_pc == 0x0800B328u) {
+        if (instruction_pc == GS_ROM(0x0800B27Eu) || instruction_pc == GS_ROM(0x0800B328u)) {
             trace_golden_sun_obj_y_attempt(
                 instruction_pc, g_ws_active ? "branch-rejected" : "scene-disabled",
                 compared_operand < 0 ? 0u : static_cast<std::uint32_t>(compared_operand),
@@ -8876,9 +8892,9 @@ void record_golden_sun_obj_boulder_field_write(std::uint32_t address,
                                                std::uint32_t size) {
     if (!gsr::obj_recorder_enabled() || size != 4u) return;
     const std::uint32_t pc = runtime_current_pc();
-    const std::uint32_t field_offset = pc == 0x0809496Eu ? 0x0Cu :
-        pc == 0x08094970u ? 0x14u :
-        pc == 0x08094980u ? 0x10u : 0u;
+    const std::uint32_t field_offset = pc == GS_ROM(0x0809496Eu) ? 0x0Cu :
+        pc == GS_ROM(0x08094970u) ? 0x14u :
+        pc == GS_ROM(0x08094980u) ? 0x10u : 0u;
     if (field_offset == 0u || address < kGoldenSunObjSourceRegionBStart ||
         address > kGoldenSunObjSourceRegionBEnd) return;
     const std::uint32_t relative = address - kGoldenSunObjSourceRegionBStart;
@@ -8891,10 +8907,10 @@ void record_golden_sun_obj_boulder_field_write(std::uint32_t address,
     // 0x0809497C call through the same R7 source base. Keep this boundary
     // tied to that measured base rather than accepting an address-shaped
     // match from an unrelated store.
-    if (pc == 0x08094980u && g_cpu.R[7] != source) return;
+    if (pc == GS_ROM(0x08094980u) && g_cpu.R[7] != source) return;
 
     gsr::ObjBoulderTraceSample sample;
-    sample.event = pc == 0x08094980u ? "calc-result-write" : "field-write";
+    sample.event = pc == GS_ROM(0x08094980u) ? "calc-result-write" : "field-write";
     sample.source_state = "writer-store";
     sample.outcome = "not-committed";
     sample.frame = runtime_current_frame();
@@ -8903,7 +8919,7 @@ void record_golden_sun_obj_boulder_field_write(std::uint32_t address,
     fill_golden_sun_obj_boulder_registers(&sample);
     // The source operands are fixed by the measured generated instructions
     // above, not inferred from the stored value.
-    sample.store_value = pc == 0x0809496Eu ? g_cpu.R[1] : g_cpu.R[0];
+    sample.store_value = pc == GS_ROM(0x0809496Eu) ? g_cpu.R[1] : g_cpu.R[0];
     fill_golden_sun_obj_boulder_source_fields(
         &sample, source, field_offset, sample.store_value);
     gsr::obj_recorder_note_boulder_trace(sample);
@@ -8914,7 +8930,7 @@ void record_golden_sun_obj_boulder_field_write(std::uint32_t address,
 // gives the next capture a calculation boundary before either candidate field
 // is written.
 void record_golden_sun_obj_boulder_calc_entry(std::uint32_t entry_pc) {
-    if (!gsr::obj_recorder_enabled() || entry_pc != 0x08094928u) return;
+    if (!gsr::obj_recorder_enabled() || entry_pc != GS_ROM(0x08094928u)) return;
     const std::uint32_t source = g_cpu.R[7];
     if (!golden_sun_obj_boulder_field_in_span(source, 0x0Cu) ||
         !golden_sun_obj_boulder_field_in_span(source, 0x14u)) return;
@@ -9148,6 +9164,7 @@ void install_golden_sun_widescreen(std::uint32_t extra_left,
     // guest truncates them into OAM. Missing or stale visible provenance
     // always leaves canonical GBA wrapping in control.
     gba::g_ws_obj_park_provider = golden_sun_obj_park_provider;
+    gba::g_ws_obj_tile_provider = gsr::custom_battle::tbs::sprite_tile;
     gba::g_ws_obj_attr_x_provider = golden_sun_wide_obj_attr_x_provider;
     gba::g_ws_obj_x_provider = nullptr;
     gba::g_ws_obj_y_provider = nullptr;
@@ -9325,50 +9342,6 @@ void build_room_vram(const std::vector<std::uint8_t>& vram,
               out_palette->begin() + restore_from);
 }
 
-struct GpuFieldCapture {
-    bool valid = false;
-    gsr::CapturedEffectFrame effects;
-    gsr::FieldScene scene;
-    std::vector<std::uint8_t> vram;   // bus->vram_ptr(), 96 KB
-    // The same, except that while a game window is open BG0's character
-    // block holds what it held before the window opened (see
-    // build_room_vram). FieldSceneRenderer::upload_room_vram; room tiles
-    // in the margins read it.
-    std::vector<std::uint8_t> room_vram;
-    // Likewise the palette: the field's background colours restored while a
-    // window is open, else empty.
-    std::vector<std::uint16_t> room_palette;
-    // bus->ewram_ptr(), 256 KB: the room rect/camera/id-grid/atlas tables
-    // FieldSceneRenderer::upload_room reads (addresses in room_buffer.h),
-    // taken from the live guest, not the offline recorded snapshots the
-    // check tool uses.
-    std::vector<std::uint8_t> ewram;
-    // bus->iwram_ptr(), 32 KB. Not read by the renderer at all -- this is for
-    // the F12 dump alone, and it is here because the spell effects cannot be
-    // read any other way. Golden Sun composes an effect in a 16 KB buffer on
-    // its own IWRAM heap and RELOCATES the routine that stamps particles into
-    // that buffer to just behind it, so the routine exists only at runtime:
-    // its address is never a ROM literal and the disassembly has no symbol for
-    // it (FACTS.md, 2026-09-18). A write trace can say where it wrote but
-    // never what instructions it is. Capturing IWRAM captures the routine
-    // itself, to be disassembled offline.
-    std::vector<std::uint8_t> iwram;
-    // The cartridge, for WorldMapSource: the world map's pieces are unpacked
-    // from it (world_map_source.h). Constant for the session.
-    const std::uint8_t* rom = nullptr;
-    std::size_t rom_bytes = 0;
-    // Raw register/object/palette memory, for gpu_field_present_override()'s
-    // F12 dump only (see its header comment). `scene` already carries a
-    // decoded summary of IO/OAM/PAL, but a one-frame dump hands the replay
-    // tool the exact memory the hardware compositor reads, not a re-encoding
-    // of it, so these are separate full copies rather than derived from
-    // `scene` at dump time.
-    std::vector<std::uint8_t> io;     // bus->io().raw(), 0x400 bytes
-    std::vector<std::uint8_t> oam;    // bus->oam_ptr(), 1024 bytes
-    std::vector<std::uint8_t> pal;    // bus->pal_ptr(), 1024 bytes
-    // game_window_open() at this frame's capture (world-map margin hold).
-    bool window_open = false;
-};
 // Filled by gpu_field_capture_hook() at VBlank start -- the same boundary
 // the canonical framebuffer latches at (GbaPpu::latch_native_scene_state,
 // called from runtime_bus_bridge.cpp) -- and read once, later the same frame,
@@ -9377,17 +9350,17 @@ struct GpuFieldCapture {
 // dispatch, not necessarily where the host's GL context is current. The draw
 // happens at present time instead, beside the win.present() call it stands
 // in for (see runtime.cpp's present_first).
-GpuFieldCapture g_gpu_field_capture;
+gsr::GpuFieldCapture g_gpu_field_capture;
 struct GpuPresentation {
-    GpuFieldCapture capture;
+    gsr::GpuFieldCapture capture;
     gbarecomp::HistoryFrame frame;
     bool world_source_ok = false;
 };
 gbarecomp::TextureReadbackQueue<GpuPresentation> g_gpu_readback;
-GpuFieldCapture g_world_settled_capture;
+gsr::GpuFieldCapture g_world_settled_capture;
 
 bool draw_gpu_field_capture(gsr::FieldSceneRenderer& renderer,
-                            const GpuFieldCapture& capture,
+                            const gsr::GpuFieldCapture& capture,
                             std::uint32_t width, std::uint32_t height);
 
 // ---- World-map margin hold ------------------------------------------------
@@ -9414,39 +9387,7 @@ bool g_world_map_source_ok = false;
 // world map's Psynergy tint turns the whole palette red (average 18,4,4
 // against 10,18,20; logs/gpu_frame_0102.bin, 2026-09-30) while the held
 // margins stayed green.
-std::array<std::uint16_t, 256> g_world_margin_pal{};
-std::unordered_map<std::uint32_t, std::uint8_t> g_world_margin_index;
-
-void world_margin_rgb_of(std::uint16_t c, int out[3]) {
-    out[0] = (c & 31) * 255 / 31;
-    out[1] = ((c >> 5) & 31) * 255 / 31;
-    out[2] = ((c >> 10) & 31) * 255 / 31;
-}
-
-// Nearest saved-palette index for every distinct colour in the saved
-// margins, found once per save with a new palette.
-void world_margin_index_colours(std::uint32_t width, std::uint32_t height) {
-    g_world_margin_index.clear();
-    int pal_rgb[256][3];
-    for (int i = 0; i < 256; ++i)
-        world_margin_rgb_of(g_world_margin_pal[i], pal_rgb[i]);
-    const std::uint8_t* p = g_world_margin_rgb.data();
-    const std::size_t n = std::size_t{width} * height;
-    for (std::size_t i = 0; i < n; ++i, p += 3) {
-        const std::uint32_t key = (std::uint32_t{p[0]} << 16) |
-                                  (std::uint32_t{p[1]} << 8) | p[2];
-        if (g_world_margin_index.count(key)) continue;
-        int best = 0, best_d = 1 << 30;
-        for (int k = 0; k < 256; ++k) {
-            const int dr = p[0] - pal_rgb[k][0];
-            const int dg = p[1] - pal_rgb[k][1];
-            const int db = p[2] - pal_rgb[k][2];
-            const int d = dr * dr + dg * dg + db * db;
-            if (d < best_d) { best_d = d; best = k; }
-        }
-        g_world_margin_index[key] = static_cast<std::uint8_t>(best);
-    }
-}
+gsr::HeldPaletteEffect g_world_palette_effect;
 
 bool world_map_blocks(const std::vector<std::uint8_t>& io) {
     if (io.size() < 0x10) return false;
@@ -9531,7 +9472,7 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
                            std::uint32_t height,
                            gsr::FieldSceneRenderer& renderer,
                            gbarecomp::GpuSurface& surface,
-                           const GpuFieldCapture& capture, bool world_source_ok) {
+                           const gsr::GpuFieldCapture& capture, bool world_source_ok) {
     const std::vector<std::uint8_t>& io = capture.io;
     const unsigned mode = io.empty() ? 0xFFu : (io[0] & 7u);
     const bool world = world_map_blocks(io);
@@ -9576,14 +9517,7 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
             g_world_margin_w = width;
             g_world_margin_h = height;
             g_world_settled_capture = capture;
-            const auto& pal = capture.pal;
-            for (int i = 0; i < 256; ++i)
-                g_world_margin_pal[i] = static_cast<std::uint16_t>(
-                    pal[i * 2] | (pal[i * 2 + 1] << 8));
-            // Saved every settled frame; the colour index is only needed if
-            // a palette effect follows, so it is built lazily on the first
-            // menu frame whose palette differs (see below).
-            g_world_margin_index.clear();
+            g_world_palette_effect.save(capture.pal);
         }
         return;
     }
@@ -9631,7 +9565,7 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
         g_world_margin_rgb.swap(resized);
         g_world_margin_w = width;
         g_world_margin_h = height;
-        g_world_margin_index.clear();
+        g_world_palette_effect.reset_indices();
     }
     // No settled world-map frame to hold, as when a Djinn event switches to
     // mode 0 straight away (logs/gpu_frame_0083.bin, Flint, 2026-09-26): the
@@ -9665,54 +9599,7 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
         std::memcpy(dst + std::size_t{right} * 3u, src + std::size_t{right} * 3u,
                     std::size_t{width - right} * 3u);
     }
-    // A palette effect started after the save (the Psynergy tint, a fade):
-    // move every held margin colour by the change of the palette entry it
-    // was drawn from, so the margins take the same tint as the picture.
-    // Only a whole-palette effect, though: menus load their own colours into
-    // a few banks (Status 0, 1 and 14; Djinn 0, 1, 4-7 and 14), and
-    // following those turned the held margins into noise
-    // (logs/gpu_rewind_0062/0063, 2026-10-01). The Psynergy tint changed
-    // every bank but 15, the windows' own (logs/gpu_frame_0102.bin). The
-    // green Djinn-join tint changes banks 0-13 only, not 14 or 15
-    // (gpu_rewind_0013 of bug_report_20261005_094058), so the check covers
-    // banks 0-13: no menu changes all of those.
-    const auto& pal = capture.pal;
-    if (pal.size() < 512) return;
-    int delta[256][3];
-    std::array<bool, 16> bank_used{}, bank_changed{};
-    for (int i = 0; i < 256; ++i) {
-        const std::uint16_t live =
-            static_cast<std::uint16_t>(pal[i * 2] | (pal[i * 2 + 1] << 8));
-        int a[3], b[3];
-        world_margin_rgb_of(g_world_margin_pal[i], a);
-        world_margin_rgb_of(live, b);
-        for (int k = 0; k < 3; ++k) delta[i][k] = b[k] - a[k];
-        if (g_world_margin_pal[i] != 0u) bank_used[i / 16] = true;
-        if (live != g_world_margin_pal[i]) bank_changed[i / 16] = true;
-    }
-    bool whole_palette = false;
-    for (int bank = 0; bank < 14; ++bank) {
-        if (!bank_used[bank]) continue;
-        if (!bank_changed[bank]) return;  // a menu's colours: keep the margins
-        whole_palette = true;
-    }
-    if (!whole_palette) return;
-    if (g_world_margin_index.empty()) world_margin_index_colours(width, height);
-    for (std::uint32_t y = 0; y < height; ++y) {
-        const bool native_row = y >= y0 && y < y0 + 160u;
-        std::uint8_t* row = rgb + std::size_t{y} * width * 3u;
-        for (std::uint32_t x = 0; x < width; ++x) {
-            if (native_row && x == x0) { x = x0 + 239u; continue; }
-            std::uint8_t* p = row + std::size_t{x} * 3u;
-            const std::uint32_t key = (std::uint32_t{p[0]} << 16) |
-                                      (std::uint32_t{p[1]} << 8) | p[2];
-            const auto it = g_world_margin_index.find(key);
-            if (it == g_world_margin_index.end()) continue;
-            for (int k = 0; k < 3; ++k)
-                p[k] = static_cast<std::uint8_t>(
-                    std::clamp(p[k] + delta[it->second][k], 0, 255));
-        }
-    }
+    g_world_palette_effect.apply(rgb, width, height, g_world_margin_rgb, capture.pal);
 }
 
 void native_page_frame_end(bool at_capture);
@@ -9759,12 +9646,12 @@ void apply_obj_y_continuity_if_enabled(gsr::FieldScene* scene,
         }, g_golden_sun_wide_extra_top, g_golden_sun_wide_extra_bottom);
 }
 
-void adventure_font_frame();
+void load_menu_font();
 
 void gpu_field_capture_hook() {
-    adventure_font_frame();
+    load_menu_font();
     if (const auto* bus = gbarecomp::active_bus())
-        gsr::adventure::sample(bus->ewram_ptr(), runtime_current_frame(), bus->iwram_ptr());
+        gsr::trackers::sample(bus->ewram_ptr(), bus->rom_ptr(), bus->rom_size());
     // Page two of Settings, before anything copies this frame (see there).
     native_page_frame_end(true);
     if (!gpu_field_enabled()) return;
@@ -9851,7 +9738,8 @@ void gpu_field_capture_hook() {
     }
     apply_obj_y_continuity_if_enabled(&scene, bus->oam_ptr(), frame_io);
     g_gpu_field_capture.scene = scene;
-    g_gpu_field_capture.vram.assign(bus->vram_ptr(), bus->vram_ptr() + 96 * 1024);
+    g_gpu_field_capture.vram.assign(bus->vram_ptr(), bus->vram_ptr() +
+        gba::GbaBus::kNativeVram + (bus->obj_extra() ? gba::GbaBus::kObjExtraVram : 0));
     build_room_vram(g_gpu_field_capture.vram, scene.palette,
                     &g_gpu_field_capture.room_vram,
                     &g_gpu_field_capture.room_palette);
@@ -9862,7 +9750,7 @@ void gpu_field_capture_hook() {
     g_gpu_field_capture.rom = bus->rom_ptr();
     g_gpu_field_capture.rom_bytes = bus->rom_size();
     std::uint32_t effect_canvas = 0;
-    std::memcpy(&effect_canvas, g_gpu_field_capture.iwram.data() + 0x1EF0, 4);
+    std::memcpy(&effect_canvas, g_gpu_field_capture.iwram.data() + gs::ram(0x03001EF0u) - 0x03000000u, 4);
     if (g_gpu_field_capture.effects.canvas != effect_canvas)
         g_gpu_field_capture.effects = {};
     g_gpu_field_capture.io = frame_io;
@@ -9875,156 +9763,6 @@ void gpu_field_capture_hook() {
     g_gpu_field_capture.valid = true;
 }
 
-// F12: dump the just-drawn GPU field frame (see the F12 history below).
-// F11 and F12 are the only function keys nothing else claims: host_window.cpp
-// binds F2..F10 to the nine save-state slots (plain = load, Shift = save) and
-// F1 is the rebind menu. The dump exists because tools/scene_renderer_check.cpp's
-// recorded corpus holds only one whole-frame register read per snapshot,
-// while the console re-reads registers every scanline; a per-scanline fault
-// can only be told apart from a whole-frame one by capturing what the console
-// itself saw, live, row by row. Deliberately not a launcher checkbox: it is a
-// one-shot action, not a persistent setting. The poll is one key-state call
-// per drawn frame.
-//
-// File layout follows the GSRSNAP1 format (map_recorder.cpp's
-// write_snapshot_bin), with the GSRGPUF1 magic: an 88-byte header (magic,
-// then zero, then section count as u32 at offset 12, frame number as u64 at
-// offset 16, the rest zero), then that many 24-byte directory entries
-// (8-byte name, u64 offset, u64 length), then the section bytes themselves.
-//
-// GetAsyncKeyState is declared here rather than by including <windows.h>:
-// this translation unit is huge, leans on std::min/std::max throughout, and
-// the Win32 headers risk an include-order collision. user32 is already linked
-// (engine/CMakeLists.txt links it PUBLIC).
-#if defined(_WIN32)
-extern "C" short __stdcall GetAsyncKeyState(int virtual_key);
-constexpr int kVirtualKeyDump = 0x7B;  // VK_F12
-bool dump_key_down() {
-    return (GetAsyncKeyState(kVirtualKeyDump) & 0x8000) != 0;
-}
-#elif defined(__ANDROID__)
-bool dump_key_down() { return false; }  // GSR-ANDROID: no keyboard-state dump hotkey
-#else
-// Linux: SDL's keyboard state, declared here for the same reason (SDL2's
-// header is not included in this file). SDL_SCANCODE_F12 is 69.
-extern "C" const unsigned char* SDL_GetKeyboardState(int* numkeys);
-bool dump_key_down() {
-    const unsigned char* keys = SDL_GetKeyboardState(nullptr);
-    return keys && keys[69] != 0;
-}
-#endif
-
-// The GSRGPUF1 bytes of the current capture (layout above), shared by the
-// single F12 dump and the rewind ring below.
-std::string gpu_field_dump_bytes(const GpuFieldCapture& capture) {
-    const gsr::FieldScene& scene = capture.scene;
-    constexpr std::size_t kLineIoBytes = gsr::FieldScene::kLineIoBytes;
-    constexpr int kRows = gsr::FieldScene::kRows;
-
-    // LINEIO: row y's own registers where the console latched one, else the
-    // frame's end-of-frame register file -- substituted here so the replay
-    // tool never has to know the difference (field_scene.h's own contract
-    // for row_io/row_io_valid/io_bytes).
-    std::vector<std::uint8_t> line_io(kLineIoBytes * static_cast<std::size_t>(kRows));
-    for (int y = 0; y < kRows; ++y) {
-        const std::uint8_t* src = scene.row_io_valid[y]
-            ? scene.row_io[y].data() : scene.io_bytes.data();
-        std::memcpy(line_io.data() + static_cast<std::size_t>(y) * kLineIoBytes,
-                   src, kLineIoBytes);
-    }
-
-    // AFFREF: row y's own latched BG2/BG3 reference point where the console
-    // captured one, else the frame-level reference walked by PB/PD the same
-    // way field_scene_renderer.cpp's own per-row affine upload does, so a
-    // row this scene never latched still gets the value the renderer itself
-    // would use for it.
-    std::vector<std::int32_t> affine_refs(static_cast<std::size_t>(kRows) * 4u);
-    for (int y = 0; y < kRows; ++y) {
-        std::int32_t* r = affine_refs.data() + static_cast<std::size_t>(y) * 4u;
-        if (scene.row_affine_valid[y]) {
-            r[0] = scene.row_affine[y][0];
-            r[1] = scene.row_affine[y][1];
-            r[2] = scene.row_affine[y][2];
-            r[3] = scene.row_affine[y][3];
-        } else {
-            for (int k = 0; k < 2; ++k) {
-                const gsr::SceneLayer& layer = scene.layers[2 + k];
-                r[k * 2 + 0] = layer.affine_ref_x + y * layer.affine_pb;
-                r[k * 2 + 1] = layer.affine_ref_y + y * layer.affine_pd;
-            }
-        }
-    }
-
-    struct Section {
-        const char* name;
-        const std::uint8_t* data;
-        std::uint64_t length;
-    };
-    const Section sections[] = {
-        {"SCENE",  reinterpret_cast<const std::uint8_t*>(&scene), sizeof(scene)},
-        {"IO",     capture.io.data(), capture.io.size()},
-        {"OAM",    capture.oam.data(), capture.oam.size()},
-        {"PAL",    capture.pal.data(), capture.pal.size()},
-        {"VRAM",   capture.vram.data(), capture.vram.size()},
-        {"EWRAM",  capture.ewram.data(), capture.ewram.size()},
-        {"IWRAM",  capture.iwram.data(), capture.iwram.size()},
-        {"LINEIO", line_io.data(), line_io.size()},
-        {"AFFREF", reinterpret_cast<const std::uint8_t*>(affine_refs.data()),
-                   affine_refs.size() * sizeof(std::int32_t)},
-        {"FXSTAMP", reinterpret_cast<const std::uint8_t*>(
-                        capture.effects.stamps.data()),
-                    capture.effects.stamps.size() * sizeof(gsr::EffectSpark)},
-        {"FXART", capture.effects.artwork.data(),
-                  capture.effects.artwork.size()},
-    };
-    constexpr std::size_t kSectionCount = sizeof(sections) / sizeof(sections[0]);
-
-    auto put_u32 = [](std::string& out, std::uint32_t v) {
-        for (int i = 0; i < 4; ++i) out.push_back(static_cast<char>((v >> (8 * i)) & 0xFFu));
-    };
-    auto put_u64 = [](std::string& out, std::uint64_t v) {
-        for (int i = 0; i < 8; ++i) out.push_back(static_cast<char>((v >> (8 * i)) & 0xFFu));
-    };
-
-    // Zero-initialized already covers "rest zero", including offset 8-11
-    // (GSRSNAP1's version field, unused here).
-    std::string header(88, '\0');
-    std::memcpy(&header[0], "GSRGPUF1", 8);
-    // offset 12: section count
-    {
-        std::string cnt;
-        put_u32(cnt, static_cast<std::uint32_t>(kSectionCount));
-        std::memcpy(&header[12], cnt.data(), 4);
-    }
-    // offset 16: frame number
-    {
-        std::string frm;
-        put_u64(frm, scene.frame);
-        std::memcpy(&header[16], frm.data(), 8);
-    }
-
-    std::string table;
-    std::string data;
-    std::uint64_t data_off = 88 + kSectionCount * 24u;
-    for (const Section& s : sections) {
-        std::string name_field(8, '\0');
-        std::memcpy(&name_field[0], s.name,
-                   std::min(std::strlen(s.name), std::size_t{8}));
-        table += name_field;
-        put_u64(table, data_off);
-        put_u64(table, s.length);
-        if (s.length) data.append(reinterpret_cast<const char*>(s.data), s.length);
-        data_off += s.length;
-    }
-
-    std::string out;
-    out.reserve(header.size() + table.size() + data.size());
-    out += header;
-    out += table;
-    out += data;
-    return out;
-}
-
 // ---- F12 history (engine frame_history.h, always on) --------------------
 //
 // A one-frame flicker is gone before F12 lands, so every presented frame is
@@ -10033,88 +9771,6 @@ std::string gpu_field_dump_bytes(const GpuFieldCapture& capture) {
 // bytes for tools/scene_renderer_check. F12 writes the last 2 seconds to
 // logs/gpu_rewind_NNNN/.
 gbarecomp::FrameHistory g_history("gpu_rewind_");
-// Guest frame until which "BUG REPORT SAVED" shows (paint_bug_report_notice).
-unsigned long long g_bug_report_notice_until = 0;
-// The notice's text: F12's, or the unpacker guard's.
-const char* g_bug_report_notice_text = "BUG REPORT SAVED";
-
-// `note` (the unpacker guard's findings) goes to auto_capture.txt beside the
-// frames; F12 passes none.
-void frame_rewind_write(const std::string& note = {}) {
-    if (g_history.write(note, "auto_capture.txt").empty()) return;
-    // Three seconds of confirmation for the player (the launcher packs the
-    // folder when the game closes).
-    g_bug_report_notice_until = runtime_current_frame() + 180u;
-    g_bug_report_notice_text = "BUG REPORT SAVED";
-}
-
-// "BUG REPORT SAVED" at the top right, in a small built-in font (the game's
-// menu font is only read once a menu has opened), white on a dark box.
-void paint_bug_report_notice(std::uint8_t* rgb, std::uint32_t width,
-                             std::uint32_t height) {
-    struct Glyph { char c; const char* rows[7]; };
-    static const Glyph kGlyphs[] = {
-        {'A', {".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"}},
-        {'B', {"####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."}},
-        {'C', {".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."}},
-        {'D', {"####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."}},
-        {'E', {"#####", "#....", "#....", "####.", "#....", "#....", "#####"}},
-        {'G', {".###.", "#...#", "#....", "#.###", "#...#", "#...#", ".####"}},
-        {'H', {"#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"}},
-        {'I', {"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"}},
-        {'L', {"#....", "#....", "#....", "#....", "#....", "#....", "#####"}},
-        {'O', {".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."}},
-        {'P', {"####.", "#...#", "#...#", "####.", "#....", "#....", "#...."}},
-        {'R', {"####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"}},
-        {'S', {".####", "#....", "#....", ".###.", "....#", "....#", "####."}},
-        {'T', {"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."}},
-        {'U', {"#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."}},
-        {'V', {"#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."}},
-    };
-    const char* const kText = g_bug_report_notice_text;
-    const int text_w = static_cast<int>(std::strlen(kText)) * 6 - 1;
-    const int box_w = text_w + 8, box_h = 7 + 8;
-    const int x0 = static_cast<int>(width) - box_w - 4, y0 = 4;
-    auto put = [&](int x, int y, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
-        if (x < 0 || y < 0 || x >= static_cast<int>(width) ||
-            y >= static_cast<int>(height)) return;
-        std::uint8_t* p = rgb + (static_cast<std::size_t>(y) * width + x) * 3u;
-        p[0] = r; p[1] = g; p[2] = b;
-    };
-    for (int y = 0; y < box_h; ++y)
-        for (int x = 0; x < box_w; ++x) {
-            const bool edge = x == 0 || y == 0 || x == box_w - 1 || y == box_h - 1;
-            if (edge) put(x0 + x, y0 + y, 200, 160, 255);
-            else put(x0 + x, y0 + y, 24, 14, 40);
-        }
-    int cx = x0 + 4;
-    for (const char* s = kText; *s; ++s, cx += 6) {
-        for (const Glyph& g : kGlyphs) {
-            if (g.c != *s) continue;
-            for (int ry = 0; ry < 7; ++ry)
-                for (int rx = 0; rx < 5; ++rx)
-                    if (g.rows[ry][rx] == '#') put(cx + rx, y0 + 4 + ry, 255, 255, 255);
-        }
-    }
-}
-
-// Called with the final picture of every presented frame.
-void frame_rewind_record(const std::uint8_t* rgb, std::uint32_t width,
-                         std::uint32_t height, gbarecomp::HistoryFrame frame) {
-    g_history.record(rgb, width, height, std::move(frame));
-    std::string unpacker_note;
-    if (gsr::unpacker_guard_capture_due(&unpacker_note)) {
-        frame_rewind_write(unpacker_note);
-        g_bug_report_notice_text = "CRASH CAUGHT REPORT SAVED";
-    }
-
-    static bool was_down = false;
-    const bool down = dump_key_down();
-    const bool pressed = down && !was_down;
-    was_down = down;
-    if (pressed) frame_rewind_write();
-}
-
 
 // Paint the whole frame flat magenta -- a colour Golden Sun's palettes do
 // not produce, so it can never be mistaken for a drawing fault. Returns true
@@ -10149,7 +9805,7 @@ bool gpu_field_paint_refused(std::uint8_t* rgb, std::uint32_t width,
 extern std::atomic<int> g_field_psynergy_fast;
 
 bool draw_gpu_field_capture(gsr::FieldSceneRenderer& renderer,
-                            const GpuFieldCapture& capture,
+                            const gsr::GpuFieldCapture& capture,
                             std::uint32_t width, std::uint32_t height) {
     if (!renderer.set_output_size(static_cast<int>(width),
                                   static_cast<int>(height))) return false;
@@ -10234,7 +9890,7 @@ bool draw_gpu_field_capture(gsr::FieldSceneRenderer& renderer,
                         effect_layer);
                 renderer.analyse_effect_canvas(capture.vram.data(),
                                                capture.vram.size(),
-                                               sc.layers[effect_layer]);
+                                               sc, effect_layer);
             }
             // Report once, on the first frame that actually captured
             // something -- reporting on the first battle frame printed all
@@ -10431,7 +10087,7 @@ bool gpu_field_present_override(std::uint8_t* rgb, std::uint32_t width,
     frame = std::move(delivered->frame);
     frame.gpu_drawn = true;
 #ifndef GSR_ANDROID_ENGINE  // GSR_ANDROID: no F12 history to save, so skip the per-frame scene dump
-    frame.scene = gpu_field_dump_bytes(delivered->capture);
+    frame.scene = gsr::gpu_field_dump_bytes(delivered->capture);
     frame.scene_frame = delivered->capture.scene.frame;
 #endif
 
@@ -10461,6 +10117,7 @@ struct SettingsPageFont {
     std::uint8_t widths[256 - 0x20] = {};
 };
 SettingsPageFont g_settings_font;
+gsr::settings_help::Line g_settings_help;
 std::atomic<bool> g_settings_font_loaded{false};
 std::atomic<int> g_settings_page{1};
 // Set when A/B/Start closes the screen; cleared by the next screen setup.
@@ -10488,11 +10145,6 @@ std::atomic<bool> g_battle_speed_on{false};
 // Better Field Psy: Off / On (src/battle_speed.h), saved with the other
 // options.
 std::atomic<int> g_field_psynergy_fast{0};
-// Cheat menu multipliers (src/cheat_menu.h), step indices, saved with the
-// other options.
-std::atomic<int> g_cheat_exp_step{gsr::cheat_menu::kNormalStep};
-std::atomic<int> g_cheat_coin_step{gsr::cheat_menu::kNormalStep};
-std::atomic<int> g_cheat_drop_step{gsr::cheat_menu::kNormalStep};
 std::string g_options_path = gsr::settings_page::kOptionsFile;
 
 void load_game_options(const char* argv0) {
@@ -10510,16 +10162,6 @@ void load_game_options(const char* argv0) {
         gbarecomp::game_option_get(gsr::battle_speed::kOptionsKey, 0) != 0);
     g_field_psynergy_fast.store(
         gbarecomp::game_option_get(kFieldPsynergyKey, 0) != 0 ? 1 : 0);
-    using namespace gsr::cheat_menu;
-    const std::pair<const char*, std::atomic<int>*> steps[] = {
-        {kExpKey, &g_cheat_exp_step},
-        {kCoinKey, &g_cheat_coin_step},
-        {kDropKey, &g_cheat_drop_step}};
-    for (const auto& [key, step] : steps) {
-        const int value = gbarecomp::game_option_get(key, -1);
-        const int count = step == &g_cheat_drop_step ? kDropStepCount : kStepCount;
-        if (value >= 0 && value < count) step->store(value);
-    }
 }
 
 void save_game_options() {
@@ -10529,9 +10171,6 @@ void save_game_options() {
                                g_battle_speed_on.load() ? 1 : 0);
     gbarecomp::game_option_set(gsr::settings_page::kFieldPsynergyKey,
                                g_field_psynergy_fast.load() ? 1 : 0);
-    gbarecomp::game_option_set(gsr::cheat_menu::kExpKey, g_cheat_exp_step.load());
-    gbarecomp::game_option_set(gsr::cheat_menu::kCoinKey, g_cheat_coin_step.load());
-    gbarecomp::game_option_set(gsr::cheat_menu::kDropKey, g_cheat_drop_step.load());
 }
 // The game's cursor row (r9), which is also the page-two row.
 std::atomic<int> g_settings_row{0};
@@ -10540,24 +10179,21 @@ std::atomic<int> g_settings_row{0};
 void load_menu_font() {
     using namespace gsr::settings_page;
     if (g_settings_font_loaded.load(std::memory_order_acquire)) return;
+    g_settings_help.load(bus_read_u8, gs::rom(0x08032224u));
     const std::uint32_t font = bus_read_u32(kAssetTable + kFontAsset * 4u);
     for (std::uint32_t i = 0; i < sizeof g_settings_font.tiles; ++i)
         g_settings_font.tiles[i] = bus_read_u8(font + i);
     for (std::uint32_t i = 0; i < sizeof g_settings_font.widths; ++i)
         g_settings_font.widths[i] = bus_read_u8(kGlyphWidthTable + i);
+    gbarecomp::config_ui_set_menu_art(g_settings_font.tiles, g_settings_font.widths,
+        gsr::cheat_menu::kDefaultWindowPalette);
     g_settings_font_loaded.store(true, std::memory_order_release);
-}
-
-void adventure_font_frame() {
-    if ((!gsr::adventure::enabled.load() && !gsr::adventure::collectibles_enabled.load()) ||
-        gsr::adventure_ui::font_ready.load(std::memory_order_acquire)) return;
-    load_menu_font();
-    gsr::adventure_ui::publish_font(g_settings_font.tiles, g_settings_font.widths);
 }
 
 void note_settings_loop_frame() {
     using namespace gsr::settings_page;
     load_menu_font();
+    g_settings_help.colours(bus_read_u16(0x050001E2u), bus_read_u16(0x050001E6u));
     auto rect = [](std::uint32_t window) {
         return (bus_read_u16(window + kWindowX) & 0xFFu) |
                ((bus_read_u16(window + kWindowY) & 0xFFu) << 8) |
@@ -10572,6 +10208,19 @@ void note_settings_loop_frame() {
     g_settings_no_slowdown.store(runtime_get_no_slowdown());
     g_settings_row.store(static_cast<int>(g_cpu.R[9]));
     g_settings_open.store(true);
+}
+
+// Sound effects our menus play with the game's own call (settings_page.h
+// kSoundPc), queued where the menu acts and played at the next entry to the
+// frame routine, where a guest call is safe. Emulation thread.
+std::vector<std::uint32_t> g_menu_sounds;
+
+void play_menu_sounds() {
+    for (const std::uint32_t sound : g_menu_sounds) {
+        std::uint32_t ignored = 0;
+        gbarecomp::guest_call(gsr::settings_page::kSoundPc | 1u, sound, 0, 0, 0, &ignored);
+    }
+    g_menu_sounds.clear();
 }
 
 // The repeat-keys load: decides the page and what the game is allowed to see.
@@ -10625,6 +10274,9 @@ int settings_page_repeat_keys(std::uint32_t* out_value) {
         g_field_psynergy_fast.store(g_field_psynergy_fast.load() ? 0 : 1);
         save_game_options();
     }
+    // A value changed: the sound page one plays for Left/Right.
+    if ((keys & (kKeyLeft | kKeyRight)) && !(keys & kKeyDown))
+        g_menu_sounds.push_back(gsr::custom_battle::kMoveSound);
     *out_value = kZeroWord;
     return 1;
 }
@@ -10643,7 +10295,8 @@ void paint_settings_window(std::uint8_t* rgb, std::uint32_t width,
 
 // Paints the page marker below the settings window, in the game's own font.
 // Page two's rows are written into the game's own window instead
-// (native_page_frame_end); the help window is only sampled for colours.
+// (native_page_frame_end); its shaded description is clipped and scrolled
+// at presentation time below.
 void paint_settings_page(std::uint8_t* rgb, std::uint32_t width,
                          std::uint32_t height) {
     const bool page_two = g_settings_page.load() == 2;
@@ -10653,6 +10306,14 @@ void paint_settings_page(std::uint8_t* rgb, std::uint32_t width,
                           page_two, letter, shadow);
     paint_settings_window(rgb, width, height, g_settings_help_window.load(),
                           false, page_two, letter, shadow);
+    const int row = g_settings_row.load();
+    if (page_two && row >= 0 && row < gsr::settings_page::kRowCount) {
+        g_settings_help.paint(rgb, width, height,
+            static_cast<int>(g_golden_sun_wide_extra_left),
+            static_cast<int>(g_golden_sun_wide_extra_top),
+            gsr::menu_text(gsr::settings_page::kRowHelp[row]), row,
+            g_settings_help_window.load());
+    } else g_settings_help.reset();
 }
 
 // One window: the settings window or the help window above it. Only the
@@ -10865,6 +10526,13 @@ void native_page_end(bool restore) {
     page = NativeSettingsPage{};
 }
 
+// A page-two word in the player's language (gbarecomp::ui_text), in the
+// font's codes: the table is UTF-8, the font Latin-1 (á = 0xE1; FACTS.md
+// "Spanish ROM: menu text").
+std::string settings_text(const char* english) {
+    return gsr::menu_text(english);
+}
+
 // Page two's text as 4bpp pixels over the window interior, in the menu
 // font: letter 1, shadow 3, background 4, like the game's own text tiles.
 std::vector<std::uint8_t> native_page_canvas(int width, int height) {
@@ -10907,22 +10575,23 @@ std::vector<std::uint8_t> native_page_canvas(int width, int height) {
     const int field_psynergy = g_field_psynergy_fast.load() ? 1 : 0;
     const int speed = walk_speed_index(g_settings_speed.load());
 #ifdef GSR_ANDROID_ENGINE
-    const char* const words[kRowCount] = {kWalkingSpeedWords[speed], kEncounterWords[encounters],
-                                          kFieldPsynergyWords[field_psynergy]};
+    const std::string words[kRowCount] = {settings_text(kWalkingSpeedWords[speed]),
+                                          settings_text(kEncounterWords[encounters]),
+                                          settings_text(kFieldPsynergyWords[field_psynergy])};
     (void)view_mode; (void)no_slowdown;
 #else
-    const char* const words[kRowCount] = {kWalkingSpeedWords[speed],
-                                          kEncounterWords[encounters],
-                                          kScreenWords[view_mode],
-                                          kOnOffWords[no_slowdown],
-                                          kFieldPsynergyWords[field_psynergy]};
+    const std::string words[kRowCount] = {settings_text(kWalkingSpeedWords[speed]),
+                                          settings_text(kEncounterWords[encounters]),
+                                          settings_text(kScreenWords[view_mode]),
+                                          settings_text(kOnOffWords[no_slowdown]),
+                                          settings_text(kFieldPsynergyWords[field_psynergy])};
 #endif
     const int cursor_row = g_settings_row.load();
     for (int row = 0; row < kRowCount; ++row) {
         const int y = kRowLineY[row];
-        draw(kRowLabels[row], kLabelX, y);
+        draw(settings_text(kRowLabels[row]), kLabelX, y);
         const std::string value = row == cursor_row
-            ? std::string("< ") + words[row] + " >" : std::string(words[row]);
+            ? "< " + words[row] + " >" : words[row];
         draw(value, kValueCentreX - text_width(value) / 2, y);
     }
     return canvas;
@@ -11476,15 +11145,7 @@ void paint_battle_speed_indicator(std::uint8_t* rgb, std::uint32_t width,
 }
 
 // ---- Cheat menu (src/cheat_menu.h) ------------------------------------------
-// Emulation thread only: the hotkey, the key filter, the pause poll and the
-// paused overlay all run from the run loop's input pump and present. The
-// steps are atomics because the reward hooks read them from generated code
-// on the same thread; nothing else touches them. The steps themselves are
-// defined with the other saved options (g_cheat_exp_step and friends).
-bool g_cheat_menu_open = false;
-bool g_cheat_menu_requested_pause = false;
-int g_cheat_menu_row = 0;
-std::uint16_t g_cheat_menu_held = 0;
+// The original window remains for the new-game prompts; cheats live in F1.
 bool g_cheat_menu_swallow = false;
 std::uint16_t g_cheat_window_palette[16] = {};
 bool g_cheat_window_palette_known = false;
@@ -11540,6 +11201,49 @@ void hard_mode_prompt_close(bool yes) {
     g_hard_prompt_row = seamless_mode_on() ? 1 : 0;
 }
 
+// The questions are asked with the game still running, so its music and
+// the questions' sounds play, held in the game's own frame routine: on entry
+// Func_77f40 (Thumb) returns at once into the frame routine 0x080030F8(1)
+// (Thumb), whose return comes back to its own entry once a frame until both
+// are answered; then it returns into Func_77f40 with its saved arguments and
+// return address, and the new game goes on. The engine runs, draws and reads
+// keys frame by frame as usual (a guest_call loop would not: the launcher
+// turns present-in-place off, so nothing is shown or read inside a call).
+// The keys go to the questions only (cheat_menu_keyinput_filter).
+enum class QuestionHold { Off, Waiting, Resuming };
+QuestionHold g_question_hold = QuestionHold::Off;
+std::uint32_t g_question_args[4] = {};
+std::uint32_t g_question_return = 0;
+
+void question_hold_new_game_entry() {
+    const std::uint32_t frame_routine = GS_ROM(0x080030F8u);
+    if (g_question_hold == QuestionHold::Resuming) {
+        for (int i = 0; i < 4; ++i) g_cpu.R[i] = g_question_args[i];
+        g_cpu.R[14] = g_question_return;
+        g_question_hold = QuestionHold::Off;
+        return;
+    }
+    hard_mode_prompt_open();
+    for (int i = 0; i < 4; ++i) g_question_args[i] = g_cpu.R[i];
+    g_question_return = g_cpu.R[14];
+    g_question_hold = QuestionHold::Waiting;
+    g_cpu.R[14] = frame_routine | 1u;
+    gbarecomp::guest_return_now(gsr::hard_mode::kNewGameEntryPc, 1u);
+}
+
+// Entry to the frame routine while held: wait one frame (r0 = 1), then come
+// back here, or once answered go back into Func_77f40.
+void question_hold_frame_entry() {
+    if (g_question_hold != QuestionHold::Waiting) return;
+    g_cpu.R[0] = 1u;
+    if (g_hard_prompt_open) {
+        g_cpu.R[14] = GS_ROM(0x080030F8u) | 1u;
+        return;
+    }
+    g_cpu.R[14] = gsr::hard_mode::kNewGameEntryPc | 1u;
+    g_question_hold = QuestionHold::Resuming;
+}
+
 // Seamless mode at the end of the game (seamless_mode.h). Emulation thread.
 enum class SeamlessPhase { Off, Choosing, Leaving };
 SeamlessPhase g_seamless_phase = SeamlessPhase::Off;
@@ -11584,56 +11288,21 @@ void seamless_frame_end() {
 const gbarecomp::GameOptionSwitch kGameSwitches[] = {
     {gsr::seamless::kSwitchLabel, gsr::seamless::kSwitchCaption,
      gbarecomp::seamless::kOptionKey},
+    {gsr::enemy_hp_bar::kSwitchLabel, gsr::enemy_hp_bar::kSwitchCaption,
+     gsr::enemy_hp_bar::kOptionKey},
+    {gsr::djinn_tracker::kSwitchLabel, gsr::djinn_tracker::kSwitchCaption,
+     gsr::djinn_tracker::kOptionKey},
+    {gsr::djinn_tracker::kShowAllLabel, gsr::djinn_tracker::kShowAllCaption,
+     gsr::djinn_tracker::kShowAllKey},
+    {gsr::treasure_tracker::kSwitchLabel, gsr::treasure_tracker::kSwitchCaption,
+     gsr::treasure_tracker::kOptionKey},
     {gbarecomp::walk_through_walls::kSwitchLabel,
      gbarecomp::walk_through_walls::kSwitchCaption,
      gbarecomp::walk_through_walls::kOptionKey}};
-constexpr int kPlayerGameSwitchCount = 1;
-
-void cheat_menu_toggle() {
-    if (g_hard_prompt_open) return;
-    load_menu_font();
-    g_cheat_menu_open = !g_cheat_menu_open;
-    // Keys already held stay with whoever had them: nothing reaches the
-    // menu until it is pressed again, and nothing reaches the game until
-    // every key is let go after closing.
-    g_cheat_menu_held = 0x3FFu;
-    if (g_cheat_menu_open) {
-        g_cheat_menu_row = 0;
-    } else {
-        g_cheat_menu_swallow = true;
-        save_game_options();
-    }
-}
-
-bool cheat_menu_pause_poll(bool* out_paused) {
-    const bool want = g_cheat_menu_open || g_hard_prompt_open;
-    if (want == g_cheat_menu_requested_pause) return false;
-    g_cheat_menu_requested_pause = want;
-    *out_paused = want;
-    return true;
-}
-
-std::atomic<int>* cheat_menu_step(int row) {
-    using namespace gsr::cheat_menu;
-    if (row == kExpRow) return &g_cheat_exp_step;
-    if (row == kCoinRow) return &g_cheat_coin_step;
-    if (row == kDropRow) return &g_cheat_drop_step;
-    return nullptr;
-}
-
-void cheat_menu_change(int row, int direction) {
-    using namespace gsr::cheat_menu;
-    if (row == kInfiniteHpRow) {
-        runtime_set_infinite_hp(runtime_get_infinite_hp() ? 0 : 1);
-    } else if (row == kInfinitePpRow) {
-        runtime_set_infinite_pp(runtime_get_infinite_pp() ? 0 : 1);
-    } else if (std::atomic<int>* step = cheat_menu_step(row)) {
-        const int last = (row == kDropRow ? kDropStepCount : kStepCount) - 1;
-        step->store(std::clamp(step->load() + direction, 0, last));
-    }
-}
+constexpr int kPlayerGameSwitchCount = 5;
 
 std::uint16_t cheat_menu_keyinput_filter(std::uint16_t keyinput) {
+    keyinput = gsr::retreat_travel::keyinput(keyinput);
     using gsr::settings_page::kKeyA;
     using gsr::settings_page::kKeyB;
     using gsr::settings_page::kKeyDown;
@@ -11646,40 +11315,36 @@ std::uint16_t cheat_menu_keyinput_filter(std::uint16_t keyinput) {
         const std::uint16_t down =
             static_cast<std::uint16_t>(pressed & ~g_hard_prompt_held);
         g_hard_prompt_held = pressed;
-        if (down & (kKeyUp | kKeyDown | kKeyLeft | kKeyRight))
+        // The settings screen's sounds (settings_page.h kSoundPc).
+        if (down & (kKeyUp | kKeyDown | kKeyLeft | kKeyRight)) {
             g_hard_prompt_row = 1 - g_hard_prompt_row;
-        if (down & kKeyA) hard_mode_prompt_close(g_hard_prompt_row == 1);
-        else if (down & kKeyB) hard_mode_prompt_close(false);
+            g_menu_sounds.push_back(gsr::custom_battle::kMoveSound);
+        }
+        if (down & kKeyA) {
+            g_menu_sounds.push_back(gsr::custom_battle::kSelectSound);
+            hard_mode_prompt_close(g_hard_prompt_row == 1);
+        } else if (down & kKeyB) {
+            g_menu_sounds.push_back(gsr::custom_battle::kBackSound);
+            hard_mode_prompt_close(false);
+        }
         return 0x3FFu;
     }
-    if (!g_cheat_menu_open) {
-        if (g_cheat_menu_swallow) {
-            if (pressed != 0) return 0x3FFu;
-            g_cheat_menu_swallow = false;
-        }
-        return keyinput;
+    if (g_cheat_menu_swallow) {
+        if (pressed != 0) return 0x3FFu;
+        g_cheat_menu_swallow = false;
     }
-    const std::uint16_t down =
-        static_cast<std::uint16_t>(pressed & ~g_cheat_menu_held);
-    g_cheat_menu_held = pressed;
-    constexpr int rows = gsr::cheat_menu::kRowCount;
-    if (down & kKeyUp) g_cheat_menu_row = (g_cheat_menu_row + rows - 1) % rows;
-    if (down & kKeyDown) g_cheat_menu_row = (g_cheat_menu_row + 1) % rows;
-    if (down & kKeyLeft) cheat_menu_change(g_cheat_menu_row, -1);
-    if (down & kKeyRight) cheat_menu_change(g_cheat_menu_row, +1);
-    if ((down & kKeyA) && g_cheat_menu_row <= gsr::cheat_menu::kInfinitePpRow)
-        cheat_menu_change(g_cheat_menu_row, +1);
-    if (down & (kKeyB | kKeyStart)) cheat_menu_toggle();
-    return 0x3FFu;
+    return keyinput;
 }
 
-// The window, drawn over the paused picture in the game's own pieces and
-// colours (src/cheat_menu.h).
-// `content(draw_text, text_width, inner_x, inner_y)` paints inside it; shared
-// by the cheat menu and the Hard Mode prompt.
+// The window, drawn over the picture in the game's own pieces and colours
+// (src/cheat_menu.h), `tiles` x `rows` native tiles from tile (tile_x, tile_y).
+// `content(draw_text, text_width, inner_x, inner_y, pixel)` paints inside it;
+// `pixel(x, y)` is the RGB of a native pixel, null off the picture. Shared by
+// the Hard Mode prompt and the Custom Battle opponent panel.
 template <typename Content>
 void menu_window_paint(std::uint8_t* rgb, std::uint32_t width,
-                       std::uint32_t height, Content content) {
+                       std::uint32_t height, int tile_x, int tile_y, int tiles,
+                       int rows, Content content) {
     using namespace gsr::cheat_menu;
     if (!g_settings_font_loaded.load(std::memory_order_acquire)) return;
     // The live window palette when bank 15 holds it, else the last one
@@ -11715,22 +11380,22 @@ void menu_window_paint(std::uint8_t* rgb, std::uint32_t width,
         const std::uint8_t b = g_settings_font.tiles[code * 32u + gy * 4 + gx / 2];
         return static_cast<std::uint8_t>((b >> (4 * (gx & 1))) & 0xFu);
     };
-    for (int ty = 0; ty < kWindowRows; ++ty) {
-        for (int tx = 0; tx < kWindowTiles; ++tx) {
-            const bool top = ty == 0, bottom = ty == kWindowRows - 1;
-            const bool left = tx == 0, right = tx == kWindowTiles - 1;
+    for (int ty = 0; ty < rows; ++ty) {
+        for (int tx = 0; tx < tiles; ++tx) {
+            const bool top = ty == 0, bottom = ty == rows - 1;
+            const bool left = tx == 0, right = tx == tiles - 1;
             const unsigned char code =
                 top ? (left ? kTopLeft : right ? kTopRight : kTop)
                 : bottom ? (left ? kBottomLeft : right ? kBottomRight : kBottom)
                 : left ? kLeft : right ? kRight : kFill;
             for (int gy = 0; gy < 8; ++gy)
                 for (int gx = 0; gx < 8; ++gx)
-                    put((kWindowTileX + tx) * 8 + gx,
-                        (kWindowTileY + ty) * 8 + gy, pixel_of(code, gx, gy));
+                    put((tile_x + tx) * 8 + gx,
+                        (tile_y + ty) * 8 + gy, pixel_of(code, gx, gy));
         }
     }
-    const int inner_x = (kWindowTileX + 1) * 8;
-    const int inner_y = (kWindowTileY + 1) * 8;
+    const int inner_x = (tile_x + 1) * 8;
+    const int inner_y = (tile_y + 1) * 8;
     auto text_width = [&](const std::string& text) {
         int total = 0;
         for (const char c : text) {
@@ -11756,7 +11421,14 @@ void menu_window_paint(std::uint8_t* rgb, std::uint32_t width,
             x += g_settings_font.widths[code - 0x20u];
         }
     };
-    content(draw_text, text_width, inner_x, inner_y);
+    auto pixel = [&](int x, int y) -> std::uint8_t* {
+        x += ox;
+        y += oy;
+        if (x < 0 || y < 0 || x >= static_cast<int>(width) ||
+            y >= static_cast<int>(height)) return nullptr;
+        return rgb + (static_cast<std::size_t>(y) * width + x) * 3u;
+    };
+    content(draw_text, text_width, inner_x, inner_y, pixel);
 }
 
 void cheat_menu_paint(std::uint8_t* rgb, std::uint32_t width,
@@ -11764,19 +11436,20 @@ void cheat_menu_paint(std::uint8_t* rgb, std::uint32_t width,
     using namespace gsr::cheat_menu;
     if (g_hard_prompt_open) {
         namespace hm = gsr::hard_mode;
-        menu_window_paint(rgb, width, height,
+        menu_window_paint(rgb, width, height, kWindowTileX, kWindowTileY,
+                          kWindowTiles, kWindowRows,
                           [](auto& draw_text, auto& text_width, int inner_x,
-                             int inner_y) {
-            const char* title = g_hard_prompt_seamless
-                ? gsr::seamless::kPromptTitle : hm::kPromptTitle;
+                             int inner_y, auto&) {
+            const std::string title = settings_text(g_hard_prompt_seamless
+                ? gsr::seamless::kPromptTitle : hm::kPromptTitle);
             const char* const* lines = g_hard_prompt_seamless
                 ? gsr::seamless::kPromptLines : hm::kPromptLines;
             draw_text(title, inner_x + (kWindowTiles - 2) * 4 -
                           text_width(title) / 2, inner_y);
             for (int i = 0; i < 3; ++i)
-                draw_text(lines[i], inner_x + kLabelX, inner_y + 14 + i * 12);
+                draw_text(settings_text(lines[i]), inner_x + kLabelX, inner_y + 14 + i * 12);
             for (int row = 0; row < 2; ++row) {
-                std::string label = hm::kPromptRows[row];
+                std::string label = settings_text(hm::kPromptRows[row]);
                 if (row == g_hard_prompt_row) label = "< " + label + " >";
                 draw_text(label,
                           inner_x + kValueCentreX - text_width(label) / 2,
@@ -11785,25 +11458,20 @@ void cheat_menu_paint(std::uint8_t* rgb, std::uint32_t width,
         });
         return;
     }
-    if (!g_cheat_menu_open) return;
-    menu_window_paint(rgb, width, height,
-                      [](auto& draw_text, auto& text_width, int inner_x,
-                         int inner_y) {
-        draw_text(kTitle, inner_x + (kWindowTiles - 2) * 4 -
-                              text_width(kTitle) / 2, inner_y);
-        for (int row = 0; row < kRowCount; ++row) {
-            const int y = inner_y + kRowLineY0 + row * kRowPitch;
-            draw_text(kRowLabels[row], inner_x + kLabelX, y);
-            std::string value;
-            if (row == kInfiniteHpRow)
-                value = runtime_get_infinite_hp() ? "On" : "Off";
-            else if (row == kInfinitePpRow)
-                value = runtime_get_infinite_pp() ? "On" : "Off";
-            else
-                value = kStepWords[cheat_menu_step(row)->load()];
-            if (row == g_cheat_menu_row) value = "< " + value + " >";
-            draw_text(value, inner_x + kValueCentreX - text_width(value) / 2, y);
-        }
+
+}
+
+// Custom Battle's opponent panel (custom_battle.h): the number of opponents,
+// or the monster list with the highlighted one's battle picture.
+void paint_custom_battle_panel(std::uint8_t* rgb, std::uint32_t width,
+                               std::uint32_t height,
+                               const gsr::custom_battle::PanelView& view) {
+    namespace cb = gsr::custom_battle;
+    menu_window_paint(rgb, width, height, cb::kPanelTileX, view.tile_y,
+                      cb::kPanelTiles, cb::kPanelRows,
+                      [&](auto& draw_text, auto& text_width, int inner_x,
+                          int inner_y, auto& pixel) {
+        cb::paint_panel(view, draw_text, text_width, inner_x, inner_y, pixel);
     });
 }
 
@@ -11821,8 +11489,9 @@ int cheat_reward_write(std::uint32_t pc, std::uint32_t addr,
 #ifdef GSR_ANDROID_ENGINE  // GSR_ANDROID_CHEATS: the side menu's Cheats page owns the multipliers
     const int step = gsr_host_cheat_step(pc == kExpStorePc ? 0 : 1);
 #else
-    const int step = (pc == kExpStorePc ? g_cheat_exp_step
-                                        : g_cheat_coin_step).load();
+    int step = gbarecomp::game_option_get(
+        pc == kExpStorePc ? kExpKey : kCoinKey, kNormalStep);
+    if (step < 0 || step >= kStepCount) step = kNormalStep;
 #endif
     if (!out_value || width != 4u || step == kNormalStep) return 0;
     const std::uint32_t before = bus_read_u32(addr);
@@ -11842,7 +11511,8 @@ int cheat_drop_branch(std::uint32_t pc, std::uint32_t original,
 #ifdef GSR_ANDROID_ENGINE  // GSR_ANDROID_CHEATS
     const int step = gsr_host_cheat_step(2);
 #else
-    const int step = g_cheat_drop_step.load();
+    int step = gbarecomp::game_option_get(kDropKey, kNormalStep);
+    if (step < 0 || step >= kDropStepCount) step = kNormalStep;
 #endif
     if (step == kNormalStep) return 0;
     const std::int64_t threshold =
@@ -11851,6 +11521,102 @@ int cheat_drop_branch(std::uint32_t pc, std::uint32_t original,
     const std::int64_t roll = static_cast<std::int32_t>(g_cpu.R[0]);
     *out_decision = threshold <= roll ? 1u : 0u;
     return *out_decision != original ? 1 : 0;
+}
+
+// F12 0058 frame 91: the casting canvas is already visible at (0, 0), but
+// its first position (-102, -13) is still queued for VBlank. The arena's
+// line table has stopped, so spell_setup_torn_frame no longer catches this
+// incomplete setup picture. Keep the preceding picture until placement lands.
+bool battle_spell_position_pending(const gba::GbaPpu& ppu) {
+    using namespace gsr::battle_speed;
+    if (!ppu.latched_native_line_io_valid()[0]) return false;
+    const auto* row = ppu.latched_native_line_io();
+    const auto half = [&](unsigned offset) {
+        return unsigned(row[offset]) | (unsigned(row[offset + 1u]) << 8);
+    };
+    if ((half(0) & 7u) != 1u || (half(0) & 0x0400u) == 0u ||
+        (half(0x0Cu) & 0x2000u) != 0u) return false;
+    const auto* refs = ppu.latched_native_affine_line_refs();
+    if (refs[0] != 0 || refs[1] != 0) return false;
+    const auto count = std::min(bus_read_u16(kVBlankQueueCount),
+                                static_cast<std::uint16_t>(kVBlankQueueMax));
+    for (unsigned i = 0; i < count; ++i) {
+        const auto entry = kVBlankQueueEntries + i * kVBlankQueueEntrySize;
+        // The game's queued DMA copy of the two BG2 reference words.
+        if (bus_read_u32(entry + 4u) != 0x04000028u ||
+            bus_read_u32(entry + 8u) != 0x84000002u) continue;
+        const auto source = bus_read_u32(entry);
+        if (!((source >= 0x02000000u && source <= 0x0203FFF8u) ||
+              (source >= 0x03000000u && source <= 0x03007FF8u))) continue;
+        if (bus_read_u32(source) != 0u || bus_read_u32(source + 4u) != 0u)
+            return true;
+    }
+    return false;
+}
+
+// ---- Enemy HP bar (shared_game/enemy_hp_bar.h) ------------------------------
+// The drawn name's width in the menu font, from its u16 text.
+int enemy_hp_bar_name_width(std::uint32_t name) {
+    load_menu_font();
+    int text_width = 0;
+    for (std::uint32_t at = name;; at += 2u) {
+        const std::uint16_t code = bus_read_u16(at);
+        if (code == 0) break;
+        if (code >= 0x20u && code <= 0xFFu)
+            text_width += g_settings_font.widths[code - 0x20u];
+    }
+    return text_width;
+}
+
+// The bar just above the enemy's name, in the game's window colours, with
+// the HP in the menu font (letters and shadow only).
+void paint_enemy_hp_bar(std::uint8_t* rgb, std::uint32_t width,
+                        std::uint32_t height, const gsr::enemy_hp_bar::Bar& bar) {
+    const std::uint16_t* palette = g_cheat_window_palette_known
+        ? g_cheat_window_palette : gsr::cheat_menu::kDefaultWindowPalette;
+    const int ox = static_cast<int>(g_golden_sun_wide_extra_left);
+    const int oy = static_cast<int>(g_golden_sun_wide_extra_top);
+    const auto put = [&](int x, int y, int r, int g, int b) {
+        x += ox;
+        y += oy;
+        if (x < 0 || y < 0 || x >= static_cast<int>(width) ||
+            y >= static_cast<int>(height)) return;
+        std::uint8_t* p = rgb + (static_cast<std::size_t>(y) * width + x) * 3u;
+        p[0] = static_cast<std::uint8_t>(r);
+        p[1] = static_cast<std::uint8_t>(g);
+        p[2] = static_cast<std::uint8_t>(b);
+    };
+    const auto draw_number = [&](const std::string& number, int bar_left, int top) {
+        if (!g_settings_font_loaded.load(std::memory_order_acquire)) return;
+        int text_width = 0;
+        for (const char ch : number)
+            text_width += g_settings_font.widths[static_cast<unsigned char>(ch) - 0x20u];
+        const auto colour = [&](std::uint8_t index, int* r, int* g, int* b) {
+            const std::uint16_t c = palette[index];
+            *r = ((c & 31) << 3) | ((c & 31) >> 2);
+            *g = (((c >> 5) & 31) << 3) | (((c >> 5) & 31) >> 2);
+            *b = (((c >> 10) & 31) << 3) | (((c >> 10) & 31) >> 2);
+        };
+        int pen = bar_left + (gsr::enemy_hp_bar::kBarWidth - text_width) / 2;
+        for (const char ch : number) {
+            const auto code = static_cast<unsigned char>(ch);
+            for (int gy = 0; gy < 8; ++gy) {
+                for (int gx = 0; gx < 8; ++gx) {
+                    const std::uint8_t b = g_settings_font.tiles[code * 32u + gy * 4 + gx / 2];
+                    const std::uint8_t v = (b >> (4 * (gx & 1))) & 0xFu;
+                    if (v != gsr::settings_page::kGlyphLetter &&
+                        v != gsr::settings_page::kGlyphShadow) continue;
+                    int r, g, bl;
+                    colour(v, &r, &g, &bl);
+                    put(pen + gx, top + gy, r, g, bl);
+                }
+            }
+            pen += g_settings_font.widths[code - 0x20u];
+        }
+    };
+    // Always red, whatever window colour the player picked.
+    gsr::enemy_hp_bar::paint(bar, palette, gsr::cheat_menu::kDefaultWindowPalette[13],
+                             put, draw_number);
 }
 
 // The settings page marker and the battle ">>" go over whatever picture was
@@ -11865,13 +11631,14 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
         runtime_current_frame() >= g_history.back(0).guest_frame &&
         g_history.back(0).width == width && g_history.back(0).height == height &&
         bus_read_u32(gsr::battle_speed::kBattleHeapSlot) != 0u &&
-        gbarecomp::spell_setup_torn_frame(*ppu);
+        (gbarecomp::spell_setup_torn_frame(*ppu) ||
+         battle_spell_position_pending(*ppu));
     // Settings paint reads live window/font state. A torn spell picture and
     // settings therefore form explicit synchronous boundaries.
     bool drawn = gpu_field_present_override(rgb, width, height, frame, settings || held);
 #ifndef GSR_ANDROID_ENGINE  // GSR_ANDROID: see above
     if (frame.scene.empty() && g_gpu_field_capture.valid) {
-        frame.scene = gpu_field_dump_bytes(g_gpu_field_capture);
+        frame.scene = gsr::gpu_field_dump_bytes(g_gpu_field_capture);
         frame.scene_frame = g_gpu_field_capture.scene.frame;
     }
 #endif
@@ -12001,13 +11768,39 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
     }
 #endif
     if (settings) paint_settings_page(rgb, width, height);
+    else g_settings_help.reset();
     const bool battle = frame.battle_2x;
     if (battle) paint_battle_speed_indicator(rgb, width, height);
-    frame_rewind_record(rgb, width, height, std::move(frame));
-    // After the recording, so the notice is not in the saved frames.
-    const bool notice = runtime_current_frame() <= g_bug_report_notice_until;
-    if (notice) paint_bug_report_notice(rgb, width, height);
-    return drawn || settings || battle || notice;
+    g_history.record(rgb, width, height, std::move(frame));
+    std::string unpacker_note;
+    const auto report_notice = g_history.update_report(
+        gsr::unpacker_guard_capture_due(&unpacker_note) ? &unpacker_note : nullptr,
+        "auto_capture.txt");
+    // After the recording, so the HP bar, the Custom Battle panel and the
+    // notice are not in the saved frames.
+    gsr::enemy_hp_bar::Bar enemy_bar;
+    const bool hp_bar = !settings && gsr::enemy_hp_bar::bar(&enemy_bar);
+    if (hp_bar) paint_enemy_hp_bar(rgb, width, height, enemy_bar);
+    const auto panel = gsr::custom_battle::panel_view();
+    if (panel.open) paint_custom_battle_panel(rgb, width, height, panel);
+    const bool travel = gsr::retreat_travel::showing;
+    if (travel) {
+        namespace rt = gsr::retreat_travel;
+        menu_window_paint(rgb, width, height, rt::kTileX, rt::kTileY, rt::kTiles, rt::kRows,
+            [](auto& draw, auto& text_width, int x, int y, auto&) {
+                gsr::retreat_travel::paint(draw, text_width, x, y);
+            });
+    }
+    using ReportNotice = gbarecomp::FrameHistory::ReportNotice;
+    const bool notice = report_notice != ReportNotice::None;
+    if (notice) {
+        gsr::paint_bug_report_notice(rgb, width, height, report_notice == ReportNotice::Automatic
+            ? "CRASH CAUGHT REPORT SAVED" : "BUG REPORT SAVED");
+    }
+    // The new-game questions, over the running game.
+    const bool question = g_hard_prompt_open;
+    if (question) cheat_menu_paint(rgb, width, height);
+    return drawn || settings || battle || hp_bar || panel.open || travel || notice || question;
 }
 
 // Instant text is the settings screen's fourth Message-speed choice.
@@ -12036,34 +11829,20 @@ std::uint32_t g_blank_icons_pending = 0;
 std::uint32_t g_blank_icon_first = 0;
 std::uint32_t g_blank_icon_last = 0;
 
-// Page two's help line, printed by the game: while page two shows, the help
-// text it decodes (0xC15 + row, 0x0801E74C) is replaced character by
-// character with the row's help, then the 0 that ends it.
-int g_help_pos = -1;
-std::uint32_t g_help_id = 0;
+// The text ID of the line the menu text decoder is drawing, taken where it
+// starts the line (text_speed_cheat.h kLineStartPc). Emulation thread.
+std::uint32_t g_decoder_text_id = 0;
 
 bool settings_help_character(std::uint32_t original, std::uint32_t* out_value) {
     using namespace gsr::settings_page;
-    const std::uint32_t text_id = bus_read_u32(
-        g_cpu.R[13] + gsr::text_speed_cheat::kDecoderTextIdStackOffset);
+    const std::uint32_t text_id = g_decoder_text_id;
     const bool help = g_settings_page.load() == 2 &&
                       text_id >= kHelpTextBase &&
                       text_id < kHelpTextBase + static_cast<std::uint32_t>(kRowCount);
-    if (!help) {
-        g_help_pos = -1;
-        return false;
-    }
-    if (g_help_pos < 0 || text_id != g_help_id) {
-        g_help_pos = 0;
-        g_help_id = text_id;
-    }
-    const std::string text = kRowHelp[text_id - kHelpTextBase];
-    std::uint32_t wanted = 0u;
-    if (static_cast<std::size_t>(g_help_pos) < text.size())
-        wanted = static_cast<unsigned char>(text[g_help_pos++]);
-    else
-        g_help_pos = -1;
-    *out_value = original + (wanted - g_cpu.R[0]);
+    if (!help) return false;
+    // The clipped description painter owns this line. Keep the game's
+    // sprite-text pass empty so no unscrolled letters escape the frame.
+    *out_value = original - g_cpu.R[0];
     return true;
 }
 
@@ -12076,12 +11855,11 @@ std::uint32_t g_hard_text_id = 0;
 bool hard_mode_text_character(std::uint32_t original,
                               std::uint32_t* out_value) {
     using namespace gsr::hard_mode;
-    const std::uint32_t text_id = bus_read_u32(
-        g_cpu.R[13] + gsr::text_speed_cheat::kDecoderTextIdStackOffset);
-    const char* text = text_id == kLabelTextId ? kLabelText
-                     : text_id == kHelpTextId  ? kHelpText
-                                               : nullptr;
-    if (!g_settings_screen_text || !text) {
+    const std::uint32_t text_id = g_decoder_text_id;
+    const char* english = text_id == kLabelTextId ? kLabelText
+                        : text_id == kHelpTextId  ? kHelpText
+                                                  : nullptr;
+    if (!g_settings_screen_text || !english) {
         g_hard_text_pos = -1;
         return false;
     }
@@ -12089,8 +11867,9 @@ bool hard_mode_text_character(std::uint32_t original,
         g_hard_text_pos = 0;
         g_hard_text_id = text_id;
     }
+    const std::string text = settings_text(english);
     std::uint32_t wanted = 0u;
-    if (text[g_hard_text_pos] != '\0')
+    if (static_cast<std::size_t>(g_hard_text_pos) < text.size())
         wanted = static_cast<unsigned char>(text[g_hard_text_pos++]);
     else
         g_hard_text_pos = -1;
@@ -12114,18 +11893,22 @@ bool hard_mode_text_character(std::uint32_t original,
 // Returns -1 for any other site.
 int golden_sun_worldmap_range_box(std::uint32_t pc, std::uint32_t original,
                                   std::uint32_t* out_value) {
+    static const std::uint32_t kXLow = gs::ovl("rom_77a7c8", 0x020085D2u);
+    static const std::uint32_t kZLow = gs::ovl("rom_77a7c8", 0x020085E4u);
+    static const std::uint32_t kXHigh = gs::ovl("rom_77a7c8", 0x020085D6u);
+    static const std::uint32_t kZHigh = gs::ovl("rom_77a7c8", 0x020085E6u);
     std::uint32_t grown = 0;
-    if (pc == 0x020085D2u && original == 0xFF600000u) {
+    if (pc == kXLow && original == 0xFF600000u) {
         grown = static_cast<std::uint32_t>(
             -(160 + 2 * static_cast<std::int32_t>(
                             g_golden_sun_wide_extra_left)) * 65536);
-    } else if (pc == 0x020085E4u && original == 0xFED40000u) {
+    } else if (pc == kZLow && original == 0xFED40000u) {
         grown = static_cast<std::uint32_t>(
             -(300 + 2 * static_cast<std::int32_t>(
                             g_golden_sun_wide_extra_top)) * 65536);
-    } else if (pc == 0x020085D6u && original == 160u) {
+    } else if (pc == kXHigh && original == 160u) {
         grown = 160u + 2u * g_golden_sun_wide_extra_right;
-    } else if (pc == 0x020085E6u && original == 200u) {
+    } else if (pc == kZHigh && original == 200u) {
         grown = 200u + g_golden_sun_wide_extra_bottom;
     } else {
         return -1;
@@ -12143,13 +11926,13 @@ int golden_sun_worldmap_range_box(std::uint32_t pc, std::uint32_t original,
 // margins inside too, so each side is pulled in by up to the margin. A room
 // narrower than the view gets half the spare width per side, which centres
 // it. The camera must not scroll past the map's edge.
-constexpr std::uint32_t kCameraStructPointer = 0x03001E70u;
-constexpr std::uint32_t kCameraMinXBranchPc = 0x08010262u;  // bge, r7 vs r3
-constexpr std::uint32_t kCameraMinXAddPc = 0x08010264u;     // adds r7,r3,#0
-constexpr std::uint32_t kCameraMaxXLiteralPc = 0x0801026Cu; // -240 << 16
-constexpr std::uint32_t kCameraMinYBranchPc = 0x0801027Eu;  // bge, r0 vs r3
-constexpr std::uint32_t kCameraMinYAddPc = 0x08010280u;     // adds r0,r3,#0
-constexpr std::uint32_t kCameraMaxYLiteralPc = 0x08010288u; // -160 << 16
+const std::uint32_t kCameraStructPointer = gs::ram(0x03001E70u);
+const std::uint32_t kCameraMinXBranchPc = gs::rom(0x08010262u);  // bge, r7 vs r3
+const std::uint32_t kCameraMinXAddPc = gs::rom(0x08010264u);     // adds r7,r3,#0
+const std::uint32_t kCameraMaxXLiteralPc = gs::rom(0x0801026Cu); // -240 << 16
+const std::uint32_t kCameraMinYBranchPc = gs::rom(0x0801027Eu);  // bge, r0 vs r3
+const std::uint32_t kCameraMinYAddPc = gs::rom(0x08010280u);     // adds r0,r3,#0
+const std::uint32_t kCameraMaxYLiteralPc = gs::rom(0x08010288u); // -160 << 16
 // Func_10000 (0x08010000), the per-frame follow, clamps the same way with
 // its own literals (0x0801021C/0x08010220): lo = [S+0xEC] + [S+4] in r0,
 // hi = [S+0xF4] - [S+4] - 240 in r1, x in r7, then `cmp r7,r1; ble`;
@@ -12158,12 +11941,12 @@ constexpr std::uint32_t kCameraMaxYLiteralPc = 0x08010288u; // -160 << 16
 // forced through to `adds r7,r1,#imm` / `adds r6,r3,#imm` with imm chosen
 // to land on clamp(value, lo + inset, hi). rewinds 0098/0099: camera at the
 // stock limit, the Func_10230 hooks alone never ran while walking.
-constexpr std::uint32_t kFollowMaxXLiteralPc = 0x0801004Au;  // -240 << 16
-constexpr std::uint32_t kFollowMaxYLiteralPc = 0x08010062u;  // -160 << 16
-constexpr std::uint32_t kFollowClampXBranchPc = 0x0801007Cu; // ble, r7 vs r1
-constexpr std::uint32_t kFollowClampXAddPc = 0x0801007Eu;    // adds r7,r1,#0
-constexpr std::uint32_t kFollowClampYBranchPc = 0x08010088u; // ble, r6 vs r3
-constexpr std::uint32_t kFollowClampYAddPc = 0x0801008Au;    // adds r6,r3,#0
+const std::uint32_t kFollowMaxXLiteralPc = gs::rom(0x0801004Au);  // -240 << 16
+const std::uint32_t kFollowMaxYLiteralPc = gs::rom(0x08010062u);  // -160 << 16
+const std::uint32_t kFollowClampXBranchPc = gs::rom(0x0801007Cu); // ble, r7 vs r1
+const std::uint32_t kFollowClampXAddPc = gs::rom(0x0801007Eu);    // adds r7,r1,#0
+const std::uint32_t kFollowClampYBranchPc = gs::rom(0x08010088u); // ble, r6 vs r3
+const std::uint32_t kFollowClampYAddPc = gs::rom(0x0801008Au);    // adds r6,r3,#0
 
 struct CameraInset {
     std::int32_t left = 0, right = 0, top = 0, bottom = 0;  // pixels
@@ -12188,7 +11971,7 @@ static std::uint16_t g_camera_room_map = 0;
 // (0x08010182 / 0x080101B2; tiles rounded with bias 0x7FFFF, literal
 // 0x08010228). The field state is [0x03001E70] in EWRAM (0x02030CCC); the
 // world map's is 0x03002000. Repaint after a jump: tile_ring_redraw.h.
-gsr::TileRingRedraw g_tile_ring_redraw({kCameraStructPointer, 0x104u, 0x30u, 0x0800FEC8u,
+gsr::TileRingRedraw g_tile_ring_redraw({kCameraStructPointer, 0x104u, 0x30u, gs::rom(0x0800FEC8u),
                                         kCameraMapNumberAddr, true});
 
 CameraInset golden_sun_camera_inset_for(bool expanded, std::uint32_t extra_left, std::uint32_t extra_right,
@@ -12289,17 +12072,17 @@ struct SkippedSparkLoop {
     std::uint32_t call;                  // bl 0x080072F4
     std::array<std::uint32_t, 3> tests;  // bounds branches to call + 4
 };
-constexpr SkippedSparkLoop kSkippedSparkLoops[] = {
-    {0x080CE476u, {0x080CE438u, 0x080CE43Cu, 0u}},
-    {0x080D4576u, {0x080D4532u, 0x080D4536u, 0x080D453Au}},  // Spark Plasma
-    {0x080D4BC4u, {0x080D4B7Eu, 0x080D4B82u, 0u}},           // Supernova
-    {0x080D51D8u, {0x080D5190u, 0x080D5196u, 0x080D519Au}},
-    {0x080DB5C6u, {0x080DB592u, 0x080DB596u, 0u}},
-    {0x080DE25Eu, {0x080DE22Au, 0x080DE22Eu, 0u}},
-    {0x080E6C98u, {0x080E6C5Eu, 0x080E6C62u, 0u}},
-    {0x080E98D2u, {0x080E988Eu, 0x080E9892u, 0u}},
-    {0x080E9FEAu, {0x080E9FB6u, 0x080E9FBAu, 0u}},
-    {0x080ECDDAu, {0x080ECD98u, 0x080ECD9Eu, 0x080ECDA2u}},
+const SkippedSparkLoop kSkippedSparkLoops[] = {
+    {gs::rom(0x080CE476u), {gs::rom(0x080CE438u), gs::rom(0x080CE43Cu), 0u}},
+    {gs::rom(0x080D4576u), {gs::rom(0x080D4532u), gs::rom(0x080D4536u), gs::rom(0x080D453Au)}},  // Spark Plasma
+    {gs::rom(0x080D4BC4u), {gs::rom(0x080D4B7Eu), gs::rom(0x080D4B82u), 0u}},           // Supernova
+    {gs::rom(0x080D51D8u), {gs::rom(0x080D5190u), gs::rom(0x080D5196u), gs::rom(0x080D519Au)}},
+    {gs::rom(0x080DB5C6u), {gs::rom(0x080DB592u), gs::rom(0x080DB596u), 0u}},
+    {gs::rom(0x080DE25Eu), {gs::rom(0x080DE22Au), gs::rom(0x080DE22Eu), 0u}},
+    {gs::rom(0x080E6C98u), {gs::rom(0x080E6C5Eu), gs::rom(0x080E6C62u), 0u}},
+    {gs::rom(0x080E98D2u), {gs::rom(0x080E988Eu), gs::rom(0x080E9892u), 0u}},
+    {gs::rom(0x080E9FEAu), {gs::rom(0x080E9FB6u), gs::rom(0x080E9FBAu), 0u}},
+    {gs::rom(0x080ECDDAu), {gs::rom(0x080ECD98u), gs::rom(0x080ECD9Eu), gs::rom(0x080ECDA2u)}},
 };
 
 // Reads come from EWRAM, IWRAM and ROM only; writes land in a small
@@ -12474,9 +12257,9 @@ int golden_sun_camera_clamp_value(std::uint32_t pc, std::uint32_t original,
 // target: past R's ellipse (always empty) and below the wrap. Rows that do
 // not wrap are untouched.
 struct IrisRowSite { std::uint32_t pc; unsigned shift; std::int64_t target; };
-constexpr IrisRowSite kIrisRowSites[] = {
-    {0x0808FAF4u, 15u, 19500}, {0x0808FBCAu, 15u, 19500},
-    {0x0808FCC6u, 15u, 19500}, {0x0808FDCAu, 14u, 39000},
+const IrisRowSite kIrisRowSites[] = {
+    {gs::rom(0x0808FAF4u), 15u, 19500}, {gs::rom(0x0808FBCAu), 15u, 19500},
+    {gs::rom(0x0808FCC6u), 15u, 19500}, {gs::rom(0x0808FDCAu), 14u, 39000},
 };
 
 int golden_sun_iris_row_value(std::uint32_t pc, std::uint32_t original,
@@ -12539,13 +12322,17 @@ int golden_sun_thumb_alu_immediate(std::uint32_t pc, std::uint32_t original,
         *out_value = kBlankIconSource - g_cpu.R[5];
         return 1;
     }
+    if (pc == kDecodedCharPc &&
+        gsr::custom_battle::text_character(
+            g_decoder_text_id, original,
+            out_value))
+        return 1;
     if (pc == kDecodedCharPc && settings_help_character(original, out_value))
         return 1;
     if (pc == kDecodedCharPc && hard_mode_text_character(original, out_value))
         return 1;
     if (pc != kDecodedCharPc || !g_speed_caption_armed) return 0;
-    const std::uint32_t text_id =
-        bus_read_u32(g_cpu.R[13] + kDecoderTextIdStackOffset);
+    const std::uint32_t text_id = g_decoder_text_id;
     if (text_id != g_speed_caption_id) {
         g_speed_caption_armed = false;
         return 0;
@@ -12577,7 +12364,7 @@ int golden_sun_thumb_alu_immediate(std::uint32_t pc, std::uint32_t original,
 // other PC.
 int golden_sun_rain_spawn_offset(std::uint32_t pc, std::uint32_t original,
                                  std::uint32_t* out_value) {
-    if (pc != 0x08094958u) return -1;
+    if (pc != GS_ROM(0x08094958u)) return -1;
     if (!golden_sun_expanded_obj_view_active()) return 0;
     const std::uint32_t camera = bus_read_u32(kCameraStructPointer);
     const std::int32_t camera_y = static_cast<std::int32_t>(bus_read_u32(camera + 0xE8u));
@@ -12696,7 +12483,7 @@ int golden_sun_thumb_literal(std::uint32_t pc, std::uint32_t original,
         const std::uint32_t value = g_cpu.R[2];
         g_speed_caption_armed = original == hm::kCaptionBase && value <= 1u;
         if (g_speed_caption_armed) {
-            g_speed_caption = hm::kWords[value];
+            g_speed_caption = settings_text(hm::kWords[value]);
             if (g_cpu.R[9] == gsr::settings_page::kAutoSleepRow) {
                 g_speed_caption = gsr::text_speed_cheat::kArrowLeft +
                                   g_speed_caption +
@@ -12713,7 +12500,7 @@ int golden_sun_thumb_literal(std::uint32_t pc, std::uint32_t original,
         g_speed_caption_armed = original == kCaptionBase && value <= 3u;
         if (g_speed_caption_armed) {
             const bool selected = g_cpu.R[9] == kMessageSpeedRow;
-            g_speed_caption = kSpeedWords[value];
+            g_speed_caption = settings_text(kSpeedWords[value]);
             if (selected)
                 g_speed_caption = kArrowLeft + g_speed_caption + kArrowRight;
             g_speed_caption_id = kCaptionBase + value;
@@ -12748,19 +12535,26 @@ int golden_sun_worldmap_sprite_branch(std::uint32_t pc, std::uint32_t original,
     enum Kind { kX, kYLower, kYUpper };
     std::int32_t operand = 0;
     Kind kind = kX;
-    switch (pc) {
-        case 0x080948BCu: operand = static_cast<std::int32_t>(g_cpu.R[3]); break;
-        case 0x08094C56u: operand = static_cast<std::int32_t>(g_cpu.R[1]); break;
-        case 0x08094F26u: operand = static_cast<std::int32_t>(g_cpu.R[3]); break;
-        case 0x080948C4u: operand = static_cast<std::int32_t>(g_cpu.R[0]);
-                          kind = kYLower; break;
-        case 0x08094C5Eu: operand = static_cast<std::int32_t>(g_cpu.R[0]);
-                          kind = kYLower; break;
-        case 0x08094F2Eu: operand = static_cast<std::int32_t>(g_cpu.R[8]);
-                          kind = kYLower; break;
-        case 0x080948C8u: operand = static_cast<std::int32_t>(g_cpu.R[0]);
-                          kind = kYUpper; break;
-        default: return -1;
+    if (pc == GS_ROM(0x080948BCu)) {
+        operand = static_cast<std::int32_t>(g_cpu.R[3]);
+    } else if (pc == GS_ROM(0x08094C56u)) {
+        operand = static_cast<std::int32_t>(g_cpu.R[1]);
+    } else if (pc == GS_ROM(0x08094F26u)) {
+        operand = static_cast<std::int32_t>(g_cpu.R[3]);
+    } else if (pc == GS_ROM(0x080948C4u)) {
+        operand = static_cast<std::int32_t>(g_cpu.R[0]);
+        kind = kYLower;
+    } else if (pc == GS_ROM(0x08094C5Eu)) {
+        operand = static_cast<std::int32_t>(g_cpu.R[0]);
+        kind = kYLower;
+    } else if (pc == GS_ROM(0x08094F2Eu)) {
+        operand = static_cast<std::int32_t>(g_cpu.R[8]);
+        kind = kYLower;
+    } else if (pc == GS_ROM(0x080948C8u)) {
+        operand = static_cast<std::int32_t>(g_cpu.R[0]);
+        kind = kYUpper;
+    } else {
+        return -1;
     }
     if (original != 1u || !golden_sun_expanded_obj_view_active()) return 0;
     const std::int32_t slack = gsr::widescreen::kExpandedObjSlackX;
@@ -12809,7 +12603,7 @@ int golden_sun_worldmap_sprite_branch(std::uint32_t pc, std::uint32_t original,
 // the rows' last visible line; the lower band is kept for the same 8-bit Y
 // reason as the world-map sprites above. The site is checked against the
 // instruction bytes, so another room's code at this address is untouched.
-constexpr std::uint32_t kSolSanctumCloudBranchPc = 0x02008EECu;
+const std::uint32_t kSolSanctumCloudBranchPc = gs::ovl("rom_78c76c", 0x02008EECu);
 int golden_sun_overlay_sprite_branch(std::uint32_t pc, std::uint32_t original,
                                      std::uint32_t* out_decision) {
     if (pc != kSolSanctumCloudBranchPc) return -1;
@@ -12875,6 +12669,7 @@ int golden_sun_conditional_branch(std::uint32_t pc, std::uint32_t original,
 int golden_sun_write_override(std::uint32_t pc, std::uint32_t addr,
                               std::uint32_t requested, std::uint32_t width,
                               std::uint32_t* out_value) {
+    gsr::intro_music::choices.header_write(pc, addr, requested, width);
     gsr::intro_music::music.header_write(pc, addr, requested, width);
     if (const int r = cheat_reward_write(pc, addr, requested, width, out_value);
         r >= 0) {
@@ -12921,34 +12716,83 @@ struct TransientCodeImage {
     std::uint32_t volatile_prefix = 0;
 };
 
-const auto kTransientCodeImages = std::to_array<TransientCodeImage>({
-    {0x03002000u, 0x0300207Cu, 0x08002D5Cu,
+// An overlay's text extent and identity in the loaded revision. The USA
+// registry is compiled in; a localized registry has the same ids in the same
+// order (tools/build_localized_overlays.py) with its own extent and SHA-1.
+struct OverlayRow {
+    const char* id;
+    std::uint32_t start;
+    std::uint32_t end;
+    const char* sha1;
+};
+
+constexpr OverlayRow kSpainOverlayRows[] = {
+#define GSR_OVERLAY(id, start, end, sha1) {#id, start, end, sha1},
+#include "../config/es/overlay-registry.inc"
+#undef GSR_OVERLAY
+};
+
+constexpr OverlayRow kItalyOverlayRows[] = {
+#define GSR_OVERLAY(id, start, end, sha1) {#id, start, end, sha1},
+#include "../config/it/overlay-registry.inc"
+#undef GSR_OVERLAY
+};
+
+constexpr OverlayRow kFranceOverlayRows[] = {
+#define GSR_OVERLAY(id, start, end, sha1) {#id, start, end, sha1},
+#include "../config/fr/overlay-registry.inc"
+#undef GSR_OVERLAY
+};
+
+constexpr OverlayRow kGermanyOverlayRows[] = {
+#define GSR_OVERLAY(id, start, end, sha1) {#id, start, end, sha1},
+#include "../config/de/overlay-registry.inc"
+#undef GSR_OVERLAY
+};
+
+OverlayRow overlay_row(const OverlayRow& usa) {
+    if (gs::rom_version() == gs::RomVersion::Usa) return usa;
+    const auto& rows = gs::rom_version() == gs::RomVersion::Germany
+        ? kGermanyOverlayRows : gs::rom_version() == gs::RomVersion::France
+        ? kFranceOverlayRows : gs::rom_version() == gs::RomVersion::Italy
+        ? kItalyOverlayRows : kSpainOverlayRows;
+    for (const OverlayRow& row : rows)
+        if (std::strcmp(row.id, usa.id) == 0) return row;
+    std::fprintf(stderr, "[rom_version] overlay %s has no %s registry row\n",
+                 usa.id, gs::rom_version_name());
+    std::abort();
+}
+
+// Not const: set_revision_identities() replaces the ROM-backed identities
+// for a localized ROM before the game starts.
+auto kTransientCodeImages = std::to_array<TransientCodeImage>({
+    {0x03002000u, 0x0300207Cu, gs::rom(0x08002D5Cu),
      0,
      "a0e2414cc0e339ec6f61fbd387eb6325a8eabe84", "Func_2d5c",
      gsr_func2d5c_kDispatchTable, &gsr_func2d5c_kDispatchTableLen},
-    {0x03002000u, 0x0300209Cu, 0x0800A37Cu,
+    {0x03002000u, 0x0300209Cu, gs::rom(0x0800A37Cu),
      0,
      "77bec232b22b723f3c5f5e0fedd28680fde50048", "Func_a37c",
      gsr_funca37c_kDispatchTable, &gsr_funca37c_kDispatchTableLen},
-    {0x03002000u, 0x03002140u, 0x08015430u,
+    {0x03002000u, 0x03002140u, gs::rom(0x08015430u),
      0,
      "d49cef2181ce6f9fee635daa0ba3b072d336109a", "Func_15430",
      nullptr, nullptr},
-    {0x03002140u, 0x030021A0u, 0x08015570u,
+    {0x03002140u, 0x030021A0u, gs::rom(0x08015570u),
      0,
      "20f9190c9b7aac90e091beff5f7e54a46ba833eb", "Func_15570",
      nullptr, nullptr},
     // Func_2544 is a position-independent image. The row at 0x0300347c below
     // is the identity gate for the PCs the main corpus dispatches statically.
-    {0x03002400u, 0x030024E0u, 0x08001DC8u,
+    {0x03002400u, 0x030024E0u, gs::rom(0x08001DC8u),
      0,
      "c2e9ace3620fc779387d91100c97071ebf21640b", "Func_1dc8",
      nullptr, nullptr},
-    {0x0300387Cu, 0x0300395Cu, 0x08001DC8u,
+    {0x0300387Cu, 0x0300395Cu, gs::rom(0x08001DC8u),
      0,
      "c2e9ace3620fc779387d91100c97071ebf21640b", "Func_1dc8_at_0300387c",
      nullptr, nullptr},
-    {0x0300347Cu, 0x03003740u, 0x08002544u,
+    {0x0300347Cu, 0x03003740u, gs::rom(0x08002544u),
      0,
      "b8967c9f00835f22da02cce31595588bb05496e6", "Func_2544_at_0300347c",
      nullptr, nullptr},
@@ -12962,7 +12806,7 @@ const auto kTransientCodeImages = std::to_array<TransientCodeImage>({
     // FACTS.md "CRASH-03 recurred with no savestate loads". The volatile prefix
     // is the whole entry-only format check (ldrb/cmp/movne/bxne, +0x0..+0xF);
     // no branch in the routine targets below +0x10.
-    {0x03006000u, 0x030064ECu, 0x08002808u,
+    {0x03006000u, 0x030064ECu, gs::rom(0x08002808u),
      0,
      "5fd23904086a4129fe3472dbf6658bb5e73f0363",
      "Func_2808_at_03006000",
@@ -12977,7 +12821,7 @@ const auto kTransientCodeImages = std::to_array<TransientCodeImage>({
     // flash driver's working area is a contiguous run of separately installed
     // routines. DMA3 watch: src=0x0800a418, 31 words; entry observed through
     // _call_via_r4 in ARM. goldensun.elf sizes Func_a418 at exactly 0x7c.
-    {0x03003400u, 0x0300347Cu, 0x0800A418u,
+    {0x03003400u, 0x0300347Cu, gs::rom(0x0800A418u),
      0,
      "d3261b6f7b57ba4e7da8e44cf555d009c7cc27d1",
      "Func_a418_at_03003400",
@@ -12987,7 +12831,7 @@ const auto kTransientCodeImages = std::to_array<TransientCodeImage>({
     // #4699483 reprograms DMA3 SAD=0x08015e10 CNT=0x1f words over the
     // Func_15afc image below, and #4699487 enters it in ARM through
     // _call_via_r4. goldensun.elf sizes Func_15e10 at exactly 0x7c bytes.
-    {0x03003A84u, 0x03003B00u, 0x08015E10u,
+    {0x03003A84u, 0x03003B00u, gs::rom(0x08015E10u),
      0,
      "50cf8d2eaf6ba74b7ae74a97458d04214a00af57",
      "Func_15e10_at_03003a84",
@@ -12998,7 +12842,7 @@ const auto kTransientCodeImages = std::to_array<TransientCodeImage>({
     // 0x03001e50 records the same 0x03003a84..0x03003cfc bounds, and #4697295
     // enters it in ARM through _call_via_r3. goldensun.elf sizes Func_15afc at
     // exactly 0x278 bytes.
-    {0x03003A84u, 0x03003CFCu, 0x08015AFCu,
+    {0x03003A84u, 0x03003CFCu, gs::rom(0x08015AFCu),
      0,
      "f6ab01b56876f8d1b72a4bf5239bd5cbac620cb0",
      "Func_15afc_at_03003a84",
@@ -13111,70 +12955,75 @@ const auto kTransientCodeImages = std::to_array<TransientCodeImage>({
     // run's source address; each run is registered once per mode, as ELF
     // mapping symbols put both ARM and THUMB code in the image (e.g.
     // gf_tfunc_03000658, gf_afunc_03000088).
-    {0x03000000u, 0x030000E0u, 0x08000770u, 0,
+    {0x03000000u, 0x030000E0u, gs::rom(0x08000770u), 0,
      "425e210c9524665da2b651e29039187452e03538",
      "main_copy_03000000_code_0000_arm", nullptr, nullptr},
-    {0x03000000u, 0x030000E0u, 0x08000770u, 1,
+    {0x03000000u, 0x030000E0u, gs::rom(0x08000770u), 1,
      "425e210c9524665da2b651e29039187452e03538",
      "main_copy_03000000_code_0000_thumb", nullptr, nullptr},
-    {0x03000118u, 0x03000350u, 0x08000888u, 0,
+    {0x03000118u, 0x03000350u, gs::rom(0x08000888u), 0,
      "24be4da49c5bf5e6687b01c5d42e6e50b80a9b2c",
      "main_copy_03000000_code_0118_arm", nullptr, nullptr},
-    {0x03000118u, 0x03000350u, 0x08000888u, 1,
+    {0x03000118u, 0x03000350u, gs::rom(0x08000888u), 1,
      "24be4da49c5bf5e6687b01c5d42e6e50b80a9b2c",
      "main_copy_03000000_code_0118_thumb", nullptr, nullptr},
-    {0x03000380u, 0x03000716u, 0x08000AF0u, 0,
+    {0x03000380u, 0x03000716u, gs::rom(0x08000AF0u), 0,
      "6615b4c278a236c602a2573e1d734ce8a93f5b3a",
      "main_copy_03000000_code_0380_arm", nullptr, nullptr},
-    {0x03000380u, 0x03000716u, 0x08000AF0u, 1,
+    {0x03000380u, 0x03000716u, gs::rom(0x08000AF0u), 1,
      "6615b4c278a236c602a2573e1d734ce8a93f5b3a",
      "main_copy_03000000_code_0380_thumb", nullptr, nullptr},
-    {0x0300071Cu, 0x03000828u, 0x08000E8Cu, 0,
+    {0x0300071Cu, 0x03000828u, gs::rom(0x08000E8Cu), 0,
      "d8b24aa5a6292596e6fcb757cc036ae655016845",
      "main_copy_03000000_code_071c_arm", nullptr, nullptr},
-    {0x0300071Cu, 0x03000828u, 0x08000E8Cu, 1,
+    {0x0300071Cu, 0x03000828u, gs::rom(0x08000E8Cu), 1,
      "d8b24aa5a6292596e6fcb757cc036ae655016845",
      "main_copy_03000000_code_071c_thumb", nullptr, nullptr},
-    {0x030008D4u, 0x0300099Cu, 0x08001044u, 0,
+    {0x030008D4u, 0x0300099Cu, gs::rom(0x08001044u), 0,
      "15701bb90db4b5c68dec0b4b3976a37639a06f70",
      "main_copy_03000000_code_08d4_arm", nullptr, nullptr},
-    {0x030008D4u, 0x0300099Cu, 0x08001044u, 1,
+    {0x030008D4u, 0x0300099Cu, gs::rom(0x08001044u), 1,
      "15701bb90db4b5c68dec0b4b3976a37639a06f70",
      "main_copy_03000000_code_08d4_thumb", nullptr, nullptr},
-    {0x030009A8u, 0x03000A58u, 0x08001118u, 0,
+    {0x030009A8u, 0x03000A58u, gs::rom(0x08001118u), 0,
      "66c770afa4d055cdd754ab31bbb59bce0c19787b",
      "main_copy_03000000_code_09a8_arm", nullptr, nullptr},
-    {0x030009A8u, 0x03000A58u, 0x08001118u, 1,
+    {0x030009A8u, 0x03000A58u, gs::rom(0x08001118u), 1,
      "66c770afa4d055cdd754ab31bbb59bce0c19787b",
      "main_copy_03000000_code_09a8_thumb", nullptr, nullptr},
-    {0x03000A98u, 0x03000B5Cu, 0x08001208u, 0,
+    {0x03000A98u, 0x03000B5Cu, gs::rom(0x08001208u), 0,
      "b21981f20a35278add1fb2390af860ea504be0d4",
      "main_copy_03000000_code_0a98_arm", nullptr, nullptr},
-    {0x03000A98u, 0x03000B5Cu, 0x08001208u, 1,
+    {0x03000A98u, 0x03000B5Cu, gs::rom(0x08001208u), 1,
      "b21981f20a35278add1fb2390af860ea504be0d4",
      "main_copy_03000000_code_0a98_thumb", nullptr, nullptr},
-    {0x03000B60u, 0x03000BD8u, 0x080012D0u, 0,
+    {0x03000B60u, 0x03000BD8u, gs::rom(0x080012D0u), 0,
      "20471e8954c7f61e1f6d346db745689164320992",
      "main_copy_03000000_code_0b60_arm", nullptr, nullptr},
-    {0x03000B60u, 0x03000BD8u, 0x080012D0u, 1,
+    {0x03000B60u, 0x03000BD8u, gs::rom(0x080012D0u), 1,
      "20471e8954c7f61e1f6d346db745689164320992",
      "main_copy_03000000_code_0b60_thumb", nullptr, nullptr},
-    {0x03000C70u, 0x03000DF8u, 0x080013E0u, 0,
+    {0x03000C70u, 0x03000DF8u, gs::rom(0x080013E0u), 0,
      "a0530c6e4231247de55a8ae4c0737634fbc0480f",
      "main_copy_03000000_code_0c70_arm", nullptr, nullptr},
-    {0x03000C70u, 0x03000DF8u, 0x080013E0u, 1,
+    {0x03000C70u, 0x03000DF8u, gs::rom(0x080013E0u), 1,
      "a0530c6e4231247de55a8ae4c0737634fbc0480f",
      "main_copy_03000000_code_0c70_thumb", nullptr, nullptr},
-    {0x03001388u, 0x03001400u, 0x08001AF8u, 0,
+    {0x03001388u, 0x03001400u, gs::rom(0x08001AF8u), 0,
      "b4b275f498b4a12b1ba721a3832e6ffc6b065fd6",
      "main_copy_03000000_code_1388_arm", nullptr, nullptr},
-    {0x03001388u, 0x03001400u, 0x08001AF8u, 1,
+    {0x03001388u, 0x03001400u, gs::rom(0x08001AF8u), 1,
      "b4b275f498b4a12b1ba721a3832e6ffc6b065fd6",
      "main_copy_03000000_code_1388_thumb", nullptr, nullptr},
-#define GSR_OVERLAY(id, start, end, sha1)                                  \
-    {start, end, 0u, 1, sha1, "overlay_" #id,                             \
-     gsr_overlay_##id##_kDispatchTable,                                    \
-     &gsr_overlay_##id##_kDispatchTableLen},
+#define GSR_OVERLAY(id, usa_start, usa_end, usa_sha1)                      \
+    [] {                                                                   \
+        const OverlayRow row =                                             \
+            overlay_row({#id, usa_start, usa_end, usa_sha1});              \
+        return TransientCodeImage{row.start, row.end, 0u, 1, row.sha1,     \
+                                  "overlay_" #id,                          \
+                                  gsr_overlay_##id##_kDispatchTable,       \
+                                  &gsr_overlay_##id##_kDispatchTableLen};  \
+    }(),
 #include "overlay-registry.inc"
 #undef GSR_OVERLAY
 });
@@ -13244,12 +13093,13 @@ constexpr gsr::ByteRange kFuncB5138ExcludedRanges[] = {
     {0x000000E0u, 0x00000120u},
 };
 
-const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
+// Not const, for the same reason as kTransientCodeImages.
+std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // Func_2cf4, DMA-copied onto the stack by Func_3a7c. Observed at
     // 0x03007ba4, 0x03007dbc, 0x03007dc4 and 0x03007dc8; the extent, mode and
     // identity are the same at every one of them, and goldensun.elf bounds the
     // ROM source at 0x08002cf4 size 0x68 with ARM mapping symbols.
-    {0x08002CF4u,
+    {gs::rom(0x08002CF4u),
      0,
      "87b609455a1aa6cd4f6251a73f8e15f4b6bc9c05",
      "Func_2cf4_relocatable",
@@ -13267,7 +13117,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // ADDITIVE, not a replacement: the two fixed rows above for 0x03002400 and
     // 0x0300387c stay, because they are the identity gate for PCs the main
     // corpus dispatches statically. This image covers every other base.
-    {0x08001DC8u,
+    {gs::rom(0x08001DC8u),
      0,
      "c2e9ace3620fc779387d91100c97071ebf21640b",
      "Func_1dc8_relocatable",
@@ -13280,7 +13130,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // 0x03007bc0. Four bytes is a weak identity on its own, which is why the
     // mode is checked too and why the resolver only ever tries bases derived
     // from the failing PC itself.
-    {0x08006ABCu,
+    {gs::rom(0x08006ABCu),
      1,
      "bbfc4c623d6e47e6d00a0c13ca4a9bbf58f6af36",
      "Func_6abc_relocatable",
@@ -13300,7 +13150,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // tools/build_transient_image_config.py. All five SHA-1s matched what the
     // live-verified rows already used, which is an independent check that the
     // ELF extents and the observed DMA extents agree.
-    {0x08009BB8u,
+    {gs::rom(0x08009BB8u),
      0,
      "38da8bb7176c71ef1e86ce50346af1d72174529c",
      "Func_9bb8_relocatable",
@@ -13308,7 +13158,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
      &gsr_func9bb8_pic_kImageSize,
      gsr_func9bb8_pic_kDispatchTable,
      &gsr_func9bb8_pic_kDispatchTableLen},
-    {0x08015430u,
+    {gs::rom(0x08015430u),
      0,
      "d49cef2181ce6f9fee635daa0ba3b072d336109a",
      "Func_15430_relocatable",
@@ -13318,7 +13168,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
      &gsr_func15430_pic_kDispatchTableLen},
     // Func_15570 is always installed contiguously after Func_15430, so the two
     // are separate images at a fixed stride rather than one larger image.
-    {0x08015570u,
+    {gs::rom(0x08015570u),
      0,
      "20f9190c9b7aac90e091beff5f7e54a46ba833eb",
      "Func_15570_relocatable",
@@ -13326,7 +13176,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
      &gsr_func15570_pic_kImageSize,
      gsr_func15570_pic_kDispatchTable,
      &gsr_func15570_pic_kDispatchTableLen},
-    {0x080158E8u,
+    {gs::rom(0x080158E8u),
      0,
      "03e57ceee902e248334bb546cd32716edf90fca3",
      "Func_158e8_relocatable",
@@ -13336,7 +13186,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
      &gsr_func158e8_pic_kDispatchTableLen},
     // ADDITIVE at 0x0300347c: that fixed row stays, because it gates PCs the
     // main corpus dispatches statically. This image covers every other base.
-    {0x08002544u,
+    {gs::rom(0x08002544u),
      0,
      "b8967c9f00835f22da02cce31595588bb05496e6",
      "Func_2544_relocatable",
@@ -13348,7 +13198,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // bytes equal ROM 0x08006b84, goldensun.elf Func_6b84 (THUMB, 0x24 bytes,
     // the last halfword a $d pad). A byte-copy loop, copied onto the stack.
     // config/usa/transient-func_6b84-relocatable.toml.
-    {0x08006B84u,
+    {gs::rom(0x08006B84u),
      1,
      "bb05c02ca568f1e3ec93e421166ceb083b0a47de",
      "Func_6b84_relocatable",
@@ -13364,7 +13214,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // the stack. The copier's own literal pool (ROM 0x080051C0) independently
     // confirms source 0x08007994 and size 0x1C (DMA3 CNT 0x84000007 = 7
     // words). config/usa/transient-func_7994-relocatable.toml.
-    {0x08007994u,
+    {gs::rom(0x08007994u),
      0,
      "1f75f819768ebe6da0a4200ec6d2f0f3ff29f663",
      "Func_7994_relocatable",
@@ -13376,7 +13226,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // pieces there at runtime, each byte-identical to ROM 0x08009e7c +
     // offset). goldensun.elf sizes it at 0x27c bytes of ARM with no $d.
     // config/usa/transient-func_9e7c-relocatable.toml.
-    {0x08009E7Cu,
+    {gs::rom(0x08009E7Cu),
      0,
      "befbca336a97e12e686a9ce42c10793388f837c2",
      "Func_9e7c_relocatable",
@@ -13388,7 +13238,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // pieces there at runtime, each byte-identical to ROM 0x0800a0f8 +
     // offset). goldensun.elf sizes it at 0x284 bytes of ARM with one
     // interior $d pool. config/usa/transient-func_a0f8-relocatable.toml.
-    {0x0800A0F8u,
+    {gs::rom(0x0800A0F8u),
      0,
      "fc4539c4a9b4e13efc9022885c57dd23ea8fbb7a",
      "Func_a0f8_relocatable",
@@ -13405,7 +13255,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // offset 0 to the full 0x50-byte end (the second uniquely matching this
     // routine's own tail bytes, not Func_1ef8's/203c's/2098's) to runtime
     // base 0x03007c14. config/usa/transient-func_1ea8-relocatable.toml.
-    {0x08001EA8u,
+    {gs::rom(0x08001EA8u),
      0,
      "f2fe52c16d6b2287b19a632445629fe39d660ae5",
      "Func_1ea8_relocatable",
@@ -13422,7 +13272,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // tail bytes) to runtime base 0x03007c7c — exactly 0x03007c14 + 0x50,
     // the Func_1ea8 image's own confirmed instance placed right before it.
     // config/usa/transient-func_1ef8-relocatable.toml.
-    {0x08001EF8u,
+    {gs::rom(0x08001EF8u),
      0,
      "1967086826fcff37e022aac5bebc4e74b2a9978b",
      "Func_1ef8_relocatable",
@@ -13439,7 +13289,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // this routine, to runtime base 0x03007bcc. Found 2026-09-23 while
     // re-checking the Func_1ea8/Func_1ef8 wrapper pools.
     // config/usa/transient-func_1f38-relocatable.toml.
-    {0x08001F38u,
+    {gs::rom(0x08001F38u),
      0,
      "ba870c47936e1e54df7cd9a7846110e663452a59",
      "Func_1f38_relocatable",
@@ -13457,7 +13307,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // short to rule out coincidence. entry_pc is a plausible generation
     // origin only (placed right after the confirmed Func_1f38 instance).
     // config/usa/transient-func_1fb8-relocatable.toml.
-    {0x08001FB8u,
+    {gs::rom(0x08001FB8u),
      0,
      "5f53a347bca3fb9556047098c0ea8d5532dd4bb2",
      "Func_1fb8_relocatable",
@@ -13475,7 +13325,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // pair (0x08006c25, 0x08006c69) — Func_6c24's and Func_6c68's own THUMB
     // entries — and Func_6c68 computes end-start=0x44 from them to size the
     // copy. config/usa/transient-func_6c24-relocatable.toml.
-    {0x08006C24u,
+    {gs::rom(0x08006C24u),
      1,
      "94dd9ae3cdd074edfbf78693bc50dbffe0ca3e39",
      "Func_6c24_relocatable",
@@ -13492,7 +13342,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // placeholder origin (0x03007c14) to a confirmed Func_1ea8 instance
     // instead, so this image now uses an unattached label address
     // (0x03007e00). config/usa/transient-func_203c-relocatable.toml.
-    {0x0800203Cu,
+    {gs::rom(0x0800203Cu),
      0,
      "edbf9a7eabc225926dd5c0ba22d1b928afab1b02",
      "Func_203c_relocatable",
@@ -13513,7 +13363,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // generation origin only. Found 2026-09-23 while re-checking the
     // Func_1ea8/Func_1ef8 wrapper pools.
     // config/usa/transient-func_2098-relocatable.toml.
-    {0x08002098u,
+    {gs::rom(0x08002098u),
      0,
      "92f07a6eb708e30d86f375fd841dac38bf6dc905",
      "Func_2098_relocatable",
@@ -13531,7 +13381,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     //
     // This is the class relocation does NOT close: it removes the need to
     // enumerate bases, not the need to discover routines.
-    {0x08001B70u,
+    {gs::rom(0x08001B70u),
      0,
      "7e06447b0578b9d6ea559eda377aafdd6faecdbe",
      "Func_1b70_relocatable",
@@ -13560,7 +13410,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // a redundant identity gate here rather than a necessary one, but a
     // redundant gate is safe and a missing gate is not; deleting them is a
     // separate change that wants its own verified run.
-    {0x08015AFCu,
+    {gs::rom(0x08015AFCu),
      0,
      "f6ab01b56876f8d1b72a4bf5239bd5cbac620cb0",
      "Func_15afc_relocatable",
@@ -13568,7 +13418,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
      &gsr_func15afc_pic_kImageSize,
      gsr_func15afc_pic_kDispatchTable,
      &gsr_func15afc_pic_kDispatchTableLen},
-    {0x08015E10u,
+    {gs::rom(0x08015E10u),
      0,
      "50cf8d2eaf6ba74b7ae74a97458d04214a00af57",
      "Func_15e10_relocatable",
@@ -13595,7 +13445,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // Func_155d0 is registered on the Func_15e10 precedent, which the very
     // first run vindicated: an image that is never copied simply never
     // verifies, while a missing one aborts a run.
-    {0x08015D74u,
+    {gs::rom(0x08015D74u),
      0,
      "4058793ba5db0477fc9c5c556edb91984dee3de0",
      "Func_15d74_relocatable",
@@ -13603,7 +13453,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
      &gsr_func15d74_pic_kImageSize,
      gsr_func15d74_pic_kDispatchTable,
      &gsr_func15d74_pic_kDispatchTableLen},
-    {0x080155D0u,
+    {gs::rom(0x080155D0u),
      0,
      "4b3fe199338f1ecb1399cf9668839e72386bf7bc",
      "Func_155d0_relocatable",
@@ -13627,7 +13477,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // identity must cover the bytes the WRITER wrote, not the bytes a symbol
     // table says the routine spans. This is the same defect class as hashing an
     // overlay's mutable .data section.
-    {0x08009BB8u,
+    {gs::rom(0x08009BB8u),
      0,
      "49496bc9fb68cacac07613ccb2ead86bc0583ffc",
      "Func_9bb8_short_relocatable",
@@ -13651,7 +13501,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     //
     // Third instance of one defect class: an identity must cover only bytes the
     // WRITER leaves alone - not an ELF extent, not a copy length.
-    {0x08009BB8u,
+    {gs::rom(0x08009BB8u),
      0,
      "36f6cde400bd706d9418bf212705dcfda0a02d94",
      "Func_9bb8_code_relocatable",
@@ -13674,7 +13524,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // both declared data ranges removed: ROM 0x080b5138..0x080b5138+0x230,
     // concatenating [0,0xcc) + [0xd4,0xe0) + [0x120,0x230) (488 bytes), from
     // the hash-verified ROM.
-    {0x080B5138u,
+    {gs::rom(0x080B5138u),
      0,
      "db6d5389162f3f8971ef3247ee7ed62596c5ed4d",
      "Func_b5138_relocatable",
@@ -13692,7 +13542,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // kFuncB5138ExcludedRanges; the SHA-1 is over [0,0xcc) + [0xd4,0xe0) +
     // [0x120,0x230) of ROM 0x080f0024. See
     // config/usa/transient-func-f0024-relocatable.toml.
-    {0x080F0024u,
+    {gs::rom(0x080F0024u),
      0,
      "603f4e8cb1f2e0603244cadea88fc355448ebe86",
      "Func_f0024_relocatable",
@@ -13718,7 +13568,7 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
     // with the ELF size exactly - and the computed image SHA-1 matches the
     // 0x03003400 identity byte for byte. See
     // config/usa/transient-func-a418-relocatable.toml.
-    {0x0800A418u,
+    {gs::rom(0x0800A418u),
      0,
      "d3261b6f7b57ba4e7da8e44cf555d009c7cc27d1",
      "Func_a418_relocatable",
@@ -13727,6 +13577,47 @@ const std::array<RelocatableCodeImage, 29> kRelocatableCodeImages{{
      gsr_funca418_pic_kDispatchTable,
      &gsr_funca418_pic_kDispatchTableLen},
 }};
+
+// The SHA-1s above are the USA ROM's bytes at each image's source. A localized
+// ROM moves and re-points those routines (the copies are otherwise the same
+// code, FACTS.md "Spanish overlays and transient RAM code"), so for it each
+// ROM-backed identity is the loaded ROM's own bytes at the mapped source,
+// hashed exactly as the live check hashes the copy. Runs once, before the
+// game starts; images with no ROM source (overlays, synth templates) keep
+// their registry identity.
+void set_revision_identities(const std::vector<std::uint8_t>& rom) {
+    if (gs::rom_version() == gs::RomVersion::Usa) return;
+    static std::deque<std::string> storage;
+    const auto rom_bytes = [&rom](std::uint32_t rom_start, std::uint32_t size,
+                                  const char* name) {
+        const std::uint32_t offset = rom_start - 0x08000000u;
+        if (rom_start < 0x08000000u || offset > rom.size() ||
+            size > rom.size() - offset) {
+            std::fprintf(stderr,
+                "[rom_version] %s source 0x%08X+0x%X lies outside the ROM\n",
+                name, rom_start, size);
+            std::abort();
+        }
+        return rom.data() + offset;
+    };
+    for (auto& image : kTransientCodeImages) {
+        if (image.rom_start == 0u) continue;
+        const std::uint32_t size = image.end - image.start;
+        const std::uint8_t* bytes = rom_bytes(image.rom_start, size, image.name);
+        image.sha1 = storage.emplace_back(gba::sha1(bytes, size).hex()).c_str();
+    }
+    for (auto& image : kRelocatableCodeImages) {
+        if (image.rom_start == 0u) continue;
+        const std::uint32_t size = *image.size;
+        const std::uint8_t* bytes = rom_bytes(image.rom_start, size, image.name);
+        image.sha1 = storage
+                         .emplace_back(gsr::sha1_excluding(
+                             size,
+                             [bytes](std::uint32_t offset) { return bytes[offset]; },
+                             image.excluded_ranges, image.excluded_ranges_len))
+                         .c_str();
+    }
+}
 
 struct GoldenSunFunc1dc8WriterCache {
     bool valid = false;
@@ -14244,7 +14135,7 @@ void sample_known_active_relocatable_placements() {
 }
 
 // Which branch of verified_ram_dispatch answered, for the unpacker guard's
-// journal (src/unpacker_guard.h).
+// journal (shared_game/unpacker_guard.h).
 gsr::RamResolvePath g_ram_resolve_path = gsr::RamResolvePath::None;
 
 struct RelocatableOpcodeCandidate {
@@ -14552,19 +14443,31 @@ void hard_mode_settings_teardown() {
 }
 
 void golden_sun_function_entry_observer(std::uint32_t entry_pc) {
+    if (gsr::retreat_travel::tbs::on_entry(entry_pc)) return;
+    gsr::field_character::on_entry(entry_pc);
+    gsr::intro_music::choices.on_entry(entry_pc);
     gsr::intro_music::music.on_entry(entry_pc);
+    gsr::custom_battle::tbs::on_entry(entry_pc);
+    if (entry_pc == gsr::text_speed_cheat::kLineStartPc &&
+        (g_cpu.R[14] & ~1u) == gsr::text_speed_cheat::kLineStartReturn)
+        g_decoder_text_id = g_cpu.R[1];
     if (entry_pc == gsr::hard_mode::kSettingsSetupEntryPc) {
         g_settings_screen_text = true;
         hard_mode_settings_setup();
     } else if (entry_pc == gsr::hard_mode::kSettingsTeardownEntryPc) {
         hard_mode_settings_teardown();
     } else if (entry_pc == gsr::hard_mode::kNewGameEntryPc) {
-        hard_mode_prompt_open();
+        question_hold_new_game_entry();
     } else if (entry_pc == gsr::hard_mode::kStatRecalcPc) {
         hard_mode_scale_enemy();
     }
     seamless_on_entry(entry_pc);
-    if (entry_pc == 0x08010000u) g_tile_ring_redraw.on_follow_entry();  // Func_10000
+    gsr::enemy_hp_bar::on_entry(entry_pc, enemy_hp_bar_name_width);
+    if (entry_pc == GS_ROM(0x080030F8u)) {  // Func_30f8, the frame routine
+        if (!g_menu_sounds.empty()) play_menu_sounds();
+        question_hold_frame_entry();
+    }
+    if (entry_pc == GS_ROM(0x08010000u)) g_tile_ring_redraw.on_follow_entry();  // Func_10000
     golden_sun_note_projected_obj_placement(entry_pc);
     golden_sun_obj_f0_entry_capture(entry_pc);
     golden_sun_obj_staging_handoff(entry_pc);
@@ -15770,13 +15673,14 @@ void print_usage() {
     std::printf(
         "GoldenSunRecomp [--bios <path> | --no-bios] [--rom <path>] [game.toml]\n"
         "\n"
-        "The Golden Sun USA/Europe ROM is required and SHA-1 gated. By default\n"
+        "The Golden Sun ROM this build was generated from is required and\n"
+        "SHA-1 gated. By default\n"
         "no BIOS is read: the runtime's own replacements run every BIOS service.\n"
         "--bios <path> (a canonical, SHA-1 gated GBA BIOS) runs the recompiled\n"
         "BIOS path instead, in builds that link it.\n"
         "\n"
-        "Expected ROM SHA-1: %s\n",
-        kRomSha1);
+        "Expected ROM SHA-1: %s (%s)\n",
+        gs::game_rom_sha1(), gs::rom_version_name());
 }
 
 }  // namespace
@@ -15799,7 +15703,7 @@ int main(int argc, char** argv) {
         // where the next copied routine lands.
         layout.unpacker_slot = 0x03002000u;
         layout.unpacker_slot_len = 0x2C4u;
-        layout.iwram_heap_ptr = 0x03001E54u;
+        layout.iwram_heap_ptr = gs::ram(0x03001E54u);
         // Measured transient RAM code image, half-open.
         layout.ram_image_start = 0x03005B0Cu;
         layout.ram_image_end = 0x03005D5Cu;
@@ -15832,7 +15736,9 @@ int main(int argc, char** argv) {
     // zero cost during play).
     gsr_install_crash_snapshot_writer();
     gsr::unpacker_catch_install();
-    gsr::unpacker_guard_install(0x08002808u);  // Func_2808 (FACTS.md)
+    gsr::unpacker_guard_install(GS_ROM(0x08002808u));  // Func_2808 (FACTS.md)
+    // Func_2544, DMA'd to the same 0x03006000 (FACTS.md 2026-10-16)
+    gsr::unpacker_guard_install_format0(GS_ROM(0x08002544u));
     // The payload-free producer trace stays opt-in
     // (GBARECOMP_VRAM_MAP_TRACE=1).
     gba::vram_trace::set_default_enabled(false);
@@ -15865,12 +15771,38 @@ int main(int argc, char** argv) {
 
     gbarecomp::RunOptions options;
     options.builtin_game_name = "Golden Sun";
-    options.builtin_rom_sha1 = kRomSha1;
+    options.builtin_rom_sha1 = gs::game_rom_sha1();
+    gsr::custom_battle::tbs::install();
+    // Target-list pointer: Spain/Italy use sp+0x14; USA/France/Germany use sp+0x1C
+    // (FACTS.md language-support sections).
+    gsr::enemy_hp_bar::install({.frame_routine_pc = GS_ROM(0x080030F8u),
+                                .target_loop_return = GS_ROM(0x08026E1Cu),
+                                .name_draw_pc = GS_ROM(0x08017AA4u),
+                                .name_draw_return = GS_ROM(0x08026B8Cu),
+                                .candidate_list_sp =
+                                    (gs::rom_version() == gs::RomVersion::Spain ||
+                                     gs::rom_version() == gs::RomVersion::Italy) ? 0x14u : 0x1Cu,
+                                .enemy_base_slot = gs::ram(0x03001F28u)});
+    options.rom_patch = [](std::vector<std::uint8_t>* rom) {
+        set_revision_identities(*rom);
+        gsr::custom_battle::prepare_animation_assets(rom);
+    };
     // No Nintendo code runs by default: our own stand-ins
     // replace every BIOS service. `--bios <path>` in a GBARECOMP_LINK_BIOS
     // build is the comparison run.
     options.no_bios_by_default = true;
     options.function_entry_observer = golden_sun_function_entry_observer;
+    {
+        namespace field = gsr::field_character;
+        static constexpr unsigned alternate_bodies[] = {18};  // Young Isaac.
+        static const field::Game walking_character{
+            GS_ROM(0x0800AA0Cu), GS_ROM(0x08185024u), kGoldenSunActorContextPtr,
+            0x02000438u, 0x24u, 0x25u, field::kNoAction,
+            field::kBrokenSealHeroes, alternate_bodies,
+        };
+        field::install(walking_character);
+        gbarecomp::config_ui_set_game_page(field::draw);
+    }
     gsr::map_recorder_init();
     // Independent of the map recorder: its own env flag, its own session
     // directory, no shared state. See obj_recorder.h.
@@ -15878,18 +15810,25 @@ int main(int argc, char** argv) {
     // After the recorder, for the same extra-draw chaining reason: each of
     // these captures whatever the previous one installed.
     gsr::room_buffer_init();
-    gsr::adventure::init();
+    gsr::trackers::install(gsr::djinn_tracker::tbs::kGame, gsr::treasure_tracker::tbs::kGame,
+                           gsr::trackers::tbs::kText);
+    gsr::retreat_travel::tbs::install(
+        [] { return g_field_psynergy_fast.load() != 0; }, load_menu_font);
+    gsr::intro_music::choices.install();
     // gbarecomp keeps one savestate-load hook.
     gbarecomp::set_savestate_load_hook([] {
-        gsr::adventure::restored.store(true);
-        gsr::adventure::progress_ready.store(false);
+        gsr::retreat_travel::reset();
+        gsr::custom_battle::tbs::reset();
+        g_hard_prompt_open = false;
+        g_question_hold = QuestionHold::Off;
+        gsr::intro_music::choices.on_load();
         gsr::intro_music::music.update(true);
         g_gpu_readback.invalidate();
         g_history.clear();
         g_world_settled_capture = {};
         g_world_margin_rgb.clear();
         g_world_margin_w = g_world_margin_h = 0;
-        g_world_margin_index.clear();
+        g_world_palette_effect.reset_indices();
         g_gpu_field_capture.valid = false;
         g_settings_open.store(false);
         g_settings_screen_text = false;
@@ -15924,15 +15863,30 @@ int main(int argc, char** argv) {
     options.thumb_literal_override = golden_sun_thumb_literal;
     options.swi_override = golden_sun_swi_override;
     options.conditional_branch_override = golden_sun_conditional_branch;
-    options.game_menu_toggle = cheat_menu_toggle;
     options.keyinput_filter = cheat_menu_keyinput_filter;
     options.paused_overlay = cheat_menu_paint;
     gbarecomp::config_ui_set_game_switches(
         kGameSwitches, gbarecomp::developer_session()
                            ? static_cast<int>(std::size(kGameSwitches))
                            : kPlayerGameSwitchCount);
-    options.pause_request_poll = cheat_menu_pause_poll;
-    options.launcher_region = "USA/Europe";
+    // Localized ROMs get their own F1 menu and settings page two.
+    if (gs::rom_version() == gs::RomVersion::Spain)
+        gbarecomp::config_ui_set_translations(
+            gsr::spanish_menu::kTable,
+            static_cast<int>(std::size(gsr::spanish_menu::kTable)));
+    else if (gs::rom_version() == gs::RomVersion::Italy)
+        gbarecomp::config_ui_set_translations(
+            gsr::italian_menu::kTable,
+            static_cast<int>(std::size(gsr::italian_menu::kTable)));
+    else if (gs::rom_version() == gs::RomVersion::France)
+        gbarecomp::config_ui_set_translations(
+            gsr::french_menu::kTable,
+            static_cast<int>(std::size(gsr::french_menu::kTable)));
+    else if (gs::rom_version() == gs::RomVersion::Germany)
+        gbarecomp::config_ui_set_translations(
+            gsr::german_menu::kTable,
+            static_cast<int>(std::size(gsr::german_menu::kTable)));
+    options.launcher_region = gs::rom_version_name();
     options.launcher_game_config = "game.toml";
     options.launcher_expose_widescreen = true;
     options.launcher_expose_adaptive_view = false;

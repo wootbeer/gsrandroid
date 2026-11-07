@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- Spanish, Italian, French and German versions of both games. Add the ROM and it shows up in the launcher; each language has its own game build, save and save states  
+- Saves page: copy your USA/Europe save into another language  
+- Enemy HP bar and Custom Battle Mode switches (Settings > Game)  
+- Screen color: David's OG GBA  
+
+### Changed
+- Bumped to the latest GSRecomp version (0.7.1)  
+- The game code is rebuilt once on first start after updating  
+
 ## [0.4.2. (10-26-2026)]
 
 ### Added

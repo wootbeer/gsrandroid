@@ -49,6 +49,8 @@
 #include "runtime_arm.h"
 #include "runtime_bus_bridge.h"
 #include "tla.h"
+#include "tla_world_map.h"
+#include "../../shared_game/held_palette_effect.h"
 
 namespace {
 
@@ -363,6 +365,7 @@ void capture() {
     gba::GbaBus* bus = gbarecomp::active_bus();
     gba::GbaPpu* ppu = gbarecomp::active_ppu();
     if (!bus || !ppu) return;
+    tla_trackers_sample();
     if (g_only) {
         static bool applied = false;
         if (!applied) {
@@ -591,6 +594,7 @@ bool draw_capture(const Capture& capture, std::uint8_t* rgb,
     in.ewram_bytes = capture.ewram.size();
     in.iwram = capture.iwram.data();
     in.iwram_bytes = capture.iwram.size();
+    if (capture.io.size() >= 0x400u) in.io = capture.io.data();
     in.rom = capture.rom;
     in.rom_bytes = capture.rom_bytes;
     if (!capture.room_vram.empty()) {
@@ -654,6 +658,7 @@ bool draw_capture(const Capture& capture, std::uint8_t* rgb,
 // picture on menu frames.
 std::vector<std::uint8_t> g_world_margin;
 Capture g_world_settled;
+gsr::HeldPaletteEffect g_world_palette_effect;
 std::uint32_t g_world_margin_w = 0, g_world_margin_h = 0;
 
 bool world_map_blocks(const std::vector<std::uint8_t>& io) {
@@ -663,12 +668,51 @@ bool world_map_blocks(const std::vector<std::uint8_t>& io) {
     return ((bg3 >> 8) & 0x1Fu) == 8u && ((bg2 >> 8) & 0x1Fu) == 10u;
 }
 
+// Entering a town, black bars close in from the top and bottom of the world
+// map: the game switches those rows to mode 0 while the rest stay mode 2
+// (F12 tla_rewind_0164, 2026-10-28, frames 84-96: rows 0..k and 159-k..159
+// at DISPCNT 0x1F40, the rest 0x1F42). A bar row's margins, and the rows
+// above the first row and below the last, take the bar's colour so the bars
+// cross the whole screen. True for any frame mixing mode 2 with other rows.
+bool paint_shutter_rows(std::uint8_t* rgb, std::uint32_t width,
+                        std::uint32_t height, const gsr::FieldScene& sc) {
+    constexpr int kRows = gsr::FieldScene::kRows;
+    bool has_world = false, has_other = false;
+    for (int y = 0; y < kRows; ++y) {
+        if (!sc.row_io_valid[y]) continue;
+        ((sc.row_io[y][0] & 7u) == 2u ? has_world : has_other) = true;
+    }
+    if (!has_world || !has_other) return false;
+    const std::uint32_t x0 = (width - 240u) / 2u, y0 = (height - 160u) / 2u;
+    bool bar[kRows] = {};
+    for (int r = 0; r < kRows; ++r) {
+        if (!sc.row_io_valid[r] || (sc.row_io[r][0] & 7u) == 2u) continue;
+        const std::uint8_t* p = rgb + (std::size_t{y0 + r} * width + x0) * 3u;
+        bar[r] = true;
+        for (std::uint32_t x = 1; x < 240u && bar[r]; ++x)
+            bar[r] = std::memcmp(p, p + x * 3u, 3) == 0;
+    }
+    for (std::uint32_t y = 0; y < height; ++y) {
+        const bool native_row = y >= y0 && y < y0 + 160u;
+        const int r = y < y0 ? 0 : native_row ? int(y - y0) : kRows - 1;
+        if (!bar[r]) continue;
+        std::uint8_t colour[3];
+        std::memcpy(colour, rgb + (std::size_t{y0 + r} * width + x0) * 3u, 3);
+        std::uint8_t* dst = rgb + std::size_t{y} * width * 3u;
+        for (std::uint32_t x = 0; x < width; ++x) {
+            if (native_row && x >= x0 && x < x0 + 240u) continue;
+            std::memcpy(dst + x * 3u, colour, 3);
+        }
+    }
+    return true;
+}
+
 void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
                            std::uint32_t height, const Capture& capture) {
     const std::vector<std::uint8_t>& io = capture.io;
     const bool world_map = capture.ewram.size() >= 0x42Au &&
-        (unsigned(capture.ewram[0x428]) |
-         (unsigned(capture.ewram[0x429]) << 8)) == 2u;
+        tla_world_map(unsigned(capture.ewram[0x428]) |
+                      (unsigned(capture.ewram[0x429]) << 8));
     if (!world_map || !world_map_blocks(io)) {
         g_world_margin.clear();  // anywhere else: the saved view is stale
         g_world_settled = {};
@@ -678,10 +722,7 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
     const std::uint32_t x0 = (width - 240u) / 2u, y0 = (height - 160u) / 2u;
     if (mode == 2u) {
         // Only a settled frame: every row in mode 2, no brightness fade.
-        for (int y = 0; y < gsr::FieldScene::kRows; ++y)
-            if (capture.scene.row_io_valid[y] &&
-                (capture.scene.row_io[y][0] & 7u) != 2u)
-                return;
+        if (paint_shutter_rows(rgb, width, height, capture.scene)) return;
         const unsigned bldcnt = io[0x50] | (static_cast<unsigned>(io[0x51]) << 8);
         const bool fading = ((bldcnt >> 6) & 3u) >= 2u && (io[0x54] & 0x1Fu) != 0u;
         if (!fading) {
@@ -692,6 +733,7 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
                 g_world_margin = std::move(margin);
                 g_world_margin_w = width;
                 g_world_margin_h = height;
+                g_world_palette_effect.save(capture.pal);
             } catch (const std::bad_alloc&) {
                 g_world_margin.clear();
                 g_world_settled = {};
@@ -727,6 +769,7 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
                 g_world_margin = std::move(resized);
                 g_world_margin_w = width;
                 g_world_margin_h = height;
+                g_world_palette_effect.reset_indices();
             }
         } catch (const std::bad_alloc&) {
             // Existing no-held-frame colour is the allocation fallback.
@@ -748,6 +791,13 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
         shake_x = offset(0x14);
         shake_y = offset(0x16);
     }
+    // A lighthouse beam: the margins already hold BG0's glow added to the
+    // black backdrop (tla_field_draw.h), so add the held map beneath it the
+    // way the console adds the snapshot (second target, weight EVB/16; EVB
+    // 16 in every beam frame of 0181..0184).
+    const unsigned evb = std::min(io[0x53] & 0x1Fu, 16u);
+    const bool glow = held && tla_beam_glow_frame(io.data(),
+        unsigned(capture.ewram[0x428]) | (unsigned(capture.ewram[0x429]) << 8));
     for (std::uint32_t y = 0; y < height; ++y) {
         const bool native_row = y >= y0 && y < y0 + 160u;
         std::uint8_t* dst = rgb + std::size_t{y} * width * 3u;
@@ -757,11 +807,21 @@ void world_map_margin_hold(std::uint8_t* rgb, std::uint32_t width,
         for (std::uint32_t x = 0; x < width; ++x) {
             if (native_row && x >= x0 && x < x0 + 240u) continue;
             const int sx = std::clamp(int(x) + shake_x, 0, int(width) - 1);
+            if (glow) {
+                const std::uint8_t* h = src + std::size_t(sx) * 3u;
+                for (int c = 0; c < 3; ++c)
+                    dst[x * 3u + c] = std::uint8_t(
+                        std::min(255u, dst[x * 3u + c] + h[c] * evb / 16u));
+                continue;
+            }
             // No settled frame to hold: black rather than the world map's
             // rotation-layer data read as text layers.
             std::memcpy(dst + x * 3u, held ? src + std::size_t(sx) * 3u : colour, 3);
         }
     }
+    if (held && !glow)
+        g_world_palette_effect.apply(rgb, width, height, g_world_margin, capture.pal);
+    paint_shutter_rows(rgb, width, height, capture.scene);
 }
 
 }  // namespace
@@ -950,6 +1010,9 @@ void tla_install_gpu_field() {
         g_world_margin.clear();
         g_world_margin_w = g_world_margin_h = 0;
         tla_local_music_on_savestate_load();
+        tla_custom_battle_reset();
+        tla_retreat_travel_reset();
+        tla_sprite_memory_restore();
     });
     if (g_enabled)
         std::fprintf(stderr, "[gpu-field] on%s%s\n", g_only ? ", only" : "",

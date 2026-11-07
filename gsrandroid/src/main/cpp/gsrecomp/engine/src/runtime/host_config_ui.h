@@ -1,9 +1,8 @@
 // host_config_ui.h — Dear ImGui configuration UI for the host window.
 //
-// One Settings window with a sidebar of pages (Video, Audio, Controls,
-// Hotkeys, Fast Forward, Enhancements, and Game when the game adds switches),
-// usable by mouse, keyboard or controller. To bind, click a box then press a
-// key or pad button.
+// One Settings window with horizontal tabs (Video, Audio, Controls, Hotkeys,
+// Speed, optional Game, Cheats and Troubleshooting), usable by mouse,
+// keyboard or controller. To bind, click a box then press a key or pad button.
 //
 // Strictly host-side. It runs at present time, after the guest frame has been
 // uploaded, and touches nothing the emulation reads. The one exception is
@@ -128,6 +127,13 @@ struct ConfigUiColourChoice {
 // passes a pointer in; the UI never reaches into the backend directly, which
 // keeps this file free of SDL backend details and testable in isolation.
 struct ConfigUiState {
+    // Preferred F1 geometry, relative to the game viewport. Temporary fitting
+    // to a smaller viewport does not change it. Zero size selects the
+    // content-fitted default; host_window persists this in [SettingsWindow].
+    int menu_width = 0;
+    int menu_height = 0;
+    int menu_x = 0;
+    int menu_y = 0;
     // --- input bindings -----------------------------------------------------
     // GBA KEYINPUT bit order: 0=A 1=B 2=Sel 3=Start 4=Right 5=Left 6=Up 7=Down 8=R 9=L.
     int   key_bind[10] = {};        // SDL_Scancode, 0 = unbound
@@ -244,8 +250,15 @@ struct ConfigUiState {
     bool  cheats_changed = false;
     bool  logging_changed = false;
     bool  debug_overlay_changed = false;
+    bool  menu_layout_changed = false;
     bool  request_quit = false;
+    enum class QuitConfirmation { Closed, Open, Cancel, Quit, QuitAndDisable };
+    QuitConfirmation quit_confirmation = QuitConfirmation::Closed;
+    bool  quit_dont_ask_again = false;
 };
+
+inline constexpr const char* kQuitWarning =
+    "Are you sure you want to quit?\nUnsaved progress will be lost.";
 
 // Create/destroy the ImGui context and SDL backends. Safe to call when ImGui
 // is not compiled in (init returns false, shutdown does nothing).
@@ -265,14 +278,25 @@ void config_ui_shutdown();
 void config_ui_set_edition_badge(const char* bitmap_path, const char* caption,
                                  const char* flourish);
 
+// Publish 256 4bpp tiles (8192 bytes), 224 character advances for codes
+// 32..255, and 16 BGR555 colors copied from the verified ROM. Inputs are
+// copied immediately; artwork is retained only in memory.
+void config_ui_set_menu_art(const uint8_t* tiles, const uint8_t* widths,
+                            const uint16_t* palette);
+// Select Cheats and open F1. Safe in builds without ImGui.
+void config_ui_open_cheats();
+
 // Feed every SDL event here BEFORE the host window interprets it. Returns true
 // when the UI consumed the event and the host/guest must ignore it — true
 // whenever the menu is visible and the event is mouse/keyboard input.
-bool config_ui_handle_event(const SDL_Event* e);
+bool config_ui_handle_event(const SDL_Event* e, bool quit_modal = false);
 
 // Is the menu currently visible? While visible, host_window feeds the guest
 // all-buttons-released.
 bool config_ui_visible();
+// An active text editor owns typing ahead of menu/game shortcuts. Includes
+// game-owned editors outside F1; false in builds without the UI.
+bool config_ui_text_input_active();
 void config_ui_toggle();
 void config_ui_set_visible(bool on);
 
@@ -319,5 +343,25 @@ struct GameOptionSwitch {
 void config_ui_set_game_switches(const GameOptionSwitch* switches, int count);
 // Optional game-owned controls below the switches on F1's Game page.
 void config_ui_set_game_page(void (*draw)());
+// Optional game-owned content on F1's Music page.
+void config_ui_set_music_page(void (*draw)());
+// The F1 menu's words in another language: a game installs {English, text}
+// pairs, UTF-8. The menu draws the ROM's font, whose codes 0xA0..0xFF are
+// Latin-1 (á = 0xE1, ñ = 0xF1, ¿ = 0xBF), so accented letters show as such.
+// Text with no entry stays English; without a table nothing changes. The
+// table must outlive the menu. Declared unconditionally, same as above.
+struct UiTranslation {
+    const char* english;
+    const char* text;
+};
+void config_ui_set_translations(const UiTranslation* table, int count);
+// `english` in the installed language. "Label##id" keeps its "##id" (and so
+// its ImGui id), "##id" alone is returned as is. The result lives as long as
+// the table.
+const char* ui_text(const char* english);
+// F1's window border in the game's own pieces (menu font tiles 16..23,
+// 16 pixels each), drawn into the current ImGui window, so a game-owned
+// window looks like the F1 menu. Draws nothing before the menu art arrives.
+void config_ui_draw_menu_frame(float x, float y, float width, float height);
 
 }  // namespace gbarecomp

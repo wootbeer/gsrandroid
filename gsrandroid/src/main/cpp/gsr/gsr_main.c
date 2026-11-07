@@ -347,18 +347,19 @@ int descore_game_main(const DescoreGameParams *params)
 	version = (GLubyte *) glGetString(GL_VERSION);
 	LOG("GL_VERSION %s", version ? (const char *) version : "(null)");
 
-	/* Options and controls live next to the Golden Sun ROM in the app's private folder (<files>/gsr/game),
-	 * and both games use the same ones. */
+	/* Options and controls live next to the Golden Sun (USA/Europe) ROM in the app's private folder
+	 * (<files>/gsr/game), and every game and language uses the same ones. */
 	snprintf(shared_dir, sizeof shared_dir, "%s", params->data_dir);
-	if (gsr_game()->tla) {
+	{
 		char *slash = strrchr(shared_dir, '/');
 		if (slash) snprintf(slash + 1, sizeof shared_dir - (size_t)(slash + 1 - shared_dir), "game");
 		mkdir(shared_dir, 0755);
 	}
+	/* The other game in the same language (Seamless mode, the Golden Sun save for The Lost Age). */
 	snprintf(g_other_dir, sizeof g_other_dir, "%s", params->data_dir);
 	{
 		char *slash = strrchr(g_other_dir, '/');
-		if (slash) snprintf(slash + 1, sizeof g_other_dir - (size_t)(slash + 1 - g_other_dir), "%s", gsr_game()->tla ? "game" : "tla");
+		if (slash) gsr_game_other_dir(slash + 1, sizeof g_other_dir - (size_t)(slash + 1 - g_other_dir));
 	}
 	gsr_settings_init(shared_dir);
 	gsr_controls_init(shared_dir);

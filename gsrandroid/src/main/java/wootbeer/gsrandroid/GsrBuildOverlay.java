@@ -38,8 +38,8 @@ final class GsrBuildOverlay {
 
 	/** The game this screen builds and plays (the launcher's unit). */
 	private String gameName() {
-		return activity.getIntent().getIntExtra(wootbeer.descore.DescoreGameActivity.EXTRA_UNIT_ID,
-				GsrConfig.UNIT_GAME) == GsrConfig.UNIT_TLA ? "Golden Sun: The Lost Age" : "Golden Sun";
+		int unit = GsrConfig.unitOf(activity);
+		return GsrConfig.title(GsrConfig.isTla(unit), GsrConfig.lang(unit));
 	}
 
 	GsrBuildOverlay(Activity a) {

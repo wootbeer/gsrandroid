@@ -41,6 +41,7 @@ set(GSRC ${CMAKE_CURRENT_SOURCE_DIR}/gsrecomp)
 set(GSRC_GB ${GSRC}/engine)
 set(GSRC_PB ${GSRC}/player_builder)
 set(GSRC_TBS ${GSRC}/tbs)
+set(GSRC_SG ${GSRC}/shared_game)
 add_library(gsrecomp_core STATIC
 		${GSRC_GB}/src/armv4t/arm_decode.cpp
 		${GSRC_GB}/src/armv4t/thumb_decode.cpp
@@ -61,7 +62,7 @@ add_library(gsrecomp_core STATIC
 		${GSRC_GB}/src/gba/gba_bios.cpp
 		${GSRC_GB}/src/gba/gba_rom_header.cpp
 		${GSRC_GB}/src/gba/sha1.cpp
-		${GSRC_GB}/src/gba/crc32.cpp
+		${GSRC_GB}/src/gba/file_replace.cpp
 		${GSRC_GB}/tools/gba_recompile/main.cpp
 		${GSRC_GB}/tools/gba_recompile/config.cpp
 		${GSRC_GB}/tools/gba_recompile/slim_pass.cpp
@@ -175,6 +176,7 @@ target_link_libraries(gsrhost PRIVATE
 add_library(gsrengine SHARED
 		gsr/gsr_engine_entry.cpp
 		${GSRC_TBS}/src/runner_main.cpp
+		${GSRC_TBS}/src/frame_capture.cpp
 		${GSRC_TBS}/src/map_recorder.cpp
 		${GSRC_TBS}/src/obj_recorder.cpp
 		${GSRC_TBS}/src/room_buffer.cpp
@@ -185,9 +187,13 @@ add_library(gsrengine SHARED
 		${GSRC_GB}/src/field/effect_particles.cpp
 		${GSRC_TBS}/src/effect_sources.cpp
 		${GSRC_GB}/src/field/effect_capture.cpp
-		${GSRC_TBS}/src/gs_text_encode.cpp
+		${GSRC_SG}/gs_text_encode.cpp
+		${GSRC_SG}/custom_battle.cpp
+		${GSRC_TBS}/src/custom_battle_tbs.cpp
+		${GSRC_SG}/enemy_hp_bar.cpp
 		${GSRC_TBS}/src/unpacker_catch.cpp
-		${GSRC_TBS}/src/unpacker_guard.cpp
+		${GSRC_SG}/unpacker_guard.cpp
+		${GSRC_TBS}/src/rom_version.cpp
 		${GSRC_GB}/src/field/effect_burst.cpp)
 set_source_files_properties(${GSRC_TBS}/src/runner_main.cpp PROPERTIES COMPILE_DEFINITIONS "main=gsr_engine_main_cpp")
 target_include_directories(gsrengine PRIVATE
@@ -195,7 +201,7 @@ target_include_directories(gsrengine PRIVATE
 		${GSRC_TBS}/src ${GSRC_GB} ${GSRC_GB}/src/field ${GSRC_PB}
 		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/runtime ${GSRC_GB}/src/debug
 		${GSRC_GB}/src/recompile ${GSRC_TBS}/config/usa)
-target_compile_options(gsrengine PRIVATE -std=c++20 -w -fPIC -O3)
+target_compile_options(gsrengine PRIVATE -std=c++20 -w -Wno-invalid-constexpr -fPIC -O3)
 target_compile_definitions(gsrengine PRIVATE GBARECOMP_DEFAULT_DEBUG_PORT=19843 GSR_ANDROID_ENGINE)
 # game symbols are undefined here on purpose
 set_target_properties(gsrengine PROPERTIES LINK_FLAGS "-Wl,-z,undefs -Wl,--no-as-needed")
@@ -214,6 +220,7 @@ set(GSRC_TLA ${GSRC}/tla)
 add_library(gsrtlaengine SHARED
 		gsr/gsr_tla_engine_entry.cpp
 		${GSRC_TLA}/src/tla_runner.cpp
+		${GSRC_TLA}/src/tla_rom_version.cpp
 		${GSRC_TLA}/src/tla_ram_images.cpp
 		${GSRC_TLA}/src/tla_text_speed.cpp
 		${GSRC_TLA}/src/tla_battle_speed.cpp
@@ -233,6 +240,10 @@ add_library(gsrtlaengine SHARED
 		${GSRC_TLA}/src/tla_widescreen.cpp
 		${GSRC_TLA}/src/tla_sprite_memory.cpp
 		${GSRC_TLA}/src/tla_gpu_field.cpp
+		${GSRC_TLA}/src/tla_custom_battle.cpp
+		${GSRC_TLA}/src/tla_retreat_travel.cpp
+		${GSRC_TLA}/src/tla_enemy_hp_bar.cpp
+		${GSRC_TLA}/src/tla_trackers.cpp
 		${GSRC_GB}/src/field/field_scene.cpp
 		${GSRC_GB}/src/field/field_scene_renderer.cpp
 		${GSRC_TLA}/src/field_game_profile.cpp
@@ -240,14 +251,17 @@ add_library(gsrtlaengine SHARED
 		${GSRC_GB}/src/field/effect_particles.cpp
 		${GSRC_GB}/src/field/effect_burst.cpp
 		${GSRC_GB}/src/field/effect_capture.cpp
-		${GSRC_TBS}/src/unpacker_guard.cpp)
+		${GSRC_SG}/unpacker_guard.cpp
+		${GSRC_SG}/custom_battle.cpp
+		${GSRC_SG}/gs_text_encode.cpp
+		${GSRC_SG}/enemy_hp_bar.cpp)
 set_source_files_properties(${GSRC_TLA}/src/tla_runner.cpp PROPERTIES COMPILE_DEFINITIONS "main=gsr_tla_engine_main_cpp")
 target_include_directories(gsrtlaengine PRIVATE
 		gsr/shim_inc
 		${GSRC_TLA}/src ${GSRC_GB} ${GSRC_GB}/src/field ${GSRC_PB}
 		${GSRC_GB}/src/armv4t ${GSRC_GB}/src/gba ${GSRC_GB}/src/runtime ${GSRC_GB}/src/debug
 		${GSRC_GB}/src/recompile)
-target_compile_options(gsrtlaengine PRIVATE -std=c++20 -w -fPIC -O3)
+target_compile_options(gsrtlaengine PRIVATE -std=c++20 -w -Wno-invalid-constexpr -fPIC -O3)
 target_compile_definitions(gsrtlaengine PRIVATE GBARECOMP_DEFAULT_DEBUG_PORT=19843 GSR_ANDROID_ENGINE TLA_NO_HARVEST=1)
 set_target_properties(gsrtlaengine PROPERTIES LINK_FLAGS "-Wl,-z,undefs -Wl,--no-as-needed")
 target_link_libraries(gsrtlaengine gsgamebridge gsrhost ${log-lib} m)

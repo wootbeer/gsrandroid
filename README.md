@@ -16,15 +16,18 @@ Game Files
 Make sure to have 800mb free on your device for processing each game.  
 Place files onto your device in an accessible folder.  
 
-Your own legally obtained Golden Sun GBA ROM (USA/Europe).  
-SHA-1:  
-5c4695205413df7db52b9a184815a07783999971  
+Your own legally obtained Golden Sun and/or Golden Sun: The Lost Age GBA ROMs. Supported versions (SHA-1):  
 
-Optional: your own legally obtained Golden Sun: The Lost Age GBA ROM (USA/Europe).  
-SHA-1:  
-b500663220cb9bf56b9f8e8c0c544f1d6fa3a824  
+| Language | Golden Sun | Golden Sun: The Lost Age |
+|---|---|---|
+| USA/Europe (English) | 5c4695205413df7db52b9a184815a07783999971 | b500663220cb9bf56b9f8e8c0c544f1d6fa3a824 |
+| Spanish | de0bdc889594b012cad213ca83707feb81ada28b | a2e3e80036195343c2713410ac14f4e329e3f40d |
+| Italian | ca45e04b26b2f040ac63e679a459d21869f5f28d | 57f1d005666b81645e55412658427e27099c5907 |
+| French | 42f3b262c16cfc5bde1fa2b25016fb74046de1b3 | f14855c0f8c87a95cc52189e8e3b2bd9df186322 |
+| German | c23ab91a39434623cf1a999f387d743ade1a22a6 | 7820b4c7ba9002b0e9be23a6f45a9ab204986438 |
 
-On first launch the app will ask you to select the files. Each game is recognised whatever its file name. If it closes or errors you are not using the correct version of the file.  
+On first launch the app will ask you to select the files. Each game and language is recognised whatever its file name, and shows up in the launcher once added. If it closes or errors you are not using the correct version of the file.  
+Every language has its own game build, save and save states. A language's Saves page can copy over your USA/Europe save.  
 The first time you play each game it translates and compiles the game code on your device, into the app's storage. Depending on your device this will take 2-10 minutes per game.  
 After an app update this happens once more.  
 

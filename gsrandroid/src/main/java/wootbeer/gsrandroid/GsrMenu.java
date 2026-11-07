@@ -39,7 +39,9 @@ final class GsrMenu {
 	private static final String[] FLICKER = { "Off", "Light", "Medium", "Strong" };
 	private static final String[] FILTER = { "Sharp", "Smooth" };
 	private static final String[] SCREEN = { "Raw", "Unlit", "Frontlit", "Backlit", "Classic", "Handheld",
-			"Handheld (lighter)", "Soft", "Natural", "Warm", "Deep" };
+			"Handheld (lighter)", "Soft", "Natural", "Warm", "Deep", "David's OG GBA" };
+	/** The stored values of SCREEN (ScreenKind; 11, Custom, needs sliders and is not offered). */
+	private static final int[] SCREEN_VALUES = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12 };
 	private static final String[] OFF_ON = { "Off", "On" };
 	private static final String[] HOLD_TOGGLE = { "Hold", "Toggle" };
 	private static final int[] FF_VALUES = { 15, 20, 30, 40, 60, 80, 100, 160 };
@@ -263,6 +265,19 @@ final class GsrMenu {
 		return choice(label, setting, v, labels);
 	}
 
+	/** An Off/On switch of the game's own options (upstream's F1 Game page), saved with the game. */
+	private Row gameOption(String label, final String key, final int fallback) {
+		Row r = new Row(label) {
+			@Override String value() { return OFF_ON[GsrNative.gameOption(key, fallback) != 0 ? 1 : 0]; }
+			@Override void step(int dir) {
+				GsrNative.setGameOption(key, GsrNative.gameOption(key, fallback) != 0 ? 0 : 1);
+				refresh();
+			}
+		};
+		r.refresh();
+		return r;
+	}
+
 	private static final String[] ORIENTATION = { "Landscape", "Portrait" };
 
 	/** Landscape (the default) or Portrait with the touch controls below the picture. The menu reopens upright. */
@@ -383,7 +398,7 @@ final class GsrMenu {
 		renderer();
 		choice("Scaling", GsrNative.SCALE_MODE, SCALE);
 		choice("Pixels", GsrNative.FILTER, FILTER);
-		choice("Screen color", GsrNative.SCREEN, SCREEN);
+		choice("Screen color", GsrNative.SCREEN, SCREEN_VALUES, SCREEN);
 		// Listed in this order; the stored values are 0 off, 1 LCD, 2 CRT, 4 scanlines, 3 xBR.
 		choice("Screen filter", GsrNative.SCREEN_FILTER, new int[] { 0, 1, 2, 4, 3 },
 				new String[] { "Off", "LCD", "CRT", "Scanlines", "Smooth (xBR)" });
@@ -441,6 +456,8 @@ final class GsrMenu {
 		action("Cheats", ">", new Runnable() {
 			@Override public void run() { showCheats(); }
 		});
+		gameOption("Enemy HP bar", "EnemyHpBar", 0);
+		gameOption("Custom Battle Mode", "CustomBattle", 1);
 		action("Resume", "", new Runnable() {
 			@Override public void run() { close(); }
 		});
@@ -513,13 +530,12 @@ final class GsrMenu {
 	private static final int STATE_SLOTS = 3;
 
 	/** True when this screen plays The Lost Age (the launcher's unit). */
-	private boolean tla() {
-		return activity.getIntent().getIntExtra(wootbeer.descore.DescoreGameActivity.EXTRA_UNIT_ID,
-				GsrConfig.UNIT_GAME) == GsrConfig.UNIT_TLA;
-	}
+	private boolean tla() { return GsrConfig.isTla(unit()); }
+	/** The launcher unit: the game and its language. */
+	private int unit() { return GsrConfig.unitOf(activity); }
 
 	/** This game's folder under files/gsr and the name its ROM is stored under there. */
-	private String gameDir() { return tla() ? "gsr/tla/" : "gsr/game/"; }
+	private String gameDir() { return "gsr/" + GsrConfig.dirName(tla(), GsrConfig.lang(unit())) + "/"; }
 	private String romName() { return tla() ? GsrConfig.TLA_ROM_NAME : GsrConfig.ROM_NAME; }
 
 	/** The engine writes slot n beside the ROM as <rom>.state<n> (runtime.cpp slot_path). */
@@ -599,11 +615,11 @@ final class GsrMenu {
 				.format(new java.util.Date(f.lastModified()));
 	}
 
-	private String gameTitle() { return tla() ? "The Lost Age" : "Golden Sun"; }
+	private String gameTitle() { return GsrConfig.title(tla(), GsrConfig.lang(unit())); }
 
 	private void showSaves() {
 		clear("Saves", 5);
-		final java.io.File cur = saves().saveFile(tla());
+		final java.io.File cur = saves().saveFile(unit());
 		final boolean have = cur.isFile() && cur.length() > 0;
 		section(gameTitle() + " save  (" + (have ? "saved " + when(cur) : "none yet") + ")");
 		Row export = action("Export save...", "", new Runnable() {
@@ -612,7 +628,7 @@ final class GsrMenu {
 				android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
 				i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
 				i.setType("application/octet-stream");
-				i.putExtra(android.content.Intent.EXTRA_TITLE, GsrSaves.saveName(tla()));
+				i.putExtra(android.content.Intent.EXTRA_TITLE, GsrSaves.saveName(unit()));
 				startForResult(i, REQUEST_EXPORT);
 			}
 		});
@@ -636,7 +652,31 @@ final class GsrMenu {
 						.show();
 			}
 		});
-		final java.io.File[] old = saves().backups(tla());
+		final java.io.File english = saves().saveFile(GsrConfig.unitId(tla(), 0));
+		if (GsrConfig.lang(unit()) != 0 && english.isFile() && english.length() > 0) {
+			action("Copy the USA/Europe save", "", new Runnable() {
+				@Override public void run() {
+					new AlertDialog.Builder(activity)
+							.setTitle("Copy the USA/Europe save?")
+							.setMessage("Your " + GsrConfig.title(tla(), 0) + " (USA/Europe) save, from "
+									+ when(english) + ", replaces the save here. The current one is kept as a "
+									+ "backup.\n\nThe game closes afterwards. Open it again to play.")
+							.setNegativeButton("Cancel", null)
+							.setPositiveButton("Copy", new DialogInterface.OnClickListener() {
+								@Override public void onClick(DialogInterface d, int w) {
+									try {
+										saves().copyFromEnglish(unit());
+										closeGame("Save copied.");
+									} catch (java.io.IOException e) {
+										Toast.makeText(activity, "Could not copy: " + e.getMessage(), Toast.LENGTH_LONG).show();
+									}
+								}
+							})
+							.show();
+				}
+			});
+		}
+		final java.io.File[] old = saves().backups(unit());
 		if (old.length > 0) {
 			action("Restore a backup...", "", new Runnable() {
 				@Override public void run() { chooseBackup(old); }
@@ -649,7 +689,7 @@ final class GsrMenu {
 				startForResult(new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_BACKUP_ALL);
 			}
 		});
-		info("Copies both games' saves into a new folder in the place you pick (for example Downloads, or a "
+		info("Copies all your saves (both games, every language) into a new folder in the place you pick (for example Downloads, or a "
 				+ "cloud drive), so they survive uninstalling the app. Save states are not included.", DIM, 13);
 		section("");
 		backRow();
@@ -679,7 +719,7 @@ final class GsrMenu {
 								.setPositiveButton("Restore", new DialogInterface.OnClickListener() {
 									@Override public void onClick(DialogInterface d2, int w) {
 										try {
-											saves().restore(tla(), old[which]);
+											saves().restore(unit(), old[which]);
 											closeGame("Save restored.");
 										} catch (java.io.IOException e) {
 											Toast.makeText(activity, "Could not restore: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -715,10 +755,10 @@ final class GsrMenu {
 		if (uri == null) return true;
 		try {
 			if (requestCode == REQUEST_EXPORT) {
-				saves().exportTo(tla(), uri);
+				saves().exportTo(unit(), uri);
 				Toast.makeText(activity, "Save exported", Toast.LENGTH_SHORT).show();
 			} else if (requestCode == REQUEST_IMPORT) {
-				saves().importFrom(tla(), uri);
+				saves().importFrom(unit(), uri);
 				closeGame("Save imported.");
 			} else {
 				int n = saves().backupAllTo(uri);

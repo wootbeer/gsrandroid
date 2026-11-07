@@ -56,7 +56,8 @@ void refresh_lut() {
     const int kind = gsr_settings_get(GSR_S_SCREEN);
     if (kind == g.lut_kind && g.lut) return;
     runtime::ColorSettings cs;
-    cs.screen = static_cast<runtime::ScreenKind>(std::clamp(kind, 0, 10));  // Raw..Deep (Custom needs sliders)
+    // Raw..Deep, and David's OG GBA (12); Custom (11) needs sliders, so it is not offered.
+    cs.screen = static_cast<runtime::ScreenKind>(kind == 12 ? 12 : std::clamp(kind, 0, 10));
     g.lut = std::make_unique<runtime::ColorLut>(cs);
     g.lut_kind = kind;
 }
@@ -265,6 +266,7 @@ void HostWindow::push_audio_samples_stereo(const int16_t* samples, std::size_t c
     gsr_host_audio_push(samples, static_cast<int>(count));
 }
 
+void HostWindow::apply_preference_hotkeys(const Events&) {}  // no keyboard shortcuts; the side menu owns these
 void HostWindow::set_turbo_audio_muted(bool on) {
     if (g.turbo_muted != on) gsr_host_audio_reset();
     g.turbo_muted = on;

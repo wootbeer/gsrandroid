@@ -35,7 +35,7 @@
 // Before that the projection 0x08015778 hides anything beyond the far depth
 // [0x030011E8] (1020; near [0x030011E4] 255), which on the console is about
 // its top row, so objects in the top margin went early (F12 0064/0065, top
-// right). On the world map (map 2, every world-map F12) in the expanded view
+// right). On the world map (maps 2 and 3, tla_world_map.h) in the expanded view
 // the far test (`bgt` 0x080157A2) never hides; the widened y test above
 // decides what fits the view instead.
 //
@@ -46,6 +46,7 @@
 // and _y_provider) and gets them back from the record that holds that raw
 // position, or placed it there in the last few frames.
 
+#include "tla_rom_version.h"
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -59,43 +60,44 @@
 #include "runtime_bus_bridge.h"
 #include "tile_ring_redraw.h"
 #include "tla.h"
+#include "tla_world_map.h"
 
 namespace {
 
 constexpr uint32_t kFieldStatePointer = 0x03000020u;
 constexpr uint32_t kMapNumber = 0x02000428u;
 
-constexpr uint32_t kFollowStoreX = 0x0802AE9Cu, kFollowStoreY = 0x0802AE9Eu;
-constexpr uint32_t kClampStoreX = 0x0802B006u, kClampStoreY = 0x0802B010u;
-constexpr uint32_t kCameraYLimit = 0x0802AE80u;
+const uint32_t kFollowStoreX = TLA_ROM(0x0802AE9Cu), kFollowStoreY = TLA_ROM(0x0802AE9Eu);
+const uint32_t kClampStoreX = TLA_ROM(0x0802B006u), kClampStoreY = TLA_ROM(0x0802B010u);
+const uint32_t kCameraYLimit = TLA_ROM(0x0802AE80u);
 
-constexpr uint32_t kPreCullOffsetX = 0x08023940u;  // 0x001FFFFF: 32 << 16, - 1
-constexpr uint32_t kPreCullRangeX = 0x08023944u;   // 0x012FFFFE
-constexpr uint32_t kPreCullMinY = 0x0802394Cu;     // 0xFFE00000: -32 << 16
-constexpr uint32_t kPreCullMaxY = 0x08023954u;     // 0x00DFFFFF: 224 << 16, - 1
+const uint32_t kPreCullOffsetX = TLA_ROM(0x08023940u);  // 0x001FFFFF: 32 << 16, - 1
+const uint32_t kPreCullRangeX = TLA_ROM(0x08023944u);   // 0x012FFFFE
+const uint32_t kPreCullMinY = TLA_ROM(0x0802394Cu);     // 0xFFE00000: -32 << 16
+const uint32_t kPreCullMaxY = TLA_ROM(0x08023954u);     // 0x00DFFFFF: 224 << 16, - 1
 
 // The Lash rope's segments (0x080D9B80, 8x8 OBJs, tile 0x18C; F4 state 3
 // walking right): the same four literals, loaded at these four `ldr`s,
 // x in r0 and y in r2 (16.16); the segment is placed when the last test,
 // `bgt` 0x080D9C80, is not taken, its record at r5 + 0x14 (attrs at +4).
-constexpr uint32_t kRopeOffsetX = 0x080D9C68u, kRopeRangeX = 0x080D9C70u;
-constexpr uint32_t kRopeMinY = 0x080D9C76u, kRopeMaxY = 0x080D9C7Cu;
-constexpr uint32_t kRopePlaced = 0x080D9C80u;
+const uint32_t kRopeOffsetX = TLA_ROM(0x080D9C68u), kRopeRangeX = TLA_ROM(0x080D9C70u);
+const uint32_t kRopeMinY = TLA_ROM(0x080D9C76u), kRopeMaxY = TLA_ROM(0x080D9C7Cu);
+const uint32_t kRopePlaced = TLA_ROM(0x080D9C80u);
 // The Lash rope's coil (10 rotated 8x8 OBJs, tile 0x1B6; F2 state 1 of
 // 2026-10-09, a write watch on a piece's attrs caught 0x080D8B2C): the same
 // literals and tests in its own loop, x in r0, y in r2, record r5 + 0x14.
 // Nothing recorded its placement, so in the bottom margin its raw Y read as
 // above the screen and the coil vanished (F12 0107/0108, 0112/0113).
-constexpr uint32_t kCoilOffsetX = 0x080D8AE0u, kCoilRangeX = 0x080D8AEAu;
-constexpr uint32_t kCoilMinY = 0x080D8AF0u, kCoilMaxY = 0x080D8AF6u;
-constexpr uint32_t kCoilPlaced = 0x080D8AFAu;
+const uint32_t kCoilOffsetX = TLA_ROM(0x080D8AE0u), kCoilRangeX = TLA_ROM(0x080D8AEAu);
+const uint32_t kCoilMinY = TLA_ROM(0x080D8AF0u), kCoilMaxY = TLA_ROM(0x080D8AF6u);
+const uint32_t kCoilPlaced = TLA_ROM(0x080D8AFAu);
 
 // Climbing vines use the same four cull literals in their own segment loop.
 // F12 0081 f119: 0x080DAAB0 rejects the head at y=-40 before its -8 anchor
 // adjustment, leaving the five lower pieces. Its record is also r5+0x14.
-constexpr uint32_t kVineOffsetX = 0x080DABA4u, kVineRangeX = 0x080DABACu;
-constexpr uint32_t kVineMinY = 0x080DABB4u, kVineMaxY = 0x080DABBAu;
-constexpr uint32_t kVinePlaced = 0x080DABBEu;
+const uint32_t kVineOffsetX = TLA_ROM(0x080DABA4u), kVineRangeX = TLA_ROM(0x080DABACu);
+const uint32_t kVineMinY = TLA_ROM(0x080DABB4u), kVineMaxY = TLA_ROM(0x080DABBAu);
+const uint32_t kVinePlaced = TLA_ROM(0x080DABBEu);
 
 // Field effect sprites (0x080EB01C, 27 callers 0x080D1E0E..0x080EBB3A; the
 // summon tablet's letters, F12 0155): record r7, attrs at +4, screen x/y
@@ -104,15 +106,15 @@ constexpr uint32_t kVinePlaced = 0x080DABBEu;
 // (`ble`), r6 > 159 (`bgt`), the console's screen exactly (measured: left
 // 239 drawn, 240 dropped; top -7 drawn, -8 dropped). The letters' loop ran to
 // x 270 and was cut at the screen's right edge.
-constexpr uint32_t kEffectLeft = 0x080EB22Au, kEffectRight = 0x080EB22Eu;
-constexpr uint32_t kEffectTop = 0x080EB236u, kEffectBottom = 0x080EB23Au;
+const uint32_t kEffectLeft = TLA_ROM(0x080EB22Au), kEffectRight = TLA_ROM(0x080EB22Eu);
+const uint32_t kEffectTop = TLA_ROM(0x080EB236u), kEffectBottom = TLA_ROM(0x080EB23Au);
 
 // ROM 0x0801401C computes one four-halfword OBJ transform. At 0x0801403E
 // it rejects allocation 32 and returns slot 31, even if that slot belongs
 // to a different rotation (0085: the bottom vine tips). Reuse byte-identical
 // completed transforms so margin pieces do not exhaust the hardware slots.
-constexpr uint32_t kMatrixCapacity = 0x0801403Eu;
-constexpr uint32_t kVineMatrixReturn = 0x080DAC3Cu;
+const uint32_t kMatrixCapacity = TLA_ROM(0x0801403Eu);
+const uint32_t kVineMatrixReturn = TLA_ROM(0x080DAC3Cu);
 constexpr uint32_t kMatrixCount = 0x030011FCu, kMatrixData = 0x020054D0u;
 struct MatrixPending {
     uint32_t return_pc = 0, depth = 0, index = 0;
@@ -120,15 +122,14 @@ struct MatrixPending {
 RuntimeCallReturnHook g_next_call_return = nullptr;
 
 // Builder tests: body x (r6), body y (r4), shadow y (r4).
-constexpr uint32_t kBodyX1 = 0x080222B2u, kBodyY1 = 0x080222B6u, kShadowY1 = 0x080221C8u;
-constexpr uint32_t kBodyX2 = 0x080224ECu, kBodyY2 = 0x080224F0u, kShadowY2 = 0x08022402u;
+const uint32_t kBodyX1 = TLA_ROM(0x080222B2u), kBodyY1 = TLA_ROM(0x080222B6u), kShadowY1 = TLA_ROM(0x080221C8u);
+const uint32_t kBodyX2 = TLA_ROM(0x080224ECu), kBodyY2 = TLA_ROM(0x080224F0u), kShadowY2 = TLA_ROM(0x08022402u);
 
 // Affine builder tests (r3 = x + 0x20, y + 0x20) and its record store.
-constexpr uint32_t kAffineX = 0x08022592u, kAffineY = 0x0802259Cu;
-constexpr uint32_t kAffinePlaced = 0x080226B4u;
-constexpr uint32_t kNearClip = 0x0801579Cu;
-constexpr uint32_t kFarClip = 0x080157A2u;
-constexpr uint16_t kWorldMap = 2u;
+const uint32_t kAffineX = TLA_ROM(0x08022592u), kAffineY = TLA_ROM(0x0802259Cu);
+const uint32_t kAffinePlaced = TLA_ROM(0x080226B4u);
+const uint32_t kNearClip = TLA_ROM(0x0801579Cu);
+const uint32_t kFarClip = TLA_ROM(0x080157A2u);
 
 // Draw order. Every object record goes into one of 256 depth lists
 // (heads 0x02003010, occupancy bits 0x03001190), which the OAM flush walks
@@ -142,8 +143,8 @@ constexpr uint16_t kWorldMap = 2u;
 // 31 and 47, drawn right). In the expanded view both spread the view's own
 // key range, -top .. 239 + bottom, over the 256 lists, keeping their order
 // (keys closer than about 1.6 can share a list).
-constexpr uint32_t kDepthClampCharacters = 0x080140DEu;
-constexpr uint32_t kDepthClampAll = 0x0801412Eu;
+const uint32_t kDepthClampCharacters = TLA_ROM(0x080140DEu);
+const uint32_t kDepthClampAll = TLA_ROM(0x0801412Eu);
 
 // How far past the view's edge characters are still drawn.
 constexpr int kSlack = 32;
@@ -247,6 +248,7 @@ struct CameraHold {
     uint16_t map = 0;
     int32_t lo = 0, edge = 0;            // bounds at the last store
     int32_t held_lo = 0, held_edge = 0;  // bounds when the hold began
+    bool widened = false;                // held_* valid, hold over or not
     int32_t travel_lo = 0, travel_hi = 0;  // requests seen since then
     int32_t offset = 0;                  // written - requested
     bool kept = false;
@@ -315,14 +317,26 @@ int32_t held_camera(gba::GbaBus* b, bool x, int32_t requested, int32_t ruled,
         const bool returned = h.kept && lo == h.kept_lo && edge == h.kept_edge;
         if (h.kept && (h.kept_ends(lo, edge) || jumped))
             h.kept = false;
-        if (h.holding && h.hold_ends(lo, edge))
+        // The held bounds again: the room is back as it was before the hold,
+        // so the rule for it applies, not the wider bounds kept (F12
+        // tla_rewind_0165, map 287: casting Grind set 32..416 to 0..1024 and
+        // back, and the kept 0..1024 left the camera on Felix, off the room).
+        // Also once the hold has let go: a hold with no offset ends on its
+        // first store (0178, map 292: Tremor on nothing, y 48..496 -> 0..1024
+        // -> 48..496 kept 0..1024 and the view left the room).
+        bool restored = false;
+        if (h.widened && h.hold_ends(lo, edge)) {
+            restored = lo == h.held_lo && edge == h.held_edge;
+            h.widened = false;
             h.holding = false;
+        }
         const bool changed = lo != h.lo || edge != h.edge;
         // Only in plain view: 0014 f89 sets a new room's bounds inside the
         // old 0..512 with the field layers off (DISPCNT 0x0140, faded out);
         // 0136 f24 has them on (0x1F40).
         const bool field_shown = (b->read16(0x04000000u) & 0x0C00u) == 0x0C00u;
-        if (!h.kept && !h.holding && !returned && !jumped && changed && field_shown &&
+        if (!h.kept && !h.holding && !returned && !restored && !jumped && changed &&
+            field_shown &&
             lo >= h.lo && edge <= h.edge) {
             h.kept = true;
             h.kept_lo = h.lo;
@@ -331,8 +345,11 @@ int32_t held_camera(gba::GbaBus* b, bool x, int32_t requested, int32_t ruled,
         if (!h.holding && !h.kept && !returned && changed &&
             lo <= h.lo && edge >= h.edge) {
             h.holding = true;
-            h.held_lo = h.lo;
-            h.held_edge = h.edge;
+            if (!h.widened) {
+                h.widened = true;
+                h.held_lo = h.lo;
+                h.held_edge = h.edge;
+            }
             h.travel_lo = h.travel_hi = requested;
         }
         h.lo = lo;
@@ -415,15 +432,12 @@ int precull_literal(uint32_t pc, uint32_t original, uint32_t* out_value) {
     const uint32_t left = static_cast<uint32_t>(32 + v.left + kSlack);
     const uint32_t right = static_cast<uint32_t>(272 + v.right + kSlack);
     const uint32_t offset = (left << 16) - 1u;
-    switch (pc) {
-    case kPreCullOffsetX: *out_value = offset; break;
-    case kPreCullRangeX: *out_value = offset + (right << 16) - 1u; break;
-    case kPreCullMinY:
+    if (pc == kPreCullOffsetX) *out_value = offset;
+    else if (pc == kPreCullRangeX) *out_value = offset + (right << 16) - 1u;
+    else if (pc == kPreCullMinY) {
         *out_value = static_cast<uint32_t>(-(32 + v.top + kSlack)) << 16;
-        break;
-    default:
+    } else {
         *out_value = (static_cast<uint32_t>(224 + v.bottom + kSlack) << 16) - 1u;
-        break;
     }
     return 1;
 }
@@ -525,7 +539,7 @@ int world_range_branch(uint32_t pc, uint32_t original, uint32_t* out) {
     }
     gba::GbaBus* b = bus();
     if (!b || !expanded(v) || !field_running(b) ||
-        b->read16(kMapNumber) != kWorldMap ||
+        !tla_world_map(b->read16(kMapNumber)) ||
         b->read32(live_pc - 2u) != signature ||
         b->read32(0x0200B8C8u) != 0xFF600000u ||
         b->read32(0x0200B8CCu) != 0xFED40000u) return 0;
@@ -598,7 +612,7 @@ void note_rainbow_placement() {
         b->read32(0x02009700u) != 0x3C080040u ||
         b->read32(0x02009718u) != 0x33FF005Bu ||
         b->read32(0x02009744u) != 0x19834658u ||
-        b->read32(0x02009C40u) != 0x080001E9u)
+        b->read32(0x02009C40u) != TLA_ROM(0x080001E9u))
         return;
     const uint32_t record = g_cpu.R[0];
     if (record < 0x02000014u || record > 0x0203FFF4u) return;
@@ -621,7 +635,7 @@ bool jump_pad_image(gba::GbaBus* b) {
         b->read32(0x0200B21Cu) == 0x3024401Cu &&
         b->read32(0x0200B244u) == 0x990262ECu &&
         b->read32(0x0200B26Cu) == 0xFFFF0000u &&
-        b->read32(0x0200BC98u) == 0x080001E9u;
+        b->read32(0x0200BC98u) == TLA_ROM(0x080001E9u);
 }
 
 // F12 0108/0109 and 0112/0113 carry the same pad and sparkle emitters
@@ -807,6 +821,62 @@ int pillar_top_branch(uint32_t pc, uint32_t original, uint32_t* out) {
     return *out != original;
 }
 
+// F12 tla_rewind_0173 (map 292, Mars Lighthouse): the room's own Thumb
+// routine (0x0200A42C there) times up to four emitters, such as the dragon
+// head sliding along the top bar, and fires one's action every 8 frames, but
+// only while it is near the console's screen: x + 7 not above 334 unsigned,
+// row above -48 and not above 239. Extra Wide holds the camera 80 rows lower
+// in that room, so the head sat beyond -48 and never spat fire. Extend those
+// tests by the view's margins. The same code also loads at 0x0200A0EC; its
+// test section (+0xB0..+0xE6) is byte-identical there (self-heal cache), so
+// it is found from the branch by those words, not by room or address.
+struct EmitterSite {
+    uint32_t offset;    // from the routine's start
+    uint16_t opcode;
+};
+constexpr EmitterSite kEmitterSites[] = {
+    {0xD8u, 0xD840u},   // x + 7 against 334
+    {0xE0u, 0xDD3Cu},   // row <= -48
+    {0xE4u, 0xDC3Au},   // row > 239
+};
+
+bool emitter_image(gba::GbaBus* b, uint32_t start) {
+    return b->read32(start + 0xB0u) == 0x464968AAu &&
+        b->read32(start + 0xCCu) == 0xD10A2C00u &&
+        b->read32(start + 0xD0u) == 0x22A71DD3u &&
+        b->read32(start + 0xD4u) == 0x42930052u &&
+        b->read32(start + 0xD8u) == 0x2330D840u &&
+        b->read32(start + 0xDCu) == 0x4299425Bu &&
+        b->read32(start + 0xE0u) == 0x29EFDD3Cu &&
+        b->read16(start + 0xE4u) == 0xDC3Au;
+}
+
+int emitter_range_branch(uint32_t pc, uint32_t original, uint32_t* out) {
+    if (pc < 0x02000000u || pc >= 0x02040000u) return -1;
+    const uint32_t live_pc = g_runtime_image_base + (pc - 0x02000000u);
+    gba::GbaBus* b = bus();
+    if (!b || live_pc < 0x02000100u || live_pc >= 0x0203FE00u) return -1;
+    const EmitterSite* site = nullptr;
+    const uint16_t opcode = b->read16(live_pc);
+    for (const EmitterSite& s : kEmitterSites)
+        if (s.opcode == opcode && emitter_image(b, live_pc - s.offset)) {
+            site = &s;
+            break;
+        }
+    if (!site) return -1;
+    const View v = view();
+    if (!expanded(v) || !field_running(b)) return 0;
+    const int row = static_cast<int32_t>(g_cpu.R[1]);
+    if (site->offset == 0xD8u)
+        *out = g_cpu.R[3] + static_cast<uint32_t>(v.left) >
+               334u + static_cast<uint32_t>(v.left + v.right);
+    else if (site->offset == 0xE0u)
+        *out = row <= -48 - v.top;
+    else
+        *out = row > 239 + v.bottom;
+    return *out != original;
+}
+
 // Field effect sprites (kEffectLeft..kEffectBottom): taken drops the sprite.
 // The view's margins widen each test; a sprite kept past the last one is
 // placed, so its real position is recorded.
@@ -818,12 +888,10 @@ int effect_branch(uint32_t pc, uint32_t original, uint32_t* out_decision) {
     const int left = static_cast<int32_t>(g_cpu.R[5]);
     const int top = static_cast<int32_t>(g_cpu.R[6]);
     bool drop = false;
-    switch (pc) {
-    case kEffectLeft: drop = r3 < -(v.left + kSlack); break;
-    case kEffectRight: drop = left > 239 + v.right + kSlack; break;
-    case kEffectTop: drop = r3 <= -(v.top + kSlack); break;
-    default: drop = top > 159 + v.bottom + kSlack; break;
-    }
+    if (pc == kEffectLeft) drop = r3 < -(v.left + kSlack);
+    else if (pc == kEffectRight) drop = left > 239 + v.right + kSlack;
+    else if (pc == kEffectTop) drop = r3 <= -(v.top + kSlack);
+    else drop = top > 159 + v.bottom + kSlack;
     if (pc == kEffectBottom && !drop) note_placed(g_cpu.R[7], left, top);
     *out_decision = drop ? 1u : 0u;
     return *out_decision != original ? 1 : 0;
@@ -850,6 +918,8 @@ int builder_branch(uint32_t pc, uint32_t original, uint32_t* out_decision) {
     if (const int result = world_range_branch(pc, original, out_decision);
         result >= 0) return result;
     if (const int result = pillar_top_branch(pc, original, out_decision);
+        result >= 0) return result;
+    if (const int result = emitter_range_branch(pc, original, out_decision);
         result >= 0) return result;
     if (const int result = tla_sprite_memory_branch(pc, original, out_decision);
         result >= 0) return result;
@@ -883,7 +953,7 @@ int builder_branch(uint32_t pc, uint32_t original, uint32_t* out_decision) {
     }
     if (pc == kNearClip || pc == kFarClip) {
         gba::GbaBus* b = bus();
-        if (!expanded(view()) || !b || b->read16(kMapNumber) != kWorldMap ||
+        if (!expanded(view()) || !b || !tla_world_map(b->read16(kMapNumber)) ||
             !field_running(b))
             return 0;
         // The old depth planes fit the console view. The widened builder
@@ -1001,6 +1071,9 @@ extern "C" int tla_obj_x_provider(int /*oam_index*/, uint16_t attr0,
 // before OAM drops them (tla_rewind_0047 frame 105).
 extern "C" int tla_obj_tile_provider(int /*oam_index*/, uint16_t attr0,
                                      uint16_t attr1, uint16_t attr2) {
+    // Battles place nothing; their page sprites carry a marker.
+    if (const int battle = tla_sprite_memory_battle_tile(attr0, attr2); battle >= 0)
+        return battle;
     const Placement* p = placement_for(attr0, attr1, attr2);
     if (!p || !p->uses_tile_grant) return -1;
     if (const int now = tla_sprite_memory_tile(p->record, attr2); now >= 0)
@@ -1050,12 +1123,12 @@ bool tla_camera_kept_bounds(bool kept[2], int lo[2], int edge[2]) {
 // row; tiles are `lsr #19` (0x0802AEEC/F8). Repaint after a jump:
 // tile_ring_redraw.h.
 namespace {
-gsr::TileRingRedraw g_tile_rings({kFieldStatePointer, 0x108u, 0x38u, 0x0802ABBCu, kMapNumber,
+gsr::TileRingRedraw g_tile_rings({kFieldStatePointer, 0x108u, 0x38u, TLA_ROM(0x0802ABBCu), kMapNumber,
                                   false});
 }  // namespace
 
 void tla_widescreen_on_entry(std::uint32_t pc) {
-    if (pc == 0x0802AD84u) g_tile_rings.on_follow_entry();
+    if (pc == TLA_ROM(0x0802AD84u)) g_tile_rings.on_follow_entry();
 }
 
 // Called by the graphics card's capture (src/tla_gpu_field.cpp) each frame:

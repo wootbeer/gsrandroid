@@ -19,6 +19,7 @@
 //   `bgt 0x081C0776` at 0x081C079C. Taking the branch and storing 0 there
 //   silences a voice (config/tla/main.toml).
 
+#include "tla_rom_version.h"
 #include <cstdint>
 
 #include "local_music_m4a.h"
@@ -26,17 +27,24 @@
 #include "runtime_arm.h"
 #include "tla.h"
 #include "tla_local_music_tracks.h"
+#include "../../shared_game/area_music.h"
 
 namespace {
 
-constexpr gbarecomp::m4a_music::Player kPlayer{
+const gbarecomp::m4a_music::Player kPlayer{
     0x02006A90u, 0x02006CE0u, 10u, 0x50u,
-    0x081C09D0u,                     // main routine
-    0x081C2740u,                     // MPlayStart's accepted header store
-    {0x081C078Eu, 1u, 0x081C0772u},  // left: BGT taken reaches MOVS #255
-    {0x081C079Cu, 1u, 0x081C0776u}}; // right
+    TLA_ROM(0x081C09D0u),                     // main routine
+    TLA_ROM(0x081C2740u),                     // MPlayStart's accepted header store
+    {TLA_ROM(0x081C078Eu), 1u, TLA_ROM(0x081C0772u)},  // left: BGT taken reaches MOVS #255
+    {TLA_ROM(0x081C079Cu), 1u, TLA_ROM(0x081C0776u)}}; // right
 gbarecomp::m4a_music::Replacement g_music{kPlayer, tla_local_music::recordings.data(),
                                           tla_local_music::recordings.size()};
+// All five verified revisions: MPlayStart's accepted store is entry + 0x4C.
+// Location-name offsets are identical; translated text starts 0x1CD IDs later.
+gsr::area_music::Controller g_choices{g_music, kPlayer, kPlayer.header_store - 0x4Cu,
+    TLA_ROM(0x08013560u), // frame function entry; 0x080134B8 is an interior wait-path branch
+    tla_local_music::recordings.data(), tla_local_music::recordings.size(),
+    tla_rom::version() == tla_rom::Version::English ? 0xE58u : 0x1025u, tla_local_music::battle_tracks};
 
 int (*g_next_branch)(uint32_t, uint32_t, uint32_t*) = nullptr;
 int (*g_next_alu_immediate)(uint32_t, uint32_t, uint32_t*) = nullptr;
@@ -55,6 +63,7 @@ int music_alu_immediate(uint32_t pc, uint32_t original, uint32_t* out_value) {
 // Only observes the header store; the write itself is unchanged.
 int music_write(uint32_t pc, uint32_t addr, uint32_t requested, uint32_t width,
                 uint32_t* out_value) {
+    g_choices.header_write(pc, addr, requested, width);
     g_music.header_write(pc, addr, requested, width);
     return g_next_write_override
                ? g_next_write_override(pc, addr, requested, width, out_value)
@@ -63,13 +72,14 @@ int music_write(uint32_t pc, uint32_t addr, uint32_t requested, uint32_t width,
 
 }  // namespace
 
-void tla_local_music_on_entry(uint32_t pc) { g_music.on_entry(pc); }
+void tla_local_music_on_entry(uint32_t pc) { g_choices.on_entry(pc); g_music.on_entry(pc); }
 
-void tla_local_music_on_savestate_load() { g_music.update(true); }
+void tla_local_music_on_savestate_load() { g_choices.on_load(); g_music.update(true); }
 
 // Chains in front of the hooks already in RunOptions and the write override.
 // Always installed: F1 > Audio can switch the Music mod on mid-game.
 void tla_install_local_music(gbarecomp::RunOptions& options) {
+    g_choices.install();
     g_next_branch = options.conditional_branch_override;
     options.conditional_branch_override = music_branch;
     g_next_alu_immediate = options.thumb_alu_immediate_override;

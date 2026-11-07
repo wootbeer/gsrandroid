@@ -242,6 +242,16 @@ void gsr_host_set_menu_open(int open) { g_menu_open.store(open ? 1 : 0); }
 static std::atomic<int> g_top_inset{0};
 void gsr_host_set_top_inset(int px) { g_top_inset.store(px > 0 ? px : 0); }
 int gsr_host_portrait_top(int w, int h) { return w > 0 && h > w ? g_top_inset.load() : 0; }
+// The game's own options (game_options.ini in its run folder: the switches upstream puts on F1's Game page).
+extern "C++" {
+namespace gbarecomp {
+int game_option_get(const char* key, int fallback);
+void game_option_set(const char* key, int value);
+}
+}
+int gsr_host_game_option_get(const char* key, int fallback) { return gbarecomp::game_option_get(key, fallback); }
+void gsr_host_game_option_set(const char* key, int value) { gbarecomp::game_option_set(key, value); }
+
 int gsr_host_portrait_picture_h(int w, int h) {
     if (w <= 0 || h <= w) return 0;
     h -= g_top_inset.load();

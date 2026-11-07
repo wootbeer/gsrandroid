@@ -22,7 +22,8 @@
 //   @error <text>
 //
 // Layout (all overridable): <root>/builder/gsr_builder.exe, with data/,
-// engine/, mingw64/ (the compiler), gba_recompile.exe beside it; the DLL
+// engine/ and gba_recompile.exe beside it; the compiler is the shared
+// games/mingw64 (bundled_toolchain.h; on Linux builder/toolchain/); the DLL
 // goes to <root>.
 #ifdef _WIN32
 #include <windows.h>
@@ -56,9 +57,14 @@
 #include <vector>
 
 #include "block_timing.h"
+#include "build_record.h"
 #include "guest_call.h"
 #include "sha1.h"
 #include "any_rom.h"
+#include "../launcher/build_resources.h"
+#ifdef _WIN32
+#include "bundled_toolchain.h"
+#endif
 
 namespace fs = std::filesystem;
 using gsr::builder::GuestMachine;
@@ -76,8 +82,26 @@ bool gsr_android_compile_and_link(const std::string& gen, const std::string& out
 
 namespace {
 
+// A ROM revision this release builds, from the game's revision list: its
+// language code (its folder under data/, configs from
+// tools/build_localized_*.py; USA/Europe uses data/ itself) and the two ROM
+// routines the stamp step runs, measured per revision.
+struct RomRevision {
+    const char* code;
+    const char* sha1;
+    std::uint32_t stamp_builder, stamp_allocator;
+};
+#define GSR_ROM_REVISION(code, name, sha1, stamp_builder, stamp_allocator)     {code, sha1, stamp_builder, stamp_allocator},
+
 #ifdef GSR_BUILDER_TLA
-constexpr const char* kRomSha1 = "b500663220cb9bf56b9f8e8c0c544f1d6fa3a824";
+constexpr RomRevision kRevisions[] = {
+#ifdef GSR_ANDROID_INPROCESS  // GSR_ANDROID: the games are vendored as tbs/ and tla/
+#include "../tla/src/tla_rom_revisions.inc"
+#else
+#include "../The Lost Age/src/tla_rom_revisions.inc"
+#endif
+};
+constexpr const char* kRomSha1 = kRevisions[0].sha1;
 constexpr const char* kApiLibrary = "libTLARecomp_api.a";
 constexpr const char* kBuildStamp = "TLAGame.build.txt";
 constexpr const char* kDefFile = "TLAGame.def";
@@ -85,7 +109,14 @@ constexpr const char* kConfigFile = "main.toml";
 constexpr const char* kGameName = "Golden Sun: The Lost Age (USA, Europe)";
 constexpr const char* kBuilderName = "tla_builder";
 #else
-constexpr const char* kRomSha1 = "5c4695205413df7db52b9a184815a07783999971";
+constexpr RomRevision kRevisions[] = {
+#ifdef GSR_ANDROID_INPROCESS  // GSR_ANDROID
+#include "../tbs/src/rom_revisions.inc"
+#else
+#include "../The Broken Seal/src/rom_revisions.inc"
+#endif
+};
+constexpr const char* kRomSha1 = kRevisions[0].sha1;
 constexpr const char* kApiLibrary = "libGoldenSunRecomp_api.a";
 constexpr const char* kBuildStamp = "GoldenSunGame.build.txt";
 constexpr const char* kDefFile = "GoldenSunGame.def";
@@ -93,7 +124,7 @@ constexpr const char* kConfigFile = "game_code_plan.txt";
 constexpr const char* kGameName = "Golden Sun (USA, Europe)";
 constexpr const char* kBuilderName = "gsr_builder";
 #endif
-constexpr const char* kBuilderVersion = "2";  // 2: block timing (block_timing.cpp)
+#undef GSR_ROM_REVISION
 
 // File names that differ between the Windows and Linux releases. The engine
 // is a plug-in beside the game program on Windows, the program on Linux.
@@ -359,6 +390,7 @@ void log_tail(const fs::path& log, std::size_t max_lines = 30) {
 bool write_bytes(const fs::path& p, const void* data, std::size_t n) {
     std::ofstream f(p, std::ios::binary | std::ios::trunc);
     f.write(static_cast<const char*>(data), static_cast<std::streamsize>(n));
+    f.close();  // close() flushes; a late write error shows up here
     return static_cast<bool>(f);
 }
 
@@ -670,6 +702,7 @@ struct Setup {
     fs::path work;        // generated sources, objects, logs
     fs::path out_dir;     // where the game library goes
     int jobs = 0;
+    const RomRevision* revision = &kRevisions[0];
     bool keep_work = false;
     bool generate_only = false;
 };
@@ -730,6 +763,15 @@ struct Overlay {
 
 std::vector<Overlay> read_registry(const fs::path& p) {
     std::vector<Overlay> out;
+    // A localized registry keeps the USA ids; overlay-sources.txt beside it
+    // gives each one's compressed image in that ROM ("<id> 0x<address>").
+    std::map<std::string, std::uint32_t> moved;
+    {
+        std::istringstream src(read_text(p.parent_path() / "overlay-sources.txt"));
+        std::string id, addr;
+        while (src >> id >> addr)
+            moved[id] = static_cast<std::uint32_t>(std::stoul(addr, nullptr, 16)) - 0x08000000u;
+    }
     const std::regex re(
         R"re(^GSR_OVERLAY\((rom_([0-9a-f]+)), (0x[0-9A-Fa-f]+)u, (0x[0-9A-Fa-f]+)u, "([0-9a-f]+)"\))re");
     std::istringstream in(read_text(p));
@@ -740,6 +782,8 @@ std::vector<Overlay> read_registry(const fs::path& p) {
         out.push_back({m[1], static_cast<std::uint32_t>(std::stoul(m[2], nullptr, 16)),
                        static_cast<std::uint32_t>(std::stoul(m[3], nullptr, 16)),
                        static_cast<std::uint32_t>(std::stoul(m[4], nullptr, 16)), m[5]});
+        if (const auto it = moved.find(out.back().id); it != moved.end())
+            out.back().rom_offset = it->second;
     }
     return out;
 }
@@ -956,9 +1000,9 @@ struct StampVariant {
 // Func_ed408 (ROM 0x080ED408, Thumb) builds, run with its two measured
 // stand-ins (the slot allocator 0x080048B0 returns the destination; DMA3
 // copies at once).
-bool build_stamps(const std::vector<std::uint8_t>& rom, std::vector<StampVariant>* out,
-                  std::string* error) {
-    constexpr std::uint32_t kBuilder = 0x080ED408u, kAllocator = 0x080048B0u;
+bool build_stamps(const std::vector<std::uint8_t>& rom, const RomRevision& rev,
+                  std::vector<StampVariant>* out, std::string* error) {
+    const std::uint32_t kBuilder = rev.stamp_builder, kAllocator = rev.stamp_allocator;
     constexpr std::uint32_t kDest = 0x03006000u, kSp = 0x03007E00u;
     GuestMachine m(rom);
     m.stub_returning(kAllocator, kDest);
@@ -1084,6 +1128,14 @@ bool generate(const Setup& s, const std::vector<std::uint8_t>& rom, std::string*
     fs::create_directories(inputs);
     fs::create_directories(logs_dir(s));
     const std::string rom_path = s.rom.string();
+    // Which ROM this library was made from, for the engine (src/rom_version.cpp).
+    fs::create_directories(gen / "rom_identity");
+    if (!write_text(gen / "rom_identity" / "rom_identity.cpp",
+                    std::string("extern \"C\" const char gsr_game_rom_sha1[] = \"") +
+                        s.revision->sha1 + "\";\n")) {
+        *error = "cannot write the ROM identity";
+        return false;
+    }
 
     std::vector<std::function<bool(std::string*)>> tasks;
     for (const PlanStep& step : plan) {
@@ -1147,7 +1199,7 @@ bool generate(const Setup& s, const std::vector<std::uint8_t>& rom, std::string*
         } else if (step.kind == "stamps") {
             tasks.push_back([&s, &rom, gen, inputs](std::string* e) {
                 std::vector<StampVariant> vs;
-                if (!build_stamps(rom, &vs, e)) return false;
+                if (!build_stamps(rom, *s.revision, &vs, e)) return false;
                 std::vector<std::uint8_t> image;
                 for (const auto& v : vs) image.insert(image.end(), v.bytes.begin(), v.bytes.end());
                 const std::string image_sha1 = sha1_hex(image.data(), image.size());
@@ -1202,7 +1254,8 @@ std::vector<fs::path> game_sources(const fs::path& gen) {
             (has_prefix(n, "recompiled") && f.path().extension() == ".cpp") ||
             n == "dispatch_table.cpp" ||
             (dname == "main" && n == "symbol_map.cpp") ||
-            (dname == "stamps" && n == "stamp_registry.cpp")
+            (dname == "stamps" && n == "stamp_registry.cpp") ||
+            (dname == "rom_identity" && n == "rom_identity.cpp")
 #ifdef GSR_BUILDER_TLA
                 || n == "expected.cpp"
 #endif
@@ -1221,7 +1274,8 @@ std::string make_def(const std::vector<fs::path>& sources) {
     const std::regex name_re(R"(([A-Za-z_][A-Za-z0-9_]*)(\[\])? =)");
     for (const fs::path& p : sources) {
         const std::string n = p.filename().string();
-        if (!has_prefix(n, "dispatch_table") && n != "stamp_registry.cpp"
+        if (!has_prefix(n, "dispatch_table") && n != "stamp_registry.cpp" &&
+            n != "rom_identity.cpp"
 #ifdef GSR_BUILDER_TLA
             && n != "expected.cpp"
 #endif
@@ -1269,7 +1323,7 @@ bool apply_block_timing(const Setup& s, std::string* error) {
     return true;
 }
 
-bool compile_and_link(const Setup& s, std::string* error) {
+bool compile_and_link(const Setup& s, std::string* library_sha1, std::string* error) {
     const fs::path gen = gen_dir(s), obj = s.work / "obj";
     fs::create_directories(obj);
     const auto sources = game_sources(gen);
@@ -1328,13 +1382,15 @@ bool compile_and_link(const Setup& s, std::string* error) {
     emit("@stage Linking %s", kGameLibrary);
     const fs::path def = s.work / kDefFile;
     const fs::path rsp = s.work / "objects.rsp";
-    write_text(def, make_def(sources));
     std::string list;
     for (const fs::path& o : objects) {
         std::string p = o.generic_string();
         list += "\"" + p + "\"\n";
     }
-    write_text(rsp, list);
+    if (!write_text(def, make_def(sources)) || !write_text(rsp, list)) {
+        *error = "cannot write the link lists in " + s.work.string();
+        return false;
+    }
     const fs::path dll_tmp = s.work / kGameLibrary;
     const fs::path log = logs_dir(s) / "link.log";
     std::error_code ec;
@@ -1359,10 +1415,27 @@ bool compile_and_link(const Setup& s, std::string* error) {
         *error = "linking failed (" + std::to_string(rc) + "); see " + log.string();
         return false;
     }
+    // Copy beside the installed library, then rename over it in one step, so
+    // a failed or interrupted copy leaves the previous library working.
     const fs::path dll = s.out_dir / kGameLibrary;
-    fs::remove(dll, ec);
-    fs::copy_file(dll_tmp, dll, ec);
+    fs::path staged = dll;
+    staged += ".new";
+    const auto linked_size = fs::file_size(dll_tmp, ec);
+    if (ec || linked_size == 0) {
+        *error = "The linker did not produce a nonempty game library.";
+        return false;
+    }
+    const auto linked = read_bytes(dll_tmp);
+    if (linked.size() != linked_size) {
+        *error = "Could not read the complete linked game library.";
+        return false;
+    }
+    *library_sha1 = sha1_hex(linked.data(), linked.size());
+    fs::copy_file(dll_tmp, staged, fs::copy_options::overwrite_existing, ec);
+    if (!ec) fs::rename(staged, dll, ec);
     if (ec) {
+        std::error_code ignored;
+        fs::remove(staged, ignored);
         *error = "cannot place " + dll.string() + ": " + ec.message();
         return false;
     }
@@ -1387,8 +1460,62 @@ int usage() {
         "%s --rom <Golden Sun ROM> [--out <dir>] [--work <dir>]\n"
         "            [--data <dir>] [--engine <dir>] [--toolchain <dir>]\n"
         "            [--recompiler <gba_recompile.exe>] [--jobs N]\n"
-        "            [--keep-work] [--generate-only]\n", kBuilderName);
+        "            [--keep-work] [--generate-only] [--low-resources]\n", kBuilderName);
     return 2;
+}
+
+// Left in every work folder the builder creates. A custom --work folder is
+// only ever cleared when it holds this file (or is empty), so a mistyped
+// path cannot erase someone's files.
+constexpr const char* kWorkMarker = ".gsr_builder_work";
+
+fs::path comparable(const fs::path& p) {
+    std::error_code ec;
+    fs::path c = fs::weakly_canonical(p, ec);
+    if (ec) c = p;
+    if (!c.has_filename() && c.has_relative_path()) c = c.parent_path();
+    return c;
+}
+
+// Whether `inner` is `outer` or lies inside it.
+bool path_within(const fs::path& inner, const fs::path& outer) {
+    const fs::path a = comparable(inner), b = comparable(outer);
+    auto i = a.begin();
+    for (auto o = b.begin(); o != b.end(); ++o, ++i) {
+        if (i == a.end()) return false;
+#ifdef _WIN32
+        if (_wcsicmp(i->c_str(), o->c_str()) != 0) return false;
+#else
+        if (*i != *o) return false;
+#endif
+    }
+    return true;
+}
+
+// Why the work folder may not be cleared, or empty if it may. It must not
+// hold the builder, the ROM, the release parts or the output, nor sit inside
+// the release parts; a custom folder that already has files must carry the
+// marker from an earlier build.
+std::string work_dir_problem(const Setup& s, const fs::path& here) {
+    for (const fs::path* keep : {&here, &s.rom, &s.data, &s.engine, &s.toolchain,
+                                 &s.recompiler, &s.out_dir}) {
+        if (path_within(*keep, s.work))
+            return "The work folder " + s.work.string() + " contains " +
+                   keep->string() + ".";
+    }
+    for (const fs::path* part : {&s.data, &s.engine, &s.toolchain}) {
+        if (path_within(s.work, *part))
+            return "The work folder " + s.work.string() + " is inside " +
+                   part->string() + ".";
+    }
+    std::error_code ec;
+    if (comparable(s.work) == comparable(here / "work") || !fs::exists(s.work, ec))
+        return {};
+    if (!fs::is_directory(s.work, ec))
+        return "The work folder " + s.work.string() + " is a file.";
+    if (fs::is_empty(s.work, ec) || fs::exists(s.work / kWorkMarker, ec)) return {};
+    return "The work folder " + s.work.string() +
+           " already has files the builder did not make. Choose a new or empty folder.";
 }
 
 }  // namespace
@@ -1414,15 +1541,14 @@ int main(int argc, char** cargv) {
     s.data = here / "data";
     s.engine = here / "engine";
 #ifdef _WIN32
-    // GCC finds its Windows headers at bin/../../mingw64/include, so the
-    // bundled toolchain folder must be called mingw64.
-    s.toolchain = here / "mingw64";
+    s.toolchain = bundled_toolchain(here.parent_path());
 #else
     s.toolchain = here / "toolchain";
 #endif
     s.recompiler = here / (std::string("gba_recompile") + kExeSuffix);
     s.work = here / "work";
     s.out_dir = here.parent_path();
+    bool reduced = false;
     for (std::size_t i = 1; i < argv.size(); ++i) {
         auto next = [&]() -> fs::path {
             return i + 1 < argv.size() ? fs::u8path(argv[++i]) : fs::path();
@@ -1438,6 +1564,7 @@ int main(int argc, char** cargv) {
         else if (a == "--jobs" && i + 1 < argv.size()) s.jobs = std::stoi(argv[++i]);
         else if (a == "--keep-work") s.keep_work = true;
         else if (a == "--generate-only") s.generate_only = true;
+        else if (a == "--low-resources") reduced = true;
         else return usage();
     }
     if (s.rom.empty()) return usage();
@@ -1445,20 +1572,14 @@ int main(int argc, char** cargv) {
                         &s.out_dir}) {
         *p = fs::absolute(*p).lexically_normal().make_preferred();
     }
-    if (s.jobs <= 0) {
-        // One job per core, but at least ~700 MB of RAM each.
-#ifdef _WIN32
-        MEMORYSTATUSEX mem{sizeof(mem)};
-        GlobalMemoryStatusEx(&mem);
-        const unsigned long long total_ram = mem.ullTotalPhys;
-#else
-        const unsigned long long total_ram =
-            static_cast<unsigned long long>(sysconf(_SC_PHYS_PAGES)) *
-            static_cast<unsigned long long>(sysconf(_SC_PAGE_SIZE));
-#endif
-        const int by_ram = static_cast<int>(total_ram / (700ull << 20));
-        s.jobs = std::max(1, std::min<int>(static_cast<int>(std::thread::hardware_concurrency()), by_ram));
+    const auto resources = gsr_collection::build_resources();
+    if (reduced && !gsr_collection::build_limits_active(resources)) {
+        emit("@error The 50%% CPU/RAM limits could not be verified. The build was not started. Start the build from the collection launcher; Linux needs user CPU and memory controls.");
+        return 1;
     }
+    const int budget_jobs = gsr_collection::player_build_jobs(resources, reduced);
+    if (s.jobs <= 0) s.jobs = budget_jobs;
+    else if (reduced) s.jobs = std::min(s.jobs, budget_jobs);
 
 #ifdef _WIN32
     g_job = CreateJobObjectW(nullptr, nullptr);
@@ -1470,24 +1591,33 @@ int main(int argc, char** cargv) {
 #endif
     set_child_path(s.toolchain / "bin");
 
-    std::error_code ec;
-    fs::remove_all(s.work, ec);
-    fs::create_directories(s.work);
-    fs::create_directories(logs_dir(s));
-    g_log.open(s.work / "build-log.txt", std::ios::trunc);
-
     auto fail = [&](const std::string& msg) {
         emit("@error %s", msg.c_str());
         return 1;
     };
 
+    // Check everything before clearing the work folder, so a bad argument
+    // fails without deleting anything.
     emit("@stage Checking your ROM");
     const auto rom = read_bytes(s.rom);
     if (rom.empty()) return fail("Could not read the ROM file.");
     const std::string rom_sha1 = sha1_hex(rom.data(), rom.size());
     // The launcher's "Skip the ROM check" lets any ROM through (any_rom.h).
-    if (rom_sha1 != kRomSha1 && !gbarecomp::any_rom_allowed())
-        return fail(std::string("This release requires the ") + kGameName + " ROM.");
+    s.revision = nullptr;
+    for (const RomRevision& rev : kRevisions)
+        if (rom_sha1 == rev.sha1) s.revision = &rev;
+    if (!s.revision) {
+        if (!gbarecomp::any_rom_allowed()) {
+#ifdef GSR_BUILDER_TLA
+            return fail("This release requires the English, Spanish, Italian, French or German Golden Sun: The Lost Age ROM.");
+#else
+            return fail(std::string("This release requires the ") + kGameName +
+                        ", Golden Sun (Spain), Golden Sun (Italy), Golden Sun (France) or Golden Sun (Germany) ROM.");
+#endif
+        }
+        s.revision = &kRevisions[0];
+    }
+    if (s.revision != &kRevisions[0]) s.data /= s.revision->code;
 #ifdef _WIN32
     const fs::path engine_link_input = s.engine / kApiLibrary;
 #else
@@ -1505,6 +1635,15 @@ int main(int argc, char** cargv) {
         if (!fs::exists(need)) return fail("Missing part of the release: " + need.string());
     }
 
+    const std::string work_problem = work_dir_problem(s, here);
+    if (!work_problem.empty()) return fail(work_problem);
+    std::error_code ec;
+    fs::remove_all(s.work, ec);
+    fs::create_directories(s.work);
+    write_text(s.work / kWorkMarker, "Made by the Golden Sun Recompiled builder.\n");
+    fs::create_directories(logs_dir(s));
+    g_log.open(s.work / "build-log.txt", std::ios::trunc);
+
     std::string error;
     emit("@stage Translating the game from your ROM");
 #ifdef GSR_BUILDER_TLA
@@ -1515,23 +1654,22 @@ int main(int argc, char** cargv) {
 #endif
     if (!s.generate_only) {
         if (!apply_block_timing(s, &error)) return fail(error);
+        std::string library_sha1;
 #ifdef GSR_ANDROID_INPROCESS
         if (!gsr_android_compile_and_link(gen_dir(s).string(), s.out_dir.string(), &error))
             return fail(error);
+        library_sha1 = "android";  // GSR_ANDROID: the app keeps its own build stamp (gsr_prepare.c)
 #else
-        if (!compile_and_link(s, &error)) return fail(error);
+        if (!compile_and_link(s, &library_sha1, &error)) return fail(error);
 #endif
-        // The launcher rebuilds when any of these change: a different ROM,
-        // a new builder, or a new engine (an update may change what the
-        // game code calls).
+        // Record the build inputs and the exact library produced by the linker.
         const auto engine = read_bytes(s.out_dir / kEngineFile);
-        const std::string stamp = std::string("rom_sha1=") + rom_sha1 +
-                                  "\nbuilder=" + kBuilderVersion +
-                                  "\nengine_sha1=" +
-                                  (engine.empty() ? std::string("none")
-                                                  : sha1_hex(engine.data(), engine.size())) +
-                                  "\n";
-        write_text(s.out_dir / kBuildStamp, stamp);
+        const std::string stamp = gsr_player::write_build_record({
+            rom_sha1, gsr_player::kBuilderVersion,
+            engine.empty() ? "none" : sha1_hex(engine.data(), engine.size()),
+            library_sha1});
+        if (!write_text(s.out_dir / kBuildStamp, stamp))
+            return fail("Could not save the build record in " + s.out_dir.string() + ".");
         if (!s.keep_work) {
             g_log.close();
             fs::remove_all(gen_dir(s), ec);

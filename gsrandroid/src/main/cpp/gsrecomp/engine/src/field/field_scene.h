@@ -78,6 +78,9 @@ struct SceneMarginLayer {
     // gives one unwrapped tilemap height; negative fills the screen by wrapping
     // the effect map. Zero disables it.
     int vram_height = 0;
+    // With a positive height, extend the map's boundary pixels instead of
+    // discarding outside its rectangle. Margin pixels only.
+    bool vram_clamp = false;
     // A measured repeating patch within that map, for margin pixels only.
     // Zero keeps the full hardware map. Dimensions are powers of two.
     // For room-backed scenery (vram_height == 0, repeat_height == 0),
@@ -96,6 +99,11 @@ struct SceneMarginLayer {
     // Clip a moving room layer against its stationary silhouette, sampled
     // this many rows below its current source. Margin pixels only.
     int rest_clip_y = 0;
+    // Optional game-measured full-precision affine gradients above/below
+    // the native rows: reference X/Y and PA/PC per screen row. Never used
+    // inside the console window. Without them the captured-row trend stays.
+    bool affine_step_valid = false;
+    std::array<std::array<float, 4>, 2> affine_step{};
 };
 // The iris wipe's ellipse in console pixels, drawn outside the console's
 // screen (field_scene_renderer.cpp, fit_iris_window).
@@ -105,12 +113,21 @@ struct IrisWindow {
     float a2 = 0.0f, b2 = 0.0f;   // squared half-width and half-height
 };
 
+struct SceneObject;
+
 struct SceneMargins {
     std::array<SceneMarginLayer, 4> layers;
     // Game-identified screen effects repeat their sprite layout into margins.
     // Kept outside FieldScene so stored raw SCENE captures retain their ABI.
     // Period {x, y} per slot; 0 on one axis repeats along the other only.
     std::array<std::array<int, 2>, 128> object_repeat{};
+    // Sprites drawn in the margins only, never in the console's 240x160
+    // window, repeated at `margin_object_period` as object_repeat does: a
+    // game's stand-in for a screen effect the game itself holds still (The
+    // Lost Age's weather behind a menu). They sort behind the scene's own
+    // sprites of the same priority.
+    std::vector<SceneObject> margin_objects;
+    std::array<int, 2> margin_object_period{};
     // Leave out a copy that would reach into the console's 240x160 window
     // whole, instead of clipping it at the window's edge.
     bool object_repeat_whole = false;
@@ -207,6 +224,21 @@ struct FieldScene {
     // Four int32 per row: BG2 x/y then BG3 x/y, as latched for that row.
     std::array<std::array<std::int32_t, 4>, kRows> row_affine{};
     std::array<bool, kRows> row_affine_valid{};
+
+    const std::uint8_t* registers_for_row(int y) const {
+        return row_io_valid[y] ? row_io[y].data() : io_bytes.data();
+    }
+
+    std::array<std::int32_t, 2> affine_reference_for_row(int y, int bg) const {
+        if (row_affine_valid[y]) {
+            const int slot = (bg - 2) * 2;
+            return {row_affine[y][slot], row_affine[y][slot + 1]};
+        }
+        const SceneLayer& layer = layers[bg];
+        return {layer.affine_ref_x + y * layer.affine_pb,
+                layer.affine_ref_y + y * layer.affine_pd};
+    }
+
     // True when no row differs from row 0 in any field a draw call depends on.
     // Golden Sun's battle frames measure this way (FACTS.md, 2026-09-12).
     // The renderer no longer needs this to decide whether it can draw a

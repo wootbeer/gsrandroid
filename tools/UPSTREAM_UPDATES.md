@@ -66,22 +66,23 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `engine/src/runtime/runtime.cpp` | `GSR_ANDROID_RUNTIME`: the timing log `gsr_perf_log.txt` (path from `GSR_PERF_LOG`, set in `gsr_prepare.c`). Also: when 2x frame interpolation cannot build an in-between frame, blend the previous and new real frames 50/50 instead of jumping to the new one, and tell the host (`gsr_host_present_slot`) which present is the in-between frame so flicker reduction can treat it like the real frames (CMake adds the define) |
 | `engine/src/runtime/host_window_android.cpp` (ours) | `present_native` / `native_renderer_enabled` back the High-res rendering option |
 | `tbs/src/runner_main.cpp` | `GSR_ANDROID_ENGINE`: `gpu_field_enabled()` reads the Renderer setting live; `gpu_field_present_override` is wrapped to report whether the GPU drew the frame; init result reported |
-| `player_builder/builder_main.cpp` | `GSR_ANDROID_INPROCESS`: in-process translator entry, and the `spawn` helper -- a single-threaded process started first thing in `main` that forks every translator (forking from the multithreaded builder could freeze a translator at 59%) and runs the watchdog |
+| `player_builder/builder_main.cpp` | `GSR_ANDROID_INPROCESS`: in-process translator entry, and the `spawn` helper -- a single-threaded process started first thing in `main` that forks every translator (forking from the multithreaded builder could freeze a translator at 59%) and runs the watchdog; the revision lists are included from `tbs/` and `tla/`; the on-device compile (`gsr_android_compile_and_link`) replaces `compile_and_link` |
+| `engine/src/runtime/overlay_compile.cpp` | `GSR-ANDROID`: no `posix_spawn` before API 28 (and no compiler to run on the device), so `run_process` reports failure there |
 | `engine/src/runtime/crash_handler.cpp` | Android crash handling (bionic has no `backtrace()`) |
 | `tcc/tccelf.c` (line ~3920) | on-device linking change (LGPL: keep notice) |
 | `gsr/gsr_screen_filter_shaders.inc` (ours, copied) | verbatim copy of `screen_filter.cpp`'s shared fragment header and the LCD3x, xBR-lv2 and CRT Lottes shaders with their notices; copy it again when upstream changes them |
 | `tbs/src/unpacker_catch.cpp` | `GSR_ANDROID`: no `<execinfo.h>`/`backtrace()` (API 33+), the host call chain is left out of the diagnostic |
-| `tbs/src/runner_main.cpp` (cheats) | `GSR_ANDROID_CHEATS`: the side menu's Cheats page owns the reward multipliers |
+| `tbs/src/runner_main.cpp` (cheats) | `GSR_ANDROID_CHEATS`: the side menu's Cheats page owns the reward multipliers (upstream reads them from game options since 0.7) |
 | `tbs/src/room_buffer.cpp` | `GSR_ANDROID_ENGINE`: map numbers 0/1 and the title's BGCNT set are not rooms; `room_buffer_row_is_room()` |
 | `tbs/src/runner_main.cpp` (more) | `GSR_ANDROID_ENGINE`: margin policy pillarboxes non-room rows; GPU hands boot/title/intro frames to CPU; camera inset skipped for the title; boot/title/intro shown as the native 240x160 part of the canvas (`gsr_host_present_crop`, read in host_window_android.cpp); intro flare averaging; camera-glide blackout |
 | `tbs/src/runner_main.cpp` (Seamless) | `GSR_ANDROID_ENGINE`: Seamless mode (hand-over to The Lost Age) is only on, and its new-game question only asked, when The Lost Age's ROM is in the app (`gsr_host_tla_installed`, gsr_main.c). The exit code 75 + slot is caught by `GsrSession.java`, which restarts into The Lost Age (`GsrRestartActivity`, own process) with the slot in `tla/seamless_slot.txt`; gsr_main.c turns that and Golden Sun's save into `GSR_SEAMLESS_GS_SLOT` / `GSR_SEAMLESS_GS_SAVE` like upstream's launcher |
-| `tbs/src/settings_page.h` | `GSR_ANDROID_ENGINE`: the in-game settings page leaves out Screen and No Slowdown (the side menu owns them) |
+| `tbs/src/settings_page.h` | `GSR_ANDROID_ENGINE`: the in-game settings page leaves out Screen and No Slowdown (the side menu owns them); the other rows take upstream's shared labels (`shared_game/settings_page_labels.h`) |
 | `tbs/src/adventure_walkthrough.h` | `GSR_ANDROID_ENGINE`: the NDK's libc++ has no `std::atomic<std::shared_ptr>`; a small wrapper uses `std::atomic_load/atomic_store` (the guide is developer-only upstream) |
 | `tla/src/tla_rewind.cpp`, `tla_ram_images.cpp` | `GSR_ANDROID_ENGINE`: The Broken Seal's `unpacker_guard.h` is included from `tbs/` |
 | `tla/src/tla_gs_save_import.cpp` | `GSR_ANDROID_ENGINE`: no SDL; the save-file browser is the host's (`gsr_host_pick_gs_save_begin/poll`) |
 | `tla/src/tla_gpu_field.cpp` | `GSR_ANDROID_ENGINE`: the Renderer setting decides live (`gpu_on()` asks `gsr_host_gpu_wanted`; Auto uses the GPU in the Expanded view), init/frame results go to the host, and CPU-drawn frames get black sides (upstream has no CPU margin source for The Lost Age) |
 | `tla/src/tla_reloc_images.inc` (ours) | the builder's list of The Lost Age RAM routines (names, ROM addresses, sizes; no code), made once from the ROM; regenerate when `config/tla/reloc` changes |
-| `CMakeLists.txt` | source lists, include dirs, `GSR_ANDROID_*` defines, `gpu_surface_android.cpp` instead of upstream `gpu_surface.cpp` |
+| `CMakeLists.txt` | source lists, include dirs, `GSR_ANDROID_*` defines, `gpu_surface_android.cpp` instead of upstream `gpu_surface.cpp`; `-Wno-invalid-constexpr` for the game layers (clang refuses a `constexpr` upstream's GCC accepts in `walk_through_walls.h`) |
 
 Files we replace rather than patch: upstream `gpu_surface.cpp` (desktop GL + SDL) is not built; its
 GLES3 replacement must keep the `gpu_surface.h` interface. (0.4.3 added `begin/finish_texture_readback`;
@@ -105,8 +106,8 @@ The view modes now come from `engine/src/runtime/view_config.h` (Original 240x16
 Extra Wide 480x320). The side menu's View setting still offers the first two; the Android HostWindow
 reports the Original aspect, so a mode's size is used as is.
 
-Vendored engine version: 0.6 (upstream commit c72ef00), updated 2026-10-24 from https://github.com/Shmargus/GSRecomp
-(previously 0.5.3 = 27fedb5, updated 2026-10-20; 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
+Vendored engine version: 0.7.1 (upstream commit 2574e72), updated 2026-11-07 from https://github.com/Shmargus/GSRecomp
+(previously 0.6 = c72ef00, updated 2026-10-24; 0.5.3 = 27fedb5, updated 2026-10-20; 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
 
 How the update is done (repeat this next time): a three-way git merge with base = the upstream commit we
 were on (only the files we vendor), ours = the vendored folder, theirs = the new upstream commit. Only files we
@@ -119,3 +120,13 @@ git could match the renamed files. Then copy changed `config/usa` files into `as
 Music mods (0.6, `GBARECOMP_MUSIC_DIR`) are not offered on Android: the variable is never set,
 `local_music_available()` in `host_window_android.cpp` answers false, and upstream's `host_local_music.cpp`
 (dr_flac) is not built. `TLA_PLAYER_RELEASE` became `TLA_NO_HARVEST` in 0.6 (CMake define).
+
+Languages (0.7): upstream runs the USA/Europe, Spanish, Italian, French and German ROMs, each with its own game code.
+The engine reads which one from the game library (`gsr_game_rom_sha1`, written by the builder as
+`gen/rom_identity/rom_identity.cpp`, which `gsr_build.c` compiles with the rest). The builder takes a language's
+data from the `<code>` sub-folder of its data folder, so `assets/gsr_builder_data` is upstream's `config/usa` with
+`es`, `it`, `fr` and `de` (copies of `config/<code>`) inside it, and `assets/gsr_builder_data_tla` is `config/tla`
+with the same four. The vendored `tbs/config/<code>` folders keep only `overlay-registry.inc` (runner_main.cpp
+includes all five). In the app each game and language is a launcher unit (GsrConfig.java) with its own folder
+(`game`, `tla`, `game_es`, `tla_es`, ...), and `gsr_game.c` derives the build and run folders and the expected
+SHA-1 from it; keep its SHA-1 lists in step with `rom_revisions.inc` and `tla_rom_revisions.inc`.

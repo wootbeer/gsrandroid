@@ -230,7 +230,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 					}
 				});
 				layout.addView(play, buttonParams(buttonWidth));
-			} else {
+			} else if (!unit.hideWhenMissing) {
 				addText(layout, unit.title + " -- missing " + join(missingFiles(unit)),
 						Color.GRAY, 0, 12);
 			}
@@ -239,7 +239,12 @@ public abstract class DescoreLauncherActivity extends Activity {
 		LinearLayout.LayoutParams p = buttonParams(buttonWidth);
 		p.topMargin = (int) dpToPx(20);
 		layout.addView(addMore, p);
-		setContentView(layout);
+		// Scrolls when there are more games than fit on the screen.
+		android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+		scroll.setBackgroundColor(Color.BLACK);
+		scroll.setFillViewport(true);
+		scroll.addView(layout);
+		setContentView(scroll);
 	}
 
 	private LinearLayout.LayoutParams buttonParams(int width) {

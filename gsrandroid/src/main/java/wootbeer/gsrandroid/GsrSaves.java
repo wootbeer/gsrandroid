@@ -32,10 +32,16 @@ final class GsrSaves {
 
 	GsrSaves(Activity a) { activity = a; }
 
-	static String saveName(boolean tla) { return tla ? "lost_age.sav" : "golden_sun.sav"; }
+	/** The name a game's save is exported or backed up under: golden_sun.sav, lost_age_es.sav, ... */
+	static String saveName(int unit) {
+		int lang = GsrConfig.lang(unit);
+		return (GsrConfig.isTla(unit) ? "lost_age" : "golden_sun") + (lang == 0 ? "" : "_" + GsrConfig.LANG_CODES[lang]) + ".sav";
+	}
 
-	File saveFile(boolean tla) {
-		return new File(activity.getFilesDir(), (tla ? "gsr/tla/" : "gsr/game/") + saveName(tla));
+	/** The save the engine keeps beside the ROM in the unit's own folder (<rom>.sav). */
+	File saveFile(int unit) {
+		return new File(activity.getFilesDir(), "gsr/" + GsrConfig.dirName(GsrConfig.isTla(unit), GsrConfig.lang(unit))
+				+ "/" + (GsrConfig.isTla(unit) ? "lost_age.sav" : "golden_sun.sav"));
 	}
 
 	private File backupDir() {
@@ -45,8 +51,8 @@ final class GsrSaves {
 	}
 
 	/** The import backups of one game, newest first. */
-	File[] backups(boolean tla) {
-		final String prefix = saveName(tla).replace(".sav", "-");
+	File[] backups(int unit) {
+		final String prefix = saveName(unit).replace(".sav", "-");
 		File[] all = backupDir().listFiles();
 		List<File> out = new ArrayList<File>();
 		if (all != null) for (File f : all) if (f.getName().startsWith(prefix) && f.getName().endsWith(".sav")) out.add(f);
@@ -128,8 +134,8 @@ final class GsrSaves {
 	}
 
 	/** Writes this game's save to a document the player created. */
-	void exportTo(boolean tla, Uri uri) throws IOException {
-		byte[] data = readFile(saveFile(tla));
+	void exportTo(int unit, Uri uri) throws IOException {
+		byte[] data = readFile(saveFile(unit));
 		try (OutputStream os = activity.getContentResolver().openOutputStream(uri, "wt")) {
 			if (os == null) throw new IOException("could not write there");
 			os.write(data);
@@ -137,33 +143,40 @@ final class GsrSaves {
 	}
 
 	/** Replaces this game's save with the file at uri; the old save goes to the backups first. */
-	void importFrom(boolean tla, Uri uri) throws IOException {
+	void importFrom(int unit, Uri uri) throws IOException {
 		byte[] data;
 		try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
 			if (in == null) throw new IOException("could not read that file");
-			data = checkSave(readAll(in, 4 * FLASH_BYTES), tla);
+			data = checkSave(readAll(in, 4 * FLASH_BYTES), GsrConfig.isTla(unit));
 		}
-		backupCurrent(tla);
-		write(saveFile(tla), data);
+		backupCurrent(unit);
+		write(saveFile(unit), data);
 	}
 
 	/** Puts a backup back as the game's save (the current one is backed up too). */
-	void restore(boolean tla, File backup) throws IOException {
+	void restore(int unit, File backup) throws IOException {
 		// The game's own earlier save (it may hold no saved game yet): only the size is checked.
-		byte[] data = checkSave(readFile(backup), tla, false);
-		backupCurrent(tla);
-		write(saveFile(tla), data);
+		byte[] data = checkSave(readFile(backup), GsrConfig.isTla(unit), false);
+		backupCurrent(unit);
+		write(saveFile(unit), data);
 	}
 
-	private void backupCurrent(boolean tla) throws IOException {
-		File cur = saveFile(tla);
+	/** Copies the same game's USA/Europe save into this language (the current save is backed up first). */
+	void copyFromEnglish(int unit) throws IOException {
+		byte[] data = checkSave(readFile(saveFile(GsrConfig.unitId(GsrConfig.isTla(unit), 0))), GsrConfig.isTla(unit));
+		backupCurrent(unit);
+		write(saveFile(unit), data);
+	}
+
+	private void backupCurrent(int unit) throws IOException {
+		File cur = saveFile(unit);
 		if (!cur.isFile() || cur.length() == 0) return;
-		write(new File(backupDir(), saveName(tla).replace(".sav", "-") + stamp() + ".sav"), readFile(cur));
-		File[] all = backups(tla);
+		write(new File(backupDir(), saveName(unit).replace(".sav", "-") + stamp() + ".sav"), readFile(cur));
+		File[] all = backups(unit);
 		for (int i = KEEP_BACKUPS; i < all.length; i++) all[i].delete();
 	}
 
-	/** Copies both games' saves (those that exist) into a new folder inside the folder the player picked. */
+	/** Copies every game's and language's save (those that exist) into a new folder inside the folder the player picked. */
 	int backupAllTo(Uri tree) throws IOException {
 		ContentResolver cr = activity.getContentResolver();
 		Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
@@ -171,13 +184,13 @@ final class GsrSaves {
 				"Golden Sun saves " + stamp());
 		if (folder == null) throw new IOException("could not make a folder there");
 		int n = 0;
-		for (boolean tla : new boolean[] { false, true }) {
-			File f = saveFile(tla);
+		for (int unit = 1; unit <= 2 * GsrConfig.LANG_CODES.length; unit++) {
+			File f = saveFile(unit);
 			if (!f.isFile() || f.length() == 0) continue;
-			Uri doc = DocumentsContract.createDocument(cr, folder, "application/octet-stream", saveName(tla));
-			if (doc == null) throw new IOException("could not write " + saveName(tla));
+			Uri doc = DocumentsContract.createDocument(cr, folder, "application/octet-stream", saveName(unit));
+			if (doc == null) throw new IOException("could not write " + saveName(unit));
 			try (OutputStream os = cr.openOutputStream(doc, "w")) {
-				if (os == null) throw new IOException("could not write " + saveName(tla));
+				if (os == null) throw new IOException("could not write " + saveName(unit));
 				os.write(readFile(f));
 			}
 			n++;

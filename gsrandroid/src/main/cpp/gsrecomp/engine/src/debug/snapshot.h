@@ -87,6 +87,14 @@ public:
         cur_ += n;
     }
 
+    // Whether `count` items of `size` bytes are still left; marks the
+    // reader failed if not. Check a stored count before sizing a buffer
+    // from it, so a damaged count fails the load instead of allocating.
+    bool has(uint64_t count, std::size_t size) {
+        if (size && count > remaining() / size) { fail(); return false; }
+        return true;
+    }
+
     // Skip n bytes (used to tolerate trailing data in a section).
     void skip(std::size_t n) {
         if (cur_ + n > end_) { fail(); return; }
@@ -96,8 +104,12 @@ public:
     bool ok() const { return ok_; }
     std::size_t remaining() const { return static_cast<std::size_t>(end_ - cur_); }
 
-private:
+    // Marks the load damaged. Subsystems call it when a complete section
+    // holds values their fixed buffers or divisors cannot accept, so the
+    // loader puts the running game back instead of installing them.
     void fail() { ok_ = false; }
+
+private:
     const uint8_t* cur_;
     const uint8_t* end_;
     bool ok_ = true;
@@ -126,7 +138,8 @@ struct SnapshotContext {
 bool save_state(const char* path, const SnapshotContext& ctx, std::string* err);
 
 // Restore from `path`. Returns false (with *err set) on I/O error,
-// bad magic, version mismatch, ROM-hash mismatch, or truncation.
+// bad magic, version mismatch, ROM-hash mismatch, or truncation. All or
+// nothing: a file that fails partway leaves the running game as it was.
 bool load_state(const char* path, const SnapshotContext& ctx, std::string* err);
 
 }  // namespace gbarecomp::debug

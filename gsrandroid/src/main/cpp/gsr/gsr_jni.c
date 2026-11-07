@@ -142,3 +142,20 @@ JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_pickAnswer(JNIEnv *env
 	gsr_host_pick_answer(p ? p : "");
 	if (p) (*env)->ReleaseStringUTFChars(env, path, p);
 }
+
+/* The game's own options (upstream's F1 Game page switches), by key name. */
+JNIEXPORT jint JNICALL Java_wootbeer_gsrandroid_GsrNative_gameOption(JNIEnv *env, jclass c, jstring key, jint fallback)
+{
+	const char *k = (*env)->GetStringUTFChars(env, key, NULL);
+	int v = k ? gsr_host_game_option_get(k, fallback) : fallback;
+	(void) c;
+	if (k) (*env)->ReleaseStringUTFChars(env, key, k);
+	return v;
+}
+
+JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_setGameOption(JNIEnv *env, jclass c, jstring key, jint value)
+{
+	const char *k = (*env)->GetStringUTFChars(env, key, NULL);
+	(void) c;
+	if (k) { gsr_host_game_option_set(k, value); (*env)->ReleaseStringUTFChars(env, key, k); }
+}

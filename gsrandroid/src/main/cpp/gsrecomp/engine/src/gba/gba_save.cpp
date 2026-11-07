@@ -95,6 +95,26 @@ void GbaSave::serialize(gbarecomp::debug::SnapshotWriter& w) const {
 }
 
 void GbaSave::deserialize(gbarecomp::debug::SnapshotReader& r) {
+    deserialize_fields(r);
+    if (!state_consistent()) r.fail();
+}
+
+// Whether restored sizes agree with the buffers behind them. Reads index
+// eeprom_ up to eeprom_size_ and fold SRAM addresses by sram_size_, so a
+// damaged section must not install a size its buffer cannot back.
+bool GbaSave::state_consistent() const {
+    auto size_ok = [](std::size_t size, std::size_t a, std::size_t b,
+                      std::size_t data) {
+        return (size == 0 || size == a || size == b) &&
+               (data == 0 || data == size);
+    };
+    return eeprom_size_ <= kMaxEepromSize && eeprom_addr_bits_ <= 14u &&
+           size_ok(sram_size_, 32 * 1024, 64 * 1024, sram_data_.size()) &&
+           size_ok(flash_size_, 0x10000, 0x20000, flash_data_.size()) &&
+           flash_state_ <= FlashState::Bank;
+}
+
+void GbaSave::deserialize_fields(gbarecomp::debug::SnapshotReader& r) {
     eeprom_enabled_    = r.boolean();
     dirty_             = r.boolean();
     eeprom_size_       = static_cast<std::size_t>(r.u64());
@@ -102,6 +122,7 @@ void GbaSave::deserialize(gbarecomp::debug::SnapshotReader& r) {
     eeprom_block_mask_ = r.u32();
     r.bytes(eeprom_.data(), eeprom_.size());
     uint32_t cmd_len = r.u32();
+    if (!r.has(cmd_len, 1)) return;
     command_bits_.assign(cmd_len, 0);
     if (cmd_len) r.bytes(command_bits_.data(), cmd_len);
     read_active_       = r.boolean();
@@ -120,6 +141,7 @@ void GbaSave::deserialize(gbarecomp::debug::SnapshotReader& r) {
     flash_id_mode_ = r.boolean();
     flash_bank_    = r.u8();
     uint32_t flash_len = r.u32();
+    if (!r.has(flash_len, 1)) return;
     flash_data_.assign(flash_len, 0xFF);
     if (flash_len) r.bytes(flash_data_.data(), flash_len);
 
@@ -128,6 +150,7 @@ void GbaSave::deserialize(gbarecomp::debug::SnapshotReader& r) {
     sram_enabled_ = r.boolean();
     sram_size_ = static_cast<std::size_t>(r.u64());
     uint32_t sram_len = r.u32();
+    if (!r.has(sram_len, 1)) return;
     sram_data_.assign(sram_len, 0xFF);
     if (sram_len) r.bytes(sram_data_.data(), sram_len);
 }

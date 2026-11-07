@@ -147,7 +147,7 @@ int gsr_build_game(const GsrBuildParams *p, char *err, size_t errlen) {
 			const char *n = fe->d_name;
 			int take = (!strncmp(n, "recompiled", 10) && ends_with(n, ".cpp")) ||
 			           !strcmp(n, "dispatch_table.cpp") || !strcmp(n, "stamp_registry.cpp") ||
-			           !strcmp(n, "expected.cpp");
+			           !strcmp(n, "expected.cpp") || !strcmp(n, "rom_identity.cpp");
 			if (!take) continue;
 			if (nt == cap) { cap = cap ? cap * 2 : 1024; tasks = realloc(tasks, (size_t)cap * sizeof(Task)); }
 			Task *t = &tasks[nt++];

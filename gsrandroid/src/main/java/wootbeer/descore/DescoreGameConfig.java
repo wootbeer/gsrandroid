@@ -62,6 +62,14 @@ public final class DescoreGameConfig {
 		public int aliasCheckOffset = -1;
 		public String aliasCheckBytes = null;
 
+		/** When set, the launcher leaves this unit out of its list until its files are there (optional extras). */
+		public boolean hideWhenMissing = false;
+
+		public Unit withHideWhenMissing() {
+			this.hideWhenMissing = true;
+			return this;
+		}
+
 		/** See {@link #aliasCheckOffset}. */
 		public Unit withAliasCheck(int offset, String asciiBytes) {
 			this.aliasCheckOffset = offset;

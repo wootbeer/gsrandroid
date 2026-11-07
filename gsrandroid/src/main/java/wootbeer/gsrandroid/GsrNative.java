@@ -36,6 +36,9 @@ final class GsrNative {
 	static native boolean pickTakeRequest();
 	/** Portrait: pixels at the top of the screen to keep the picture clear of (a camera cutout). */
 	static native void setTopInset(int px);
+	/** The game's own options (game_options.ini), by upstream's key names; fallback when unset. */
+	static native int gameOption(String key, int fallback);
+	static native void setGameOption(String key, int value);
 	/** The chooser's answer: a save file's path, or "" when the player cancelled. */
 	static native void pickAnswer(String path);
 }
