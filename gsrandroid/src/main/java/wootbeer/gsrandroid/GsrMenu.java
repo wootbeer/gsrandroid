@@ -461,6 +461,18 @@ final class GsrMenu {
 		action("Resume", "", new Runnable() {
 			@Override public void run() { close(); }
 		});
+		action("Switch game", "", new Runnable() {
+			@Override public void run() {
+				// Back to the launcher in a fresh process (the running engine cannot be unloaded), even with
+				// "Start my last game straight away" on.
+				android.content.Intent target = new android.content.Intent(activity, GsrLauncherActivity.class);
+				target.putExtra(wootbeer.descore.DescoreLauncherActivity.EXTRA_SHOW_PICKER, true);
+				android.content.Intent restart = new android.content.Intent(activity, GsrRestartActivity.class);
+				restart.putExtra(GsrRestartActivity.EXTRA_PID, Process.myPid());
+				restart.putExtra(GsrRestartActivity.EXTRA_TARGET, target);
+				activity.startActivity(restart);
+			}
+		});
 		action("Exit game", "", new Runnable() {
 			@Override public void run() {
 				activity.finishAffinity();

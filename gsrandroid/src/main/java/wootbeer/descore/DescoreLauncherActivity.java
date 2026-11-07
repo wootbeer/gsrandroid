@@ -52,6 +52,11 @@ public abstract class DescoreLauncherActivity extends Activity {
 
 	protected abstract Class<? extends DescoreGameActivity> getGameActivityClass();
 
+	/** Intent extra: show the picker even when "start the last game straight away" is on (a game's
+	 * "Switch game" menu item opens the launcher with it). */
+	public static final String EXTRA_SHOW_PICKER = "descore_show_picker";
+	private static final String PREFS = "descore_launcher", KEY_LAST_UNIT = "last_unit", KEY_AUTO_LAST = "auto_last";
+
 	private File rootDir;
 	private float buttonSizeBias;
 
@@ -75,7 +80,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 				+ metrics.heightPixels / metrics.ydpi) / 5.5f, 1), 1.4);
 
 		rootDir = new File(getFilesDir(), getConfig().rootDirName);
-		if (launchIfComplete()) {
+		if (launchIfComplete() || launchLastUnit()) {
 			return;
 		}
 		if (anyUnitReady()) {
@@ -100,6 +105,30 @@ public abstract class DescoreLauncherActivity extends Activity {
 		startActivity(intent);
 		finish();
 		return true;
+	}
+
+	/** With "start the last game straight away" on: skip the picker and play the last unit played. */
+	private boolean launchLastUnit() {
+		if (getIntent().getBooleanExtra(EXTRA_SHOW_PICKER, false)) return false;
+		android.content.SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+		if (!prefs.getBoolean(KEY_AUTO_LAST, false)) return false;
+		for (DescoreGameConfig.Unit unit : getConfig().units) {
+			if (unit.id == prefs.getInt(KEY_LAST_UNIT, -1) && isUnitReady(unit)) {
+				play(unit);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private void play(DescoreGameConfig.Unit unit) {
+		getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt(KEY_LAST_UNIT, unit.id).apply();
+		Intent intent = new Intent(this, getGameActivityClass());
+		intent.putExtra(DescoreGameActivity.EXTRA_UNIT_ID, unit.id);
+		startActivity(intent);
+		// The picker does not stay behind the game, so swiping the game away in the recent apps closes the
+		// app instead of leaving the picker there.
+		finish();
 	}
 
 	// --- Readiness ---------------------------------------------------------------------------
@@ -220,13 +249,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 				play.setOnClickListener(new View.OnClickListener() {
 					@Override
 					public void onClick(View v) {
-						Intent intent = new Intent(DescoreLauncherActivity.this,
-								getGameActivityClass());
-						intent.putExtra(DescoreGameActivity.EXTRA_UNIT_ID, unit.id);
-						startActivity(intent);
-						// As launchIfComplete: the picker does not stay behind the game, so swiping the game
-						// away in the recent apps closes the app instead of leaving the picker there.
-						finish();
+						play(unit);
 					}
 				});
 				layout.addView(play, buttonParams(buttonWidth));
@@ -239,6 +262,24 @@ public abstract class DescoreLauncherActivity extends Activity {
 		LinearLayout.LayoutParams p = buttonParams(buttonWidth);
 		p.topMargin = (int) dpToPx(20);
 		layout.addView(addMore, p);
+		if (getConfig().units.size() > 1) {
+			// Skip this screen next time and go straight into the last game played (a game's menu can bring
+			// it back).
+			final android.content.SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+			android.widget.CheckBox auto = new android.widget.CheckBox(this);
+			auto.setText("Start my last game straight away");
+			auto.setTextColor(Color.LTGRAY);
+			auto.setChecked(prefs.getBoolean(KEY_AUTO_LAST, false));
+			auto.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
+				@Override public void onCheckedChanged(android.widget.CompoundButton b, boolean on) {
+					prefs.edit().putBoolean(KEY_AUTO_LAST, on).apply();
+				}
+			});
+			LinearLayout.LayoutParams ap = new LinearLayout.LayoutParams(
+					LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+			ap.topMargin = (int) dpToPx(12);
+			layout.addView(auto, ap);
+		}
 		// Scrolls when there are more games than fit on the screen.
 		android.widget.ScrollView scroll = new android.widget.ScrollView(this);
 		scroll.setBackgroundColor(Color.BLACK);

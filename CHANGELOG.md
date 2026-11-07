@@ -7,6 +7,7 @@
 - Saves page: copy your USA/Europe save into another language  
 - Enemy HP bar and Custom Battle Mode switches (Settings > Game)  
 - Screen color: David's OG GBA  
+- Launcher option to start your last game straight away, and Switch game in the menu to get back to the launcher  
 
 ### Changed
 - Bumped to the latest GSRecomp version (0.7.1)  
