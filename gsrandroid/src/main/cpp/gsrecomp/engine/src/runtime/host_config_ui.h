@@ -1,7 +1,7 @@
 // host_config_ui.h — Dear ImGui configuration UI for the host window.
 //
-// One Settings window with horizontal tabs (Video, Audio, Controls, Hotkeys,
-// Speed, optional Game, Cheats and Troubleshooting), usable by mouse,
+// One Settings window with horizontal tabs (Video, Audio, optional Music, Controls,
+// Hotkeys, Speed, optional Game, Cheats and Help), usable by mouse,
 // keyboard or controller. To bind, click a box then press a key or pad button.
 //
 // Strictly host-side. It runs at present time, after the guest frame has been
@@ -16,6 +16,8 @@
 
 #include <cstdint>
 #include <vector>
+
+#include "screen_filter.h"
 
 struct SDL_Window;
 struct SDL_Renderer;
@@ -168,7 +170,9 @@ struct ConfigUiState {
     bool  aspect_view_available = false;
     bool  screen_filters_supported = false;
     bool  screen_filters_available = false;  // test: launcher box on + opengl renderer
-    int   screen_filter = 0;        // test: 0 off, 1 LCD3x, 2 xBR, 3 CRT Lottes, 4 ScaleFX
+    int   screen_filter = 0;        // test: gbarecomp::ScreenFilter value
+    gbarecomp::ScreenFilterValues screen_filter_params = gbarecomp::screen_filter_defaults();
+    bool  screen_filter_save = false;  // a filter slider was let go: save it
     bool  show_fps = false;
 
     // --- audio --------------------------------------------------------------
@@ -227,7 +231,7 @@ struct ConfigUiState {
     // etc. stay on regardless). Off by default. See runtime_arm.h
     // gsr_set_additional_debug_logging / gsr_additional_debug_logging.
     bool  additional_debug_logging = false;
-    // Enhancements > Troubleshooting: record the game's last instructions
+    // Help > Troubleshooting: record the game's last instructions
     // for crash and freeze reports (runtime_set_crash_log). Saved in
     // [Logging] as CrashLog; off by default because it costs speed.
     bool  crash_log = false;

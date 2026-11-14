@@ -439,7 +439,8 @@ final class GsrMenu {
 			@Override public void run() {
 				// The menu closes first (it un-pauses on the way out); the editor then pauses the game again.
 				close();
-				list.postDelayed(new Runnable() {
+				// Not list.postDelayed: the closed menu's views are off the screen and never run it.
+				new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(new Runnable() {
 					@Override public void run() {
 						if (activity instanceof GsrGameActivity) ((GsrGameActivity) activity).editTouchLayout();
 					}

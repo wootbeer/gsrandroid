@@ -104,6 +104,23 @@ void runtime_set_guest_step_boundary_hook(std::function<void()> hook);
 void runtime_set_frame_render_gate_hook(
     std::function<bool(unsigned long long)> hook);
 
+// A game rule can hold every F1 cheat off (Golden Sun's Challenge Mode):
+// Infinite HP / PP are not applied and each cheat option reads as its normal
+// value. The player's choices are kept, not applied; F1 shows the Cheats page
+// at its normal values, unavailable. Set by the game each frame; false by
+// default.
+void set_cheats_blocked(bool blocked);
+bool cheats_blocked();
+// A cheat's game_options.ini value, or `normal` while cheats are blocked.
+// Every cheat option reads through this.
+int cheat_option_get(const char* key, int normal);
+
+// The F1 "Flicker reduction" choice (temporal_blend.h index), published by
+// the host window each presented frame so a game's own renderer can apply
+// the same setting (FieldSceneRenderer::set_flicker_smoothing).
+void set_flicker_reduction_index(int index);
+int flicker_reduction_index();
+
 // Retrieve the currently-bound bus / ppu, or nullptr if none.
 gba::GbaBus* active_bus();
 gba::GbaPpu* active_ppu();

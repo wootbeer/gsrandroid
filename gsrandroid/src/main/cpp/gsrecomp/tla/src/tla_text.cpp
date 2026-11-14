@@ -24,6 +24,7 @@
 #include "runtime_arm.h"
 #include "runtime_bus_bridge.h"
 #include "tla.h"
+#include "../../shared_game/quality_of_life.h"
 #include "../../shared_game/menu_text.h"
 
 namespace {
@@ -39,11 +40,13 @@ const uint32_t kLineStartPc = TLA_ROM(0x0803D178u);
 uint32_t g_line_id = 0;
 
 bool replacement(uint32_t text_id, std::string& out) {
-    return tla_settings_page_text(text_id, out) ||
+    return gsr::qol::text(text_id, out) ||
+           tla_save_files_text(text_id, out) ||
            tla_text_speed_text(text_id, out) ||
            tla_hard_mode_text(text_id, out) ||
            tla_gs_save_import_text(text_id, out) ||
-           tla_custom_battle_text(text_id, out);
+           tla_custom_battle_text(text_id, out) ||
+           tla_random_weapons_text(text_id, out);
 }
 
 bool g_active = false;
@@ -232,6 +235,11 @@ void tla_menu_paint_window(uint8_t* rgb, uint32_t width, uint32_t height,
 }
 
 const uint16_t* tla_menu_window_palette() { return window_palette(); }
+
+std::function<void(int, int, uint8_t)> tla_menu_pixel_writer(
+    uint8_t* rgb, uint32_t width, uint32_t height) {
+    return menu_pixel_writer(rgb, width, height);
+}
 
 void tla_menu_paint_text(uint8_t* rgb, uint32_t width, uint32_t height,
                          const std::string& text, int x, int y) {

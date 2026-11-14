@@ -29,7 +29,9 @@
 #include "runtime.h"
 #include "view_config.h"
 #include "tla.h"
+#include "../../shared_game/quality_of_life.h"
 #include "host_config_ui.h"
+#include "../../shared_game/autosave.h"
 #include "../../shared_game/field_character.h"
 #include "../../shared_game/spanish_menu.h"
 #include "../../shared_game/italian_menu.h"
@@ -39,7 +41,15 @@
 namespace {
 
 void on_function_entry(std::uint32_t pc) {
+    // Autosave notes the field poll before the radial may answer it.
+    gsr::autosave::on_entry(pc);
+    // The radial first: it notes every dispatcher entry, Retreat's included.
+    if (tla_radial_psynergy_on_entry(pc)) return;
+    if (gsr::qol::on_entry(pc)) return;
     if (tla_retreat_travel_on_entry(pc)) return;
+    if (tla_new_game_on_entry(pc)) return;
+    if (tla_flat_map_on_entry(pc)) return;
+    tla_save_files_on_entry(pc);
     gsr::field_character::on_entry(pc);
     tla_publish_menu_art();
     tla_text_on_entry(pc);
@@ -127,6 +137,9 @@ int main(int argc, char** argv) {
     tla_install_rewind();
     tla_install_gpu_field();
     tla_install_retreat_travel(options);
+    tla_install_save_files(options);
+    tla_install_radial_psynergy(options);
+    tla_install_new_game(options);
     {
         namespace field = gsr::field_character;
         static const field::Game walking_character{

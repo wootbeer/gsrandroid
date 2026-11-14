@@ -8,7 +8,7 @@
 // from the player's ROM, here:
 //
 //   1. check the ROM (SHA-1),
-//   2. translate it into C++ (config/usa/game_code_plan.txt: the main
+//   2. translate it into C++ (data/game_code_plan.txt, copied from config/usa: the main
 //      program, the RAM-copied routines, the overlays, which the game's own
 //      decompressor unpacks via guest_call.h, the synthesized variants and
 //      the particle stamps),
@@ -84,7 +84,7 @@ namespace {
 
 // A ROM revision this release builds, from the game's revision list: its
 // language code (its folder under data/, configs from
-// tools/build_localized_*.py; USA/Europe uses data/ itself) and the two ROM
+// The Broken Seal/tools/build_localized_*.py; USA/Europe uses data/ itself) and the two ROM
 // routines the stamp step runs, measured per revision.
 struct RomRevision {
     const char* code;
@@ -833,7 +833,7 @@ struct Variant {
     std::string toml;
 };
 
-// tools/build_synthesized_dc8_variant.py
+// Synthesized Func_dc8 variant, slot 1.
 Variant synth_dc8(const std::vector<std::uint8_t>& rom, std::uint32_t tmpl) {
     constexpr std::uint32_t kEntry = 0x03000828u, kEnd = 0x030008CCu;
     Variant v;
@@ -886,7 +886,7 @@ Variant synth_dc8(const std::vector<std::uint8_t>& rom, std::uint32_t tmpl) {
     return v;
 }
 
-// tools/build_synthesized_dc8_slot2_variant.py
+// Synthesized Func_dc8 variant, slot 2.
 Variant synth_dc8b(const std::vector<std::uint8_t>& rom, int variant) {
     constexpr std::uint32_t kLoopStart = 0x03000A58u, kLoopEnd = 0x03000A98u;
     constexpr std::uint32_t kTable = 0x030009C4u;
@@ -937,7 +937,7 @@ Variant synth_dc8b(const std::vector<std::uint8_t>& rom, int variant) {
     return v;
 }
 
-// tools/build_synthesized_dc8_slot3_variant.py
+// Synthesized Func_dc8 variant, slot 3.
 Variant synth_dc8c(const std::vector<std::uint8_t>& rom, int variant) {
     constexpr std::uint32_t kSlotStart = 0x03000BD8u, kSlotEnd = 0x03000C70u;
     constexpr std::uint32_t kTable = 0x08000404u;
@@ -996,7 +996,7 @@ struct StampVariant {
     std::string sha1;
 };
 
-// tools/build_stamp_variants.py + emulate_stamp_builder.py: every routine
+// Particle stamps: every routine
 // Func_ed408 (ROM 0x080ED408, Thumb) builds, run with its two measured
 // stand-ins (the slot allocator 0x080048B0 returns the destination; DMA3
 // copies at once).

@@ -5,6 +5,8 @@
 #include "host_window.h"
 #include "view_config.h"
 #include "developer_session.h"
+#include "runtime_bus_bridge.h"
+#include "runtime.h"
 
 #include <array>
 #include <cstring>
@@ -662,6 +664,80 @@ void hotkey_label(char* out, std::size_t n, int keycode, unsigned mods) {
     std::snprintf(out, n, "%s%s", prefix.c_str(), (kn && *kn) ? ui_text(kn) : "?");
 }
 
+// A key or button already bound elsewhere on the Controls or Hotkeys page.
+// The new binding waits while the player chooses to remove the other ones
+// or keep both. Keyboard rows compare by key and modifiers (Controls rows
+// have none); controller rows by button.
+struct BindUse { Capture kind; int index; int slot; };
+struct PendingBind {
+    bool open = false;
+    Capture kind = Capture::None;
+    int index = -1, slot = 0, value = 0;
+    unsigned mods = 0;
+    std::vector<BindUse> others;
+};
+PendingBind g_pending_bind;
+
+const char* button_row_label(int bit) {
+    for (const auto& b : kButtons)
+        if (b.bit == bit) return b.label;
+    return "?";
+}
+
+std::vector<BindUse> bind_uses(const ConfigUiState* st, Capture kind, int index, int slot,
+                               int value, unsigned mods) {
+    std::vector<BindUse> out;
+    const bool keyboard = kind == Capture::Key || kind == Capture::Hotkey;
+    if (keyboard) {
+        const int key = kind == Capture::Key
+            ? static_cast<int>(SDL_GetKeyFromScancode(static_cast<SDL_Scancode>(value))) : value;
+        for (int i = 0; i < 10; ++i)
+            if (!(kind == Capture::Key && i == index) && st->key_bind[i] && mods == 0 &&
+                static_cast<int>(SDL_GetKeyFromScancode(
+                    static_cast<SDL_Scancode>(st->key_bind[i]))) == key)
+                out.push_back({Capture::Key, i, 0});
+        for (int h = 0; h < st->hotkey_count; ++h)
+            if (!(kind == Capture::Hotkey && h == index) && st->hotkey_key[h] == key &&
+                st->hotkey_mods[h] == mods)
+                out.push_back({Capture::Hotkey, h, 0});
+    } else {
+        for (int alt = 0; alt < 2; ++alt) {
+            const int* binds = alt == 0 ? st->pad_bind : st->pad_bind_alt;
+            for (int i = 0; i < 10; ++i)
+                if (!(kind == Capture::Pad && i == index && alt == slot) && binds[i] == value)
+                    out.push_back({Capture::Pad, i, alt});
+        }
+        for (int h = 0; h < st->hotkey_count; ++h)
+            if (!(kind == Capture::HotkeyPad && h == index) && st->hotkey_pad[h] == value)
+                out.push_back({Capture::HotkeyPad, h, 0});
+    }
+    return out;
+}
+
+void apply_bind(ConfigUiState* st, Capture kind, int index, int slot, int value, unsigned mods) {
+    switch (kind) {
+        case Capture::Key: st->key_bind[index] = value; break;
+        case Capture::Pad: (slot == 0 ? st->pad_bind : st->pad_bind_alt)[index] = value; break;
+        case Capture::Hotkey: st->hotkey_key[index] = value; st->hotkey_mods[index] = mods; break;
+        case Capture::HotkeyPad: st->hotkey_pad[index] = value; break;
+        default: return;
+    }
+    st->binds_changed = true;
+}
+
+// Unbound: no key is 0, no button -1.
+void clear_bind(ConfigUiState* st, const BindUse& use) {
+    const bool pad = use.kind == Capture::Pad || use.kind == Capture::HotkeyPad;
+    apply_bind(st, use.kind, use.index, use.slot, pad ? -1 : 0, 0);
+}
+
+// Bind now, or ask first when the input is already in use.
+void request_bind(ConfigUiState* st, Capture kind, int index, int slot, int value, unsigned mods) {
+    auto others = bind_uses(st, kind, index, slot, value, mods);
+    if (others.empty()) { apply_bind(st, kind, index, slot, value, mods); return; }
+    g_pending_bind = {true, kind, index, slot, value, mods, std::move(others)};
+}
+
 // Keep explanations in the fixed help panel, for mouse and nav focus alike.
 void caption(const char* text) {
     if (g_setting_label_hovered ||
@@ -1194,13 +1270,19 @@ void draw_video_page(ConfigUiState* st) {
         {
             const bool filters_available = st->screen_filters_supported && st->screen_filters_available;
             if (!filters_available) ImGui::BeginDisabled();
-            static constexpr const char* kFilterLabels[] = {"Off", "LCD3x", "xBR",
-                                                           "CRT Lottes", "ScaleFX"};
+            // Labels by gbarecomp::ScreenFilter value; kFilterOrder is the
+            // order the list shows them in.
+            static constexpr const char* kFilterLabels[] = {
+                "Off", "LCD3x", "xBR", "CRT Lottes", "ScaleFX", "Bilinear",
+                "Sharp bilinear"};
+            static constexpr int kFilterOrder[] = {0, 5, 6, 1, 2, 3, 4};
+            static_assert(std::size(kFilterLabels) == gbarecomp::kScreenFilterLast + 1);
+            static_assert(std::size(kFilterOrder) == std::size(kFilterLabels));
             const int filter_choice =
-                st->screen_filter >= 1 && st->screen_filter <= 4
+                st->screen_filter >= 1 && st->screen_filter <= gbarecomp::kScreenFilterLast
                     ? st->screen_filter : 0;
             if (setting_combo("Filter (test)", kFilterLabels[filter_choice])) {
-                for (int i = 0; i < 5; ++i) {
+                for (const int i : kFilterOrder) {
                     if (native_selectable(kFilterLabels[i], i == filter_choice)) {
                         st->screen_filter = i;
                         st->video_changed = true;
@@ -1211,11 +1293,35 @@ void draw_video_page(ConfigUiState* st) {
             }
             if (!filters_available) ImGui::EndDisabled();
             caption(filters_available
-                ? "Test option. LCD3x imitates the GBA screen's grid, CRT Lottes "
-                  "an old TV; xBR and ScaleFX smooth the pixel art."
+                ? "Test option. Bilinear smooths the picture; sharp bilinear keeps "
+                  "pixels crisp with even sizes. LCD3x imitates the GBA screen's "
+                  "grid, CRT Lottes an old TV; xBR and ScaleFX smooth the pixel art."
                 : (st->screen_filters_supported
                     ? "Enable Screen Filters in the launcher. Requires OpenGL."
                     : "Screen filters are not yet available for this game."));
+            // The chosen filter's adjustable values (kScreenFilterParams).
+            bool has_params = false;
+            ImGui::PushID("screen_filter_params");
+            for (int i = 0; filters_available && i < gbarecomp::kScreenFilterParamCount; ++i) {
+                const gbarecomp::ScreenFilterParam& p = gbarecomp::kScreenFilterParams[i];
+                if (static_cast<int>(p.filter) != filter_choice) continue;
+                has_params = true;
+                ImGui::PushID(i);
+                const SliderEdit edit = slider_float(p.label, &st->screen_filter_params[i],
+                                                     p.lo, p.hi, p.step, p.format);
+                ImGui::PopID();
+                if (edit.changed) st->video_changed = true;
+                if (edit.committed) st->screen_filter_save = true;
+            }
+            if (has_params && native_button("Reset filter settings")) {
+                const gbarecomp::ScreenFilterValues defaults = gbarecomp::screen_filter_defaults();
+                for (int i = 0; i < gbarecomp::kScreenFilterParamCount; ++i)
+                    if (static_cast<int>(gbarecomp::kScreenFilterParams[i].filter) == filter_choice)
+                        st->screen_filter_params[i] = defaults[i];
+                st->video_changed = true;
+                st->screen_filter_save = true;
+            }
+            ImGui::PopID();
         }
 
     }
@@ -1391,10 +1497,63 @@ void draw_quit_confirmation(ConfigUiState* st) {
     ImGui::PopStyleVar(2);
 }
 
+// The question for a key or button already in use: list where, then
+// remove it there, keep both, or cancel the new binding.
+void draw_bind_conflict(ConfigUiState* st) {
+    if (!g_pending_bind.open) return;
+    const std::string title = std::string(ui_text("Already in use")) + "###BindConflict";
+    if (!ImGui::IsPopupOpen(title.c_str())) ImGui::OpenPopup(title.c_str());
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (!ImGui::BeginPopupModal(title.c_str(), nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        return;
+    ImGui::TextUnformatted(ui_text("This key or button is already used by:"));
+    for (const BindUse& use : g_pending_bind.others) {
+        std::string where;
+        if (use.kind == Capture::Key || use.kind == Capture::Pad) {
+            where = std::string(ui_text("Controls")) + ": " + ui_text(button_row_label(use.index));
+            if (use.kind == Capture::Pad && use.slot == 1)
+                where += std::string(" (") + ui_text("Alternate") + ")";
+        } else {
+            where = std::string(ui_text("Hotkeys")) + ": " +
+                ui_text(st->hotkey_names ? st->hotkey_names[use.index] : "?");
+        }
+        ImGui::BulletText("%s", where.c_str());
+    }
+    const bool remove = native_button("Remove it there");
+    ImGui::SetItemDefaultFocus();
+    ImGui::SameLine();
+    const bool keep = native_button("Keep both");
+    ImGui::SameLine();
+    const bool cancel = native_button("Cancel") ||
+        (!ImGui::IsWindowAppearing() &&
+         (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+          ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)));
+    if (remove || keep) {
+        if (remove)
+            for (const BindUse& use : g_pending_bind.others) clear_bind(st, use);
+        apply_bind(st, g_pending_bind.kind, g_pending_bind.index, g_pending_bind.slot,
+                   g_pending_bind.value, g_pending_bind.mods);
+    }
+    if (remove || keep || cancel) {
+        g_pending_bind = {};
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
+// In Challenge Mode (cheats_blocked) every cheat shows its normal value,
+// unavailable; the player's own choices stay saved for other files.
 void draw_cheats_page(ConfigUiState* st) {
+    const bool blocked = cheats_blocked();
+    if (blocked) caption("Not available in Challenge Mode.");
+    if (blocked) ImGui::BeginDisabled();
     section("Battle cheats");
-    if (setting_checkbox("Infinite HP", &st->infinite_hp)) st->cheats_changed = true;
-    if (setting_checkbox("Infinite PP", &st->infinite_pp)) st->cheats_changed = true;
+    bool off = false;
+    if (setting_checkbox("Infinite HP", blocked ? &off : &st->infinite_hp)) st->cheats_changed = true;
+    if (setting_checkbox("Infinite PP", blocked ? &off : &st->infinite_pp)) st->cheats_changed = true;
     caption("Party HP and PP are restored as the game uses them.");
     static const char* const steps[] = {
         "0x", "0.5x", "1x", "2x", "5x", "10x", "25x", "50x", "100x"};
@@ -1402,7 +1561,7 @@ void draw_cheats_page(ConfigUiState* st) {
         "0x", "0.5x", "1x", "2x", "5x", "10x"};
     auto reward_combo = [](const char* label, const char* key,
                           const char* const* labels, int count) {
-        int value = game_option_get(key, 2);
+        int value = cheat_option_get(key, 2);
         if (value < 0 || value >= count) value = 2;
             if (setting_combo(label, labels[value])) {
             for (int i = 0; i < count; ++i) {
@@ -1422,10 +1581,11 @@ void draw_cheats_page(ConfigUiState* st) {
         const GameOptionSwitch& s = g_game_switches[i];
         if (std::strcmp(s.key, walk_through_walls::kOptionKey) != 0) continue;
         section("Field cheats");
-        bool on = game_option_get(s.key, 0) != 0;
+        bool on = cheat_option_get(s.key, 0) != 0;
         if (setting_checkbox(s.label, &on)) game_option_set(s.key, on ? 1 : 0);
         caption(s.caption);
     }
+    if (blocked) ImGui::EndDisabled();
 }
 
 void draw_fps_overlay(const ConfigUiState* st) {
@@ -1447,6 +1607,31 @@ void draw_fps_overlay(const ConfigUiState* st) {
         ImGui::SameLine();
         ImGui::TextColored(kParchment, ui_text("%.0f%% speed"),
                            st->emulation_speed_percent);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar();
+}
+
+// Stays up while the battery save cannot be stored on the PC (runtime.h
+// save_write_failing); the runtime keeps retrying and clears it on success.
+void draw_save_warning() {
+    if (!save_write_failing()) return;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                                   viewport->WorkPos.y + 8.0f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowBgAlpha(0.85f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 6.0f));
+    constexpr ImGuiWindowFlags kFlags =
+        ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoNav;
+    if (ImGui::Begin("##SaveWarning", nullptr, kFlags)) {
+        ImGui::TextColored(kGold, "%s", ui_text("Progress could not be saved to the PC."));
+        ImGui::TextColored(kParchment, "%s",
+                           ui_text("Check free disk space. Retrying..."));
     }
     ImGui::End();
     ImGui::PopStyleVar();
@@ -1704,7 +1889,7 @@ void config_ui_set_visible(bool on) {
     if (!g_ready) return;
     if (on && !g_visible) g_config_window_recover = true;
     g_visible = on;
-    if (!on) g_capture = Capture::None;
+    if (!on) { g_capture = Capture::None; g_pending_bind = {}; }
 }
 
 void config_ui_toggle() { config_ui_set_visible(!g_visible); }
@@ -1784,16 +1969,10 @@ bool config_ui_capture_key(ConfigUiState* st, int scancode, int keycode,
     if (!g_visible || g_capture == Capture::None) return false;
     if (keycode == SDLK_ESCAPE) { g_capture = Capture::None; return true; }
     if (g_capture == Capture::Key && g_capture_index >= 0) {
-        for (int i = 0; i < 10; ++i)
-            if (i != g_capture_index && st->key_bind[i] == scancode)
-                st->key_bind[i] = 0;   // move, never duplicate
-        st->key_bind[g_capture_index] = scancode;
-        st->binds_changed = true;
+        request_bind(st, Capture::Key, g_capture_index, 0, scancode, 0);
     } else if (g_capture == Capture::Hotkey && g_capture_index >= 0) {
-        st->hotkey_key[g_capture_index] = keycode;
-        st->hotkey_mods[g_capture_index] =
-            mods & (KMOD_CTRL | KMOD_ALT | KMOD_SHIFT);
-        st->binds_changed = true;
+        request_bind(st, Capture::Hotkey, g_capture_index, 0, keycode,
+                     mods & (KMOD_CTRL | KMOD_ALT | KMOD_SHIFT));
     } else {
         return false;   // a pad box is armed; a key does not satisfy it
     }
@@ -1808,26 +1987,16 @@ bool config_ui_capture_pad(ConfigUiState* st, int button) {
     // pull while a Controls-page pad box is armed is not consumed. Stick
     // directions (also synthetic ids) are accepted for both.
     const bool is_trigger = (button == kPadTriggerLeft || button == kPadTriggerRight);
+    // A button already used elsewhere asks first (draw_bind_conflict):
+    // sharing can be intended (Fast Forward hold and toggle on one button).
     if (g_capture == Capture::Pad) {
         if (is_trigger) return false;
-        for (int slot = 0; slot < 2; ++slot) {
-            int* bindings = slot == 0 ? st->pad_bind : st->pad_bind_alt;
-            for (int i = 0; i < 10; ++i)
-                if ((i != g_capture_index || slot != g_capture_pad_slot) &&
-                    bindings[i] == button)
-                    bindings[i] = -1;
-        }
-        (g_capture_pad_slot == 0 ? st->pad_bind : st->pad_bind_alt)[g_capture_index] = button;
+        request_bind(st, Capture::Pad, g_capture_index, g_capture_pad_slot, button, 0);
     } else if (g_capture == Capture::HotkeyPad) {
-        // Unlike the gameplay pad above, a hotkey's controller button is not
-        // deduped against the other hotkey rows: Fast Forward hold and toggle
-        // sharing one button, say, is legitimate, not a conflict to resolve
-        // silently.
-        st->hotkey_pad[g_capture_index] = button;
+        request_bind(st, Capture::HotkeyPad, g_capture_index, 0, button, 0);
     } else {
         return false;
     }
-    st->binds_changed = true;
     g_capture = Capture::None;
     return true;
 }
@@ -1856,6 +2025,15 @@ void config_ui_draw(ConfigUiState* st) {
     // Initialize backend device objects before installing the bitmap atlas;
     // first-frame font creation would otherwise replace its nearest filtering.
     apply_pending_menu_art();
+    // ImGui reads the controller every frame, menu open or not, and holding
+    // its menu button (X, the west face button) opens its own window switcher:
+    // an empty F1-style box during play when X is bound to Auto-repeat A.
+    // Controller navigation only while the menu is open.
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        if (g_visible) io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        else           io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+    }
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
 
@@ -2164,6 +2342,7 @@ void config_ui_draw(ConfigUiState* st) {
     }
 
     draw_fps_overlay(st);
+    draw_save_warning();
 
     // Unlike the F1 configuration window, this stays visible during normal
     // gameplay whenever the persisted Debug overlay switch is on.
@@ -2173,6 +2352,7 @@ void config_ui_draw(ConfigUiState* st) {
     // frame, independent of g_visible, same as the debug overlay above.
     if (g_config_ui_extra_draw) g_config_ui_extra_draw();
     draw_quit_confirmation(st);
+    draw_bind_conflict(st);
 
     ImGui::Render();
     if (g_use_opengl) {

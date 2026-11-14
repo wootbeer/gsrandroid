@@ -15,6 +15,7 @@
 #include "../gba/gba_irq.h"
 #include "../gba/gba_ppu.h"
 #include "host_prof_phase.h"
+#include "game_options.h"
 #include "runtime.h"  // guest_call, guest_return_now
 
 #ifdef GBA_COSIM
@@ -882,6 +883,36 @@ void runtime_set_frame_render_gate_hook(
     g_frame_render_gate_hook = std::move(hook);
 }
 
+namespace {
+std::atomic<bool> g_cheats_blocked{false};
+}  // namespace
+
+void set_cheats_blocked(bool blocked) {
+    g_cheats_blocked.store(blocked, std::memory_order_relaxed);
+}
+
+bool cheats_blocked() {
+    return g_cheats_blocked.load(std::memory_order_relaxed);
+}
+
+int cheat_option_get(const char* key, int normal) {
+    return cheats_blocked() ? normal : game_option_get(key, normal);
+}
+
+namespace {
+// Default "Flicker only - Strong" (kTemporalBlendDefaultIndex) until the
+// host window publishes the player's choice.
+std::atomic<int> g_flicker_reduction_index{3};
+}  // namespace
+
+void set_flicker_reduction_index(int index) {
+    g_flicker_reduction_index.store(index, std::memory_order_relaxed);
+}
+
+int flicker_reduction_index() {
+    return g_flicker_reduction_index.load(std::memory_order_relaxed);
+}
+
 gba::GbaBus* active_bus() {
     return g_active_bus;
 }
@@ -1138,7 +1169,7 @@ extern "C" void bus_write_u8_slow(uint32_t addr, uint8_t val) {
 extern "C" uint32_t g_runtime_deferred_cycles = 0;
 // Set while a deferred debt is paid in the middle of an instruction (before
 // an I/O, palette, VRAM or OAM access): the clock and devices advance, but
-// an interrupt waits for the next instruction boundary, as it would today.
+// an interrupt waits for the next instruction boundary.
 static bool g_tick_irq_held = false;
 
 extern "C" void runtime_flush_deferred(void) {
@@ -1494,8 +1525,9 @@ static void tick_devices(gba::GbaBus* bus, gba::GbaPpu* ppu, uint32_t cycles) {
             ++g_runtime_vblank_starts;
             // Host-controlled cheats run at the same stable boundary as the
             // frame counter. They touch only the confirmed party RAM fields
-            // and are a no-op while both options are off.
-            runtime_apply_infinite_hp_pp();
+            // and are a no-op while both options are off or a game rule
+            // blocks them.
+            if (!gbarecomp::cheats_blocked()) runtime_apply_infinite_hp_pp();
             {
                 CostTimer _ct(&g_cost_dma_ns, &g_cost_dma_calls);
                 bus->io().run_timed_dma(1);   // VBlank-timed DMA

@@ -1,6 +1,6 @@
 # Third-party notices
 
-This file collects the licence and attribution notices from the projects this port is built on, copied unchanged from the vendored copies in this repository (version 0.7.1 of Golden Sun Recompiled). The originals stay where they are and must stay with any copy of this project. See `COPYING` for the notice covering the Android port itself. Full licence texts are in the `licenses/` folder.
+This file collects the licence and attribution notices from the projects this port is built on, copied unchanged from the vendored copies in this repository (version 0.8.1 of Golden Sun Recompiled). The originals stay where they are and must stay with any copy of this project. See `COPYING` for the notice covering the Android port itself. Full licence texts are in the `licenses/` folder.
 
 ---
 

@@ -176,6 +176,10 @@ target_link_libraries(gsrhost PRIVATE
 add_library(gsrengine SHARED
 		gsr/gsr_engine_entry.cpp
 		${GSRC_TBS}/src/runner_main.cpp
+		${GSRC_TBS}/src/runner_cheats.cpp
+		${GSRC_TBS}/src/runner_ram_code.cpp
+		${GSRC_TBS}/src/runner_settings.cpp
+		${GSRC_SG}/code_box.cpp
 		${GSRC_TBS}/src/frame_capture.cpp
 		${GSRC_TBS}/src/map_recorder.cpp
 		${GSRC_TBS}/src/obj_recorder.cpp
@@ -244,6 +248,10 @@ add_library(gsrtlaengine SHARED
 		${GSRC_TLA}/src/tla_retreat_travel.cpp
 		${GSRC_TLA}/src/tla_enemy_hp_bar.cpp
 		${GSRC_TLA}/src/tla_trackers.cpp
+		${GSRC_TLA}/src/tla_save_files.cpp
+		${GSRC_TLA}/src/tla_radial_psynergy.cpp
+		${GSRC_TLA}/src/tla_new_game.cpp
+		${GSRC_SG}/code_box.cpp
 		${GSRC_GB}/src/field/field_scene.cpp
 		${GSRC_GB}/src/field/field_scene_renderer.cpp
 		${GSRC_TLA}/src/field_game_profile.cpp

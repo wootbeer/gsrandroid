@@ -700,15 +700,7 @@ void dispatch(const TcpDebugServer::Context& ctx, std::string_view req,
                               i, static_cast<unsigned>(ctx.cpu->R[i]));
                 body += f;
             }
-            uint32_t cpsr = 0;
-            if (ctx.cpu->cpsr.n) cpsr |= 1u << 31;
-            if (ctx.cpu->cpsr.z) cpsr |= 1u << 30;
-            if (ctx.cpu->cpsr.c) cpsr |= 1u << 29;
-            if (ctx.cpu->cpsr.v) cpsr |= 1u << 28;
-            if (ctx.cpu->cpsr.i) cpsr |= 1u << 7;
-            if (ctx.cpu->cpsr.f) cpsr |= 1u << 6;
-            if (ctx.cpu->cpsr.t) cpsr |= 1u << 5;
-            cpsr |= ctx.cpu->cpsr.mode & 0x1Fu;
+            uint32_t cpsr = ctx.cpu->cpsr.word();
             char cpsr_field[48];
             std::snprintf(cpsr_field, sizeof(cpsr_field), ",\"cpsr\":%u",
                           static_cast<unsigned>(cpsr));
@@ -734,7 +726,7 @@ void dispatch(const TcpDebugServer::Context& ctx, std::string_view req,
         out = buf;
         return;
     }
-    // Free-run control. `continue`/`pause` are NON-BLOCKING: they set the game
+    // Free-run control. `continue`/`resume` and `pause` are NON-BLOCKING: they set the game
     // thread's run-state and return immediately, so the server (this thread)
     // stays free to answer observation commands while the game free-runs — even
     // while it is wedged in a busy-spin freeze (observe-the-hung-core). Place
@@ -968,15 +960,7 @@ void dispatch(const TcpDebugServer::Context& ctx, std::string_view req,
                               i, static_cast<unsigned>(ctx.cpu->R[i]));
                 body += field;
             }
-            // Pack CPSR the same way enter_irq does.
-            if (ctx.cpu->cpsr.n) cpsr |= 1u << 31;
-            if (ctx.cpu->cpsr.z) cpsr |= 1u << 30;
-            if (ctx.cpu->cpsr.c) cpsr |= 1u << 29;
-            if (ctx.cpu->cpsr.v) cpsr |= 1u << 28;
-            if (ctx.cpu->cpsr.i) cpsr |= 1u << 7;
-            if (ctx.cpu->cpsr.f) cpsr |= 1u << 6;
-            if (ctx.cpu->cpsr.t) cpsr |= 1u << 5;
-            cpsr |= ctx.cpu->cpsr.mode & 0x1Fu;
+            cpsr = ctx.cpu->cpsr.word();
         }
         char tail[64];
         std::snprintf(tail, sizeof(tail), ",\"cpsr\":%u}",

@@ -48,9 +48,9 @@
 #include <SDL.h>
 
 // Shared ecosystem clock-domain bridge (callback-driven DRC). Replaces the
-// SDL_QueueAudio push path, which silence-filled on queue underrun (~3.4/s
-// measured on Minish Cap) and hard-flushed on overflow — the same output-side
-// crackle fixed on NES. IMPL is defined in exactly this one translation unit.
+// SDL_QueueAudio push path, which silence-filled on queue underrun and
+// hard-flushed on overflow (audible crackle). IMPL is defined in exactly this
+// one translation unit.
 #define RECOMP_AUDIO_DRC_IMPL
 #include "recomp_audio_drc.h"
 
@@ -117,9 +117,10 @@ void save_menu_layout(Backend* b);
 // Soft Reset asks the launcher for a fresh game process.
 //
 // HK_TURBO ("Fast Forward (hold)" in the UI) is level-triggered: on only while the
-// binding is down. HK_TURBO_TOGGLE is an edge-triggered latch. Both drive Events::fast_forward (see host_window.h). New ids are
-// appended so existing HostHotkey values, and therefore existing config.ini
-// [KeyMap] rows, keep their meaning.
+// binding is down. HK_TURBO_TOGGLE is an edge-triggered latch. Both drive
+// Events::fast_forward (see host_window.h). New ids are appended so existing
+// HostHotkey values, and therefore existing config.ini [KeyMap] rows, keep
+// their meaning.
 enum HostHotkey {
     HK_FULLSCREEN = 0, HK_PAUSE, HK_TURBO,
     HK_WINDOW_BIGGER, HK_WINDOW_SMALLER,
@@ -181,7 +182,7 @@ constexpr float kStickSectorSin = 0.38268343f;
 // unconditionally (~24 B/present); GBARECOMP_PRESENT_CADENCE=1 adds a
 // periodic stderr summary and a full CSV dump at close
 // (GBARECOMP_PRESENT_CADENCE_DUMP=path overrides ./_present_cadence.csv).
-// Interpretation (tools/analyze_present_cadence.py automates this):
+// Interpretation:
 //   block_us ≈ 0 on every present → vsync is NOT blocking (tear-prone);
 //   rdelta 1,1,1… at ~16.74 ms gaps on a high-Hz VRR panel → VRR engaged;
 //   rdelta 2/3 alternation on 164 Hz → 59.73→164 pulldown (cadence judder);
@@ -414,6 +415,7 @@ struct Backend {
     // into screen_filter.cpp.
     ScreenFilter screen_filter = ScreenFilter::Off;
     ScreenFilter preferred_screen_filter = ScreenFilter::Off;
+    ScreenFilterValues screen_filter_params = screen_filter_defaults();
     bool screen_filters_on = false;
     bool resize_driven_view = false;
     bool linear_filter = false;
@@ -503,7 +505,7 @@ struct Backend {
     bool         view_mode_config_present = false;
     bool         widescreen_game_allowed = false;
     bool         widescreen = false;
-    // Legacy [Enhancements] Widescreen=true/false state. A new ViewMode key
+    // Legacy [Enhancements] Widescreen=true/false state. A ViewMode key
     // takes precedence; the bool is retained on write for older builds.
     bool         widescreen_config_present = false;
     // Fast Forward (toggle) latch (see Events::fast_forward). Runtime-only: only the
@@ -1001,7 +1003,7 @@ void rebuild_color_lut(Backend* b) {
 
 // SDL audio pull callback: render exactly `len` bytes of device-rate mono S16
 // from the bridge ring. The bridge emits faded silence (not raw zeros) before
-// prime / on underrun, so a momentarily-starved producer no longer clicks.
+// prime / on underrun, so a momentarily-starved producer does not click.
 void gba_audio_callback(void* userdata, Uint8* stream, int len) {
     auto* b = static_cast<Backend*>(userdata);
     int frames = len / static_cast<int>(sizeof(int16_t) *
@@ -1424,7 +1426,7 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
 // include. ~0 during async play; >0 means the game thread is compiling.
 uint64_t overlay_game_thread_compile_ns();
 
-static void probe_stereo_audio_push(Backend* b, std::size_t count) {
+static void probe_audio_push(Backend* b, std::size_t count) {
     static int s_probe = -1;
     if (s_probe < 0) {
         s_probe = env_flag("GBARECOMP_AUDIO_PROBE") ? 1 : 0;
@@ -1496,37 +1498,9 @@ void HostWindow::push_audio_samples(const int16_t* samples, std::size_t count) {
     rab_push(&b->bridge, samples, static_cast<int>(count)); // mono: count == frames
     SDL_UnlockMutex(b->audio_mtx);
 
-    // Audio probe: GBARECOMP_AUDIO_PROBE=1 reports the bridge's underrun and
-    // overflow counters. Expect ~0 underruns once primed.
-    static int s_probe = -1;
-    if (s_probe < 0) { s_probe = env_flag("GBARECOMP_AUDIO_PROBE") ? 1 : 0; }
-    if (s_probe) {
-        static unsigned long long s_pushes = 0, s_samples = 0;
-        s_pushes++; s_samples += count;
-        if ((s_pushes % 120ULL) == 0ULL) {
-            rab_stats st; rab_get_stats(&b->bridge, &st);
-            double secs = static_cast<double>(s_samples) / 65536.0;
-            double stretch_ms = st.stretch_frames * 1000.0
-                              / static_cast<double>(b->bridge.cfg.host_rate);
-            // Game-thread codegen time: cumulative + this-window delta. Async
-            // play holds the delta at 0; sync play grows it.
-            static unsigned long long s_prev_cc_ns = 0;
-            unsigned long long cc_ns = overlay_game_thread_compile_ns();
-            double gt_ms      = cc_ns / 1e6;
-            double gt_dms     = (cc_ns - s_prev_cc_ns) / 1e6;
-            s_prev_cc_ns = cc_ns;
-            std::fprintf(stderr,
-                "[gba-audio-probe] pushes=%llu audio=%.1fs bridge_underrun=%llu(%.2f/s) "
-                "stretch=%.0fms(ev=%llu) overflow_drops=%llu fill_ms=%.1f corr=%+.3f%% "
-                "gt_compile=%.1fms(+%.1fms)\n",
-                s_pushes, secs, (unsigned long long)st.underrun_events,
-                secs > 0 ? st.underrun_events / secs : 0.0,
-                stretch_ms, (unsigned long long)st.stretch_events,
-                (unsigned long long)st.overflow_drops, rab_fill_ms(&b->bridge),
-                st.last_correction * 100.0, gt_ms, gt_dms);
-            std::fflush(stderr);
-        }
-    }
+    // GBARECOMP_AUDIO_PROBE=1 reports the bridge's underrun and overflow
+    // counters. Expect ~0 underruns once primed.
+    probe_audio_push(b, count);
 }
 
 namespace { void release_cover_art(); }  // the cover's cartridge, below
@@ -1837,9 +1811,10 @@ void HostWindow::present(const uint8_t* rgb888) {
         !b->native_fb.empty() && b->native_scene_w > 0 && b->native_scene_h > 0;
     if (!rgb888 && !supplied_native) return;
 
-    // VFX-FLICKER-02: temporal frame blend ("LCD ghosting"), opt-in, off by
-    // default. Runs first, directly on the PPU frame and before colour
-    // grading and scaling, like the pixels blending on a real GBA screen.
+    // VFX-FLICKER-02: temporal frame blend ("LCD ghosting"), selectable in
+    // the F1 menu (default: Flicker only, Strong). Runs first, directly on the PPU
+    // frame and before colour grading and scaling, like the pixels blending
+    // on a real GBA screen.
     // Skipped for the native-compositor path (supplied_native is a separately
     // scaled buffer this feature does not reach) and disabled while 2x scene
     // interpolation is on: interpolation sends a synthesized midpoint frame
@@ -1853,6 +1828,7 @@ void HostWindow::present(const uint8_t* rgb888) {
             b->cfg.frame_interpolation_available && b->cfg.frame_interpolation_2x;
         const int blend_index = std::clamp(b->temporal_blend_index, 0,
                                            gbarecomp::kTemporalBlendItemCount - 1);
+        gbarecomp::set_flicker_reduction_index(blend_index);
         const bool blend_engaged = !supplied_native && rgb888 != nullptr &&
             blend_index != 0 && !interpolation_engaged;
         if (blend_engaged) {
@@ -1994,8 +1970,10 @@ void HostWindow::present(const uint8_t* rgb888) {
                 layout.x, layout.y, layout.width, layout.height};
             filtered = layout.width > 0 && layout.height > 0 &&
                        screen_filter_draw(b->renderer, frame_texture,
-                                          b->screen_filter, whole, b->base_w,
-                                          b->base_h, destination);
+                                          b->screen_filter,
+                                          b->screen_filter_params.data(),
+                                          whole, b->base_w, b->base_h,
+                                          destination);
         }
         if (!filtered)
             SDL_RenderCopy(b->renderer, frame_texture, nullptr, nullptr);
@@ -2057,7 +2035,8 @@ void HostWindow::present(const uint8_t* rgb888) {
             const bool filtered =
                 b->screen_filter != ScreenFilter::Off &&
                 screen_filter_draw(b->renderer, frame_texture,
-                                   b->screen_filter, source,
+                                   b->screen_filter,
+                                   b->screen_filter_params.data(), source,
                                    shown_width(b, b->base_w, b->base_h),
                                    b->base_h, destination);
             // 3:2 copies the whole texture, exactly as before 4:3 existed.
@@ -2220,8 +2199,17 @@ void HostWindow::load_input_config(const char* dir) {
             b->cfg.integer_scale = on;
         } else if (SDL_strcasecmp(key, "ScreenFilter") == 0) {
             const long filter = std::strtol(val, nullptr, 10);
-            if (filter >= 0 && filter <= static_cast<int>(ScreenFilter::ScaleFx))
+            if (filter >= 0 && filter <= kScreenFilterLast)
                 b->preferred_screen_filter = static_cast<ScreenFilter>(filter);
+        } else {
+            for (int i = 0; i < kScreenFilterParamCount; ++i) {
+                const ScreenFilterParam& param = kScreenFilterParams[i];
+                if (SDL_strcasecmp(key, param.key) != 0) continue;
+                char* end = nullptr;
+                const float v = std::strtof(val, &end);
+                if (end != val && std::isfinite(v))
+                    b->screen_filter_params[i] = std::clamp(v, param.lo, param.hi);
+            }
         }
     });
 
@@ -2719,7 +2707,7 @@ void HostWindow::push_audio_samples_stereo(const int16_t* samples,
     SDL_LockMutex(b->audio_mtx);
     rab_push(&b->bridge, input, static_cast<int>(count));
     SDL_UnlockMutex(b->audio_mtx);
-    probe_stereo_audio_push(b, count);
+    probe_audio_push(b, count);
 }
 
 void HostWindow::reset_audio() {
@@ -3160,18 +3148,25 @@ bool write_video_ini(const Backend* b) {
         if (!cur.empty()) lines.push_back(cur);
         std::fclose(in);
     }
-    static const char* const names[] = {
+    std::vector<const char*> names = {
         "WindowScale", "Fullscreen", "VSync", "LinearFilter",
         "IntegerScale", "ScreenFilter", "ShowFPS"
     };
-    const std::string values[] = {
+    std::vector<std::string> values = {
         std::to_string(b->scale), b->preferred_fullscreen ? "true" : "false",
         b->vsync ? "true" : "false", b->linear_filter ? "true" : "false",
         b->integer_scale ? "true" : "false",
         std::to_string(static_cast<int>(b->preferred_screen_filter)),
         b->fps_readout ? "true" : "false"
     };
-    rewrite_ini_section(lines, "Video", names, values, static_cast<int>(std::size(names)));
+    for (int i = 0; i < kScreenFilterParamCount; ++i) {
+        char text[32];
+        std::snprintf(text, sizeof(text), "%g", b->screen_filter_params[i]);
+        names.push_back(kScreenFilterParams[i].key);
+        values.emplace_back(text);
+    }
+    rewrite_ini_section(lines, "Video", names.data(), values.data(),
+                        static_cast<int>(names.size()));
     std::string text;
     for (const auto& line : lines) text += line + '\n';
     return gba::replace_file(path, text.data(), text.size(), nullptr);
@@ -3762,6 +3757,7 @@ HostWindow::Events HostWindow::pump() {
         b->cfg.native_scale = b->native_scale;
         b->cfg.screen_filters_available = b->screen_filters_on;
         b->cfg.screen_filter = static_cast<int>(b->preferred_screen_filter);
+        b->cfg.screen_filter_params = b->screen_filter_params;
     }
     if (!b->cfg.audio_changed && !b->cfg.mute)
         b->cfg.volume = b->volume;
@@ -4168,13 +4164,15 @@ HostWindow::Events HostWindow::pump() {
         }
         if (b->aspect_view_available && b->cfg.widescreen && b->cfg.aspect == ViewAspectMinimalSharpPixels)
             b->cfg.integer_scale = true;
-        if (b->cfg.video_changed || b->cfg.color_save) {
+        if (b->cfg.video_changed || b->cfg.color_save ||
+            b->cfg.screen_filter_save) {
             const bool video_settings_changed =
                 b->cfg.fullscreen != b->fullscreen || b->cfg.scale != b->scale ||
                 b->cfg.show_fps != b->fps_readout || b->cfg.vsync != b->vsync ||
                 b->cfg.linear_filter != b->linear_filter ||
                 b->cfg.integer_scale != b->integer_scale ||
-                b->cfg.screen_filter != static_cast<int>(b->preferred_screen_filter);
+                b->cfg.screen_filter != static_cast<int>(b->preferred_screen_filter) ||
+                b->cfg.screen_filter_save;
             if (b->cfg.fullscreen != b->fullscreen) {
                 set_fullscreen(b->cfg.fullscreen);
                 if (b->fullscreen == b->cfg.fullscreen) b->preferred_fullscreen = b->fullscreen;
@@ -4233,7 +4231,13 @@ HostWindow::Events HostWindow::pump() {
             }
             // Keep the preference even when this launch cannot use filters.
             b->preferred_screen_filter = static_cast<ScreenFilter>(std::clamp(
-                b->cfg.screen_filter, 0, static_cast<int>(ScreenFilter::ScaleFx)));
+                b->cfg.screen_filter, 0, kScreenFilterLast));
+            // Sliders show live; they save when let go (screen_filter_save).
+            for (int i = 0; i < kScreenFilterParamCount; ++i)
+                b->screen_filter_params[i] = std::clamp(
+                    b->cfg.screen_filter_params[i], kScreenFilterParams[i].lo,
+                    kScreenFilterParams[i].hi);
+            b->cfg.screen_filter_save = false;
             b->screen_filter = b->screen_filters_on ? b->preferred_screen_filter
                                                   : ScreenFilter::Off;
             if (video_settings_changed) persist_video(b);

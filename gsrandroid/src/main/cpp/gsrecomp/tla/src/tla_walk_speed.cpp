@@ -53,9 +53,12 @@
 #include "runtime.h"
 #include "runtime_arm.h"
 #include "runtime_bus_bridge.h"
+#include "../../shared_game/auto_field_psynergy_labels.h"
+#include "../../shared_game/autosave.h"
 #include "../../shared_game/enemy_hp_bar.h"
 #include "../../shared_game/trackers.h"
 #include "tla.h"
+#include "../../shared_game/quality_of_life.h"
 
 namespace {
 
@@ -167,18 +170,27 @@ int walk_through_walls_branch(uint32_t pc, uint32_t original,
 // trackers (tla_trackers.cpp); developer sessions also list walking through
 // walls.
 const gbarecomp::GameOptionSwitch kGameSwitches[] = {
+    {gsr::auto_field_psynergy::kSwitchLabel, gsr::auto_field_psynergy::kSwitchCaption,
+     gsr::auto_field_psynergy::kOptionKey},
+    {gsr::autosave::kSwitchLabel, gsr::autosave::kSwitchCaption,
+     gsr::autosave::kOptionKey},
     {gsr::enemy_hp_bar::kSwitchLabel, gsr::enemy_hp_bar::kSwitchCaption,
      gsr::enemy_hp_bar::kOptionKey},
+#ifndef GSR_ANDROID_ENGINE  // GSR_ANDROID: the trackers are PC windows (ImGui), not in the app
     {gsr::djinn_tracker::kSwitchLabel, gsr::djinn_tracker::kSwitchCaption,
      gsr::djinn_tracker::kOptionKey},
     {gsr::djinn_tracker::kShowAllLabel, gsr::djinn_tracker::kShowAllCaption,
      gsr::djinn_tracker::kShowAllKey},
     {gsr::treasure_tracker::kSwitchLabel, gsr::treasure_tracker::kSwitchCaption,
      gsr::treasure_tracker::kOptionKey},
+#endif
     {gbarecomp::walk_through_walls::kSwitchLabel,
      gbarecomp::walk_through_walls::kSwitchCaption,
      gbarecomp::walk_through_walls::kOptionKey}};
-constexpr int kPlayerGameSwitchCount = 4;
+constexpr int kGameSwitchCount =
+    static_cast<int>(sizeof(kGameSwitches) / sizeof(kGameSwitches[0]));
+// Players see every switch except the last (walking through walls).
+constexpr int kPlayerGameSwitchCount = kGameSwitchCount - 1;
 
 }  // namespace
 
@@ -197,8 +209,10 @@ void tla_install_walk_speed(gbarecomp::RunOptions& options) {
 void tla_install_walk_through_walls(gbarecomp::RunOptions& options) {
     g_next_branch = options.conditional_branch_override;
     options.conditional_branch_override = walk_through_walls_branch;
-    gbarecomp::config_ui_set_game_switches(
-        kGameSwitches, gbarecomp::developer_session()
-            ? static_cast<int>(sizeof(kGameSwitches) / sizeof(kGameSwitches[0]))
-            : kPlayerGameSwitchCount);
+    gsr::qol::switches = kGameSwitches;
+    gsr::qol::switch_count = kPlayerGameSwitchCount;
+    // The player's switches are Quality of Life rows; F1 keeps only the
+    // developer-only one after them.
+    gbarecomp::config_ui_set_game_switches(kGameSwitches + kPlayerGameSwitchCount,
+        gbarecomp::developer_session() ? kGameSwitchCount - kPlayerGameSwitchCount : 0);
 }

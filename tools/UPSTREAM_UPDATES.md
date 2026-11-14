@@ -72,11 +72,13 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `tcc/tccelf.c` (line ~3920) | on-device linking change (LGPL: keep notice) |
 | `gsr/gsr_screen_filter_shaders.inc` (ours, copied) | verbatim copy of `screen_filter.cpp`'s shared fragment header and the LCD3x, xBR-lv2 and CRT Lottes shaders with their notices; copy it again when upstream changes them |
 | `tbs/src/unpacker_catch.cpp` | `GSR_ANDROID`: no `<execinfo.h>`/`backtrace()` (API 33+), the host call chain is left out of the diagnostic |
-| `tbs/src/runner_main.cpp` (cheats) | `GSR_ANDROID_CHEATS`: the side menu's Cheats page owns the reward multipliers (upstream reads them from game options since 0.7) |
+| `tbs/src/runner_cheats.cpp` (cheats) | `GSR_ANDROID_CHEATS`: the side menu's Cheats page owns the reward multipliers (upstream reads `cheat_option_get` since 0.8). Since 0.8 upstream split runner_main.cpp into runner_cheats/runner_settings/runner_ram_code |
+| `tbs/src/runner_cheats.cpp`, `tla/src/tla_new_game.cpp` (new game) | `GSR_ANDROID_ENGINE`: no system text box for typing a seed (`code_box`), so the new-game flow keeps the game's letter grid; Golden Sun only offers Seamless mode with The Lost Age's ROM in the app (`extras_seamless`) |
+| `tbs/src/runner_settings.cpp`, `tla/src/tla_settings_page.cpp` (Quality of Life menu) | `GSR_ANDROID_ENGINE`: the in-game Quality of Life menu leaves out View size and No slowdown (the side menu owns the view; Android has no overclock) |
+| `tbs/src/runner_cheats.cpp`, `tla/src/tla_walk_speed.cpp` (switches) | `GSR_ANDROID_ENGINE`: the Djinn and Treasure tracker switches are left out of the game switches (the trackers are ImGui windows, PC only) |
 | `tbs/src/room_buffer.cpp` | `GSR_ANDROID_ENGINE`: map numbers 0/1 and the title's BGCNT set are not rooms; `room_buffer_row_is_room()` |
 | `tbs/src/runner_main.cpp` (more) | `GSR_ANDROID_ENGINE`: margin policy pillarboxes non-room rows; GPU hands boot/title/intro frames to CPU; camera inset skipped for the title; boot/title/intro shown as the native 240x160 part of the canvas (`gsr_host_present_crop`, read in host_window_android.cpp); intro flare averaging; camera-glide blackout |
-| `tbs/src/runner_main.cpp` (Seamless) | `GSR_ANDROID_ENGINE`: Seamless mode (hand-over to The Lost Age) is only on, and its new-game question only asked, when The Lost Age's ROM is in the app (`gsr_host_tla_installed`, gsr_main.c). The exit code 75 + slot is caught by `GsrSession.java`, which restarts into The Lost Age (`GsrRestartActivity`, own process) with the slot in `tla/seamless_slot.txt`; gsr_main.c turns that and Golden Sun's save into `GSR_SEAMLESS_GS_SLOT` / `GSR_SEAMLESS_GS_SAVE` like upstream's launcher |
-| `tbs/src/settings_page.h` | `GSR_ANDROID_ENGINE`: the in-game settings page leaves out Screen and No Slowdown (the side menu owns them); the other rows take upstream's shared labels (`shared_game/settings_page_labels.h`) |
+| `tbs/src/runner_cheats.cpp` (Seamless) | `GSR_ANDROID_ENGINE`: Seamless mode (hand-over to The Lost Age) is only on, and only offered in the new-game flow, when The Lost Age's ROM is in the app (`gsr_host_tla_installed`, gsr_main.c). The exit code 75 + slot is caught by `GsrSession.java`, which restarts into The Lost Age (`GsrRestartActivity`, own process) with the slot in `tla/seamless_slot.txt`; gsr_main.c turns that and Golden Sun's save into `GSR_SEAMLESS_GS_SLOT` / `GSR_SEAMLESS_GS_SAVE` like upstream's launcher |
 | `tbs/src/adventure_walkthrough.h` | `GSR_ANDROID_ENGINE`: the NDK's libc++ has no `std::atomic<std::shared_ptr>`; a small wrapper uses `std::atomic_load/atomic_store` (the guide is developer-only upstream) |
 | `tla/src/tla_rewind.cpp`, `tla_ram_images.cpp` | `GSR_ANDROID_ENGINE`: The Broken Seal's `unpacker_guard.h` is included from `tbs/` |
 | `tla/src/tla_gs_save_import.cpp` | `GSR_ANDROID_ENGINE`: no SDL; the save-file browser is the host's (`gsr_host_pick_gs_save_begin/poll`) |
@@ -106,8 +108,8 @@ The view modes now come from `engine/src/runtime/view_config.h` (Original 240x16
 Extra Wide 480x320). The side menu's View setting still offers the first two; the Android HostWindow
 reports the Original aspect, so a mode's size is used as is.
 
-Vendored engine version: 0.7.1 (upstream commit 2574e72), updated 2026-11-07 from https://github.com/Shmargus/GSRecomp
-(previously 0.6 = c72ef00, updated 2026-10-24; 0.5.3 = 27fedb5, updated 2026-10-20; 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
+Vendored engine version: 0.8.1 (upstream tag 0.8.1, commit e92ca58), updated 2026-11-14 from https://github.com/Shmargus/GSRecomp
+(0.8.3 deliberately not taken yet: patched-ROM builds). (previously 0.7.1 = 2574e72, updated 2026-11-07; 0.6 = c72ef00, updated 2026-10-24; 0.5.3 = 27fedb5, updated 2026-10-20; 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
 
 How the update is done (repeat this next time): a three-way git merge with base = the upstream commit we
 were on (only the files we vendor), ours = the vendored folder, theirs = the new upstream commit. Only files we
