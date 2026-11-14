@@ -137,72 +137,13 @@ static int check_rom(const char *data_dir, char hex[41])
 
 /* ---- Build screen ---------------------------------------------------------------------------- */
 
-static void fmt_time(char *out, size_t n, int sec)
+/* The startup and build screen: its text and progress bar are an Android view (GsrBuildOverlay) on top of
+ * this black surface. */
+static void draw_build_screen(void)
 {
-	snprintf(out, n, "%d:%02d", sec / 60, sec % 60);
-}
-
-static const int g_native_build_text = 0;
-
-static void draw_build_screen(int w, int h, int status)
-{
-	int scale = w / 380 < 2 ? 2 : w / 380;
-	int cw = gsr_text_cell_w(scale), ch = gsr_text_cell_h(scale);
-	int margin = w / 20, maxc = (w - 2 * margin) / cw;
-	int y = h / 8, st = gsr_prepare_state(), lines;
-	char msg[200], err[420], line[300], tm[16], logp[700];
-
 	glDisable(GL_SCISSOR_TEST);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 	glClear(GL_COLOR_BUFFER_BIT);
-	/* The text and progress bar are an Android view (GsrBuildOverlay) on top of this black surface. */
-	if (!g_native_build_text) return;
-
-	if (status == 0) {
-		gsr_text_paragraph(h, margin, y, scale, maxc, "NO USABLE ROM FOUND.\nRESTART THE APP AND PICK YOUR GOLDEN SUN (USA/EUROPE) .GBA FILE.", 1, 1, 1);
-		return;
-	}
-	if (status == 1) {
-		gsr_text_paragraph(h, margin, y, scale, maxc, "THIS IS NOT THE SUPPORTED ROM.\nGOLDEN SUN (USA/EUROPE) IS REQUIRED. CLEAR THE APP STORAGE TO PICK ANOTHER FILE.", 1, 1, 1);
-		return;
-	}
-	gsr_prepare_message(msg, sizeof msg);
-	gsr_prepare_error(err, sizeof err);
-	fmt_time(tm, sizeof tm, gsr_prepare_elapsed_s());
-	if (st == GSR_PREP_FAILED) {
-		lines = gsr_text_paragraph(h, margin, y, scale, maxc, "BUILDING THE GAME FAILED", 1, 0.6f, 0.6f);
-		lines += 1 + gsr_text_paragraph(h, margin, y + 2 * ch, scale, maxc, err, 1, 1, 1);
-		gsr_prepare_log_path(logp, sizeof logp);
-		snprintf(line, sizeof line, "LOG: %s", logp);
-		gsr_text_paragraph(h, margin, y + (lines + 2) * ch, scale > 2 ? scale - 1 : scale, maxc * scale / (scale > 2 ? scale - 1 : scale), line, 0.8f, 0.8f, 0.8f);
-		gsr_text_paragraph(h, margin, h - 3 * ch, scale, maxc, "CLOSE AND REOPEN THE APP TO TRY AGAIN.", 1, 1, 1);
-		return;
-	}
-	if (st == GSR_PREP_READY) {
-		gsr_text_paragraph(h, margin, y, scale, maxc, "GAME CODE IS BUILT AND LOADED.", 0.6f, 1, 1);
-		snprintf(line, sizeof line, "%s IN %s. STARTING THE GAME.",
-				gsr_prepare_cached() ? "LOADED FROM THE SAVED BUILD" : "BUILT", tm);
-		gsr_text_paragraph(h, margin, y + 2 * ch, scale, maxc, line, 1, 1, 1);
-		return;
-	}
-	gsr_text_paragraph(h, margin, y, scale, maxc, gsr_prepare_cached() ? "LOADING GOLDEN SUN" : "PREPARING GOLDEN SUN FOR THIS DEVICE", 1, 1, 1);
-	gsr_text_paragraph(h, margin, y + 2 * ch, scale, maxc, msg, 0.7f, 0.85f, 1);
-	snprintf(line, sizeof line, "%d%%   %s", gsr_prepare_progress() / 10, tm);
-	gsr_text_draw(h, margin, y + 4 * ch, scale, line, 1, 1, 1);
-	if (!gsr_prepare_cached())
-		gsr_text_paragraph(h, margin, h - 5 * ch, scale, maxc,
-				"THIS ONLY HAPPENS ONCE. IT CAN TAKE 10 MINUTES OR MORE. KEEP THE DEVICE AWAKE.", 0.8f, 0.8f, 0.8f);
-	{ /* progress bar */
-		int bw = w - 2 * margin, bh = ch;
-		glEnable(GL_SCISSOR_TEST);
-		glScissor(margin, h - (y + 6 * ch + bh), bw, bh);
-		glClearColor(0.15f, 0.2f, 0.4f, 1);
-		glClear(GL_COLOR_BUFFER_BIT);
-		glScissor(margin, h - (y + 6 * ch + bh), bw * gsr_prepare_progress() / 1000, bh);
-		glClearColor(1, 1, 1, 1);
-		glClear(GL_COLOR_BUFFER_BIT);
-		glDisable(GL_SCISSOR_TEST);
-	}
 }
 
 /* ---- Entry points the descore shell requires --------------------------------------------------- */
@@ -406,7 +347,7 @@ int descore_game_main(const DescoreGameParams *params)
 			continue;
 		}
 		glViewport(0, 0, w, h);
-		draw_build_screen(w, h, status);
+		draw_build_screen();
 		descore_swap_buffers();
 		frame++;
 		usleep(gsr_prepare_state() == GSR_PREP_RUNNING ? 100000 : 33000);

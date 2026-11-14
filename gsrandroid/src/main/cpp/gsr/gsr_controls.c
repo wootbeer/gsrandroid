@@ -335,8 +335,6 @@ void gsr_controls_set_editing(int on) {
 	}
 }
 
-int gsr_controls_editing(void) { return atomic_load(&g_editing); }
-
 void gsr_controls_reset_layout(void) {
 	if (g_w <= 0) return;
 	memset(g_move[portrait_now(g_w, g_h)], 0, sizeof g_move[0]);

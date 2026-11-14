@@ -219,7 +219,7 @@ target_link_libraries(gsrengine gsgamebridge gsrhost ${log-lib} m)
 # Like libgsrengine.so for Golden Sun: tla_runner.cpp and the rest of upstream's "The Lost Age/src", loaded
 # after the game libraries built from the player's Lost Age ROM. TLA_NO_HARVEST as in upstream's player
 # release. tla_reloc_images.inc (in tla/src) lists the RAM routines the builder makes images of: names,
-# ROM addresses and sizes only, the same for every copy of the one ROM the builder accepts.
+# ROM addresses and sizes only; every language upstream supports has the same images (config/<code>/reloc).
 set(GSRC_TLA ${GSRC}/tla)
 add_library(gsrtlaengine SHARED
 		gsr/gsr_tla_engine_entry.cpp

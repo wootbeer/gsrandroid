@@ -812,8 +812,8 @@ final class GsrMenu {
 
 	/**
 	 * Change ROM: after a confirmation, removes only this game's stored ROM file and closes the app, so the next
-	 * start asks for it again. The save (beside the ROM) and the compiled game are kept: the only ROM this
-	 * release accepts for each game always compiles to the same game, so picking it again does not rebuild.
+	 * start asks for it again. The save (beside the ROM) and the compiled game are kept: each game and language
+	 * accepts one ROM, which always compiles to the same game, so picking it again does not rebuild.
 	 */
 	private void confirmChangeRom() {
 		new AlertDialog.Builder(activity)

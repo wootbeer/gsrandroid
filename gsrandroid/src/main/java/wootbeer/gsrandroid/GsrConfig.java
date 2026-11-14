@@ -31,7 +31,6 @@ final class GsrConfig {
 
 	/** Unit ids: Golden Sun 1, 3, 5, 7, 9 and The Lost Age 2, 4, 6, 8, 10, by language. */
 	static final int UNIT_GAME = 1;
-	static final int UNIT_TLA = 2;
 	/** Names the picked ROMs are stored under (kept in sync with gsr_game.c). */
 	static final String ROM_NAME = "golden_sun.gba";
 	static final String TLA_ROM_NAME = "lost_age.gba";
@@ -80,7 +79,7 @@ final class GsrConfig {
 						+ "The file can have any name, but it must end in .gba. Zipped ROMs "
 						+ "must be extracted first.",
 				units,
-				true)   // only for a single unit: with two games the launcher always asks which to play
+				true)   // only for a single unit; with several the launcher asks which to play (or starts the last one)
 				.withFilePicker()
 				.withGles3(0, 0);
 	}
