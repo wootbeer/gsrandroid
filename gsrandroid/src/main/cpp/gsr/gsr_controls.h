@@ -44,6 +44,13 @@ void gsr_controls_bind_set(GsrAction a, int slot, int android_key_code);
 void gsr_controls_bind_reset(void);
 /* Forget every held button (the settings menu is about to take the key events). */
 void gsr_controls_release_all(void);
+/* Touch layout editor: while on, touches drag the controls instead of pressing them (descore_game_touch). */
+void gsr_controls_set_editing(int on);
+int gsr_controls_editing(void);
+/* Puts the controls of the current orientation back where they start. */
+void gsr_controls_reset_layout(void);
+/* 1 once after a control was moved or reset: the render thread lays the controls out again. */
+int gsr_controls_take_layout_dirty(void);
 
 #ifdef __cplusplus
 }

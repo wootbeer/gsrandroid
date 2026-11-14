@@ -50,8 +50,21 @@ public class GsrGameActivity extends DescoreGameActivity {
 
 	@Override
 	protected void onMenuRequested() {
+		// Back (or the gamepad's menu button) while moving the touch controls finishes that instead.
+		if (touchEditor != null && touchEditor.active()) {
+			touchEditor.finish();
+			return;
+		}
 		if (menu == null) menu = new GsrMenu(this);
 		menu.show();
+	}
+
+	private GsrTouchEditor touchEditor;
+
+	/** Side menu > Edit touch layout. */
+	void editTouchLayout() {
+		if (touchEditor == null) touchEditor = new GsrTouchEditor(this);
+		touchEditor.start();
 	}
 
 	@Override

@@ -159,3 +159,16 @@ JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_setGameOption(JNIEnv *
 	(void) c;
 	if (k) { gsr_host_game_option_set(k, value); (*env)->ReleaseStringUTFChars(env, key, k); }
 }
+
+/* The touch layout editor (gsr_controls.c). */
+JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_setTouchEditing(JNIEnv *env, jclass c, jboolean on)
+{
+	(void) env; (void) c;
+	gsr_controls_set_editing(on ? 1 : 0);
+}
+
+JNIEXPORT void JNICALL Java_wootbeer_gsrandroid_GsrNative_resetTouchLayout(JNIEnv *env, jclass c)
+{
+	(void) env; (void) c;
+	gsr_controls_reset_layout();
+}

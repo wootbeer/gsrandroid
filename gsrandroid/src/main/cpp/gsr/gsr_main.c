@@ -376,6 +376,7 @@ int descore_game_main(const DescoreGameParams *params)
 			top_inset = gsr_host_portrait_top(w, h);
 			gsr_controls_layout(w, h);
 		}
+		if (gsr_controls_take_layout_dirty()) gsr_controls_layout(w, h);  /* the touch layout editor moved something */
 		if (gsr_settings_generation() != settings_gen) {
 			settings_gen = gsr_settings_generation();
 			gsr_controls_touch_settings_changed();

@@ -435,6 +435,17 @@ final class GsrMenu {
 		for (int i = 0; i < 9; i++) sizes[i] = i;
 		choice("Touch pad", GsrNative.TOUCH_DPAD, new String[] { "Joystick", "D-pad" });
 		choice("Touch controls size", GsrNative.TOUCH_SCALE, sizes, TOUCH_SIZE);
+		action("Edit touch layout", ">", new Runnable() {
+			@Override public void run() {
+				// The menu closes first (it un-pauses on the way out); the editor then pauses the game again.
+				close();
+				list.postDelayed(new Runnable() {
+					@Override public void run() {
+						if (activity instanceof GsrGameActivity) ((GsrGameActivity) activity).editTouchLayout();
+					}
+				}, 200);
+			}
+		});
 		if (GsrDisplay.portrait(activity)) {
 			// Compact: smaller and packed together, right under the picture or at the bottom of the screen, leaving
 			// the rest of the screen free (for another app in a pop-up window, say).

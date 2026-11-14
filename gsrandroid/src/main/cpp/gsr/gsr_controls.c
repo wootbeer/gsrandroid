@@ -242,6 +242,144 @@ static void touch_stick(int idx, float x, float y) {
 	atomic_store(&g_touch_dirs, d);
 }
 
+/* ---- touch layout editor ---------------------------------------------------------------------------
+ * The player can drag each control (the stick, A/B together, L, R, START/SELECT together, FF, MENU) to a
+ * spot of their own. A move is kept as an offset from the control's default spot, as a fraction of the
+ * screen's width and height, separately for landscape and portrait (touch_layout.txt beside controls.ini),
+ * and added after the layout above has placed everything; Reset drops the offsets. While editing (side
+ * menu > Edit touch layout, Java's GsrTouchEditor) touches move controls instead of pressing them. */
+enum { GRP_STICK, GRP_AB, GRP_L, GRP_R, GRP_STARTSEL, GRP_FF, GRP_MENU, GRP_COUNT };
+static const int k_tb_group[TB_COUNT] = { GRP_AB, GRP_AB, GRP_L, GRP_R, GRP_STARTSEL, GRP_STARTSEL, GRP_FF, GRP_MENU };
+static float g_stick[3];                    /* cx, cy, radius */
+static float g_move[2][GRP_COUNT][2];       /* [portrait][group]: dx/w, dy/h */
+static char g_layout_path[1100];
+static atomic_int g_editing, g_layout_dirty;
+static int g_drag_group = -1, g_drag_ptr = -1;
+static float g_drag_x0, g_drag_y0, g_drag_m0[2];
+static int g_was_gamepad;
+
+static void save_moves(void) {
+	char tmp[1200];
+	FILE *f;
+	if (!g_layout_path[0]) return;
+	snprintf(tmp, sizeof tmp, "%s.tmp", g_layout_path);
+	f = fopen(tmp, "w");
+	if (!f) return;
+	for (int p = 0; p < 2; p++)
+		for (int g = 0; g < GRP_COUNT; g++)
+			if (g_move[p][g][0] != 0.0f || g_move[p][g][1] != 0.0f)
+				fprintf(f, "%d %d %.5f %.5f\n", p, g, g_move[p][g][0], g_move[p][g][1]);
+	fclose(f);
+	rename(tmp, g_layout_path);
+}
+
+static void load_moves(void) {
+	char line[96];
+	FILE *f = fopen(g_layout_path, "r");
+	memset(g_move, 0, sizeof g_move);
+	if (!f) return;
+	while (fgets(line, sizeof line, f)) {
+		int p, g;
+		float dx, dy;
+		if (sscanf(line, "%d %d %f %f", &p, &g, &dx, &dy) == 4 && p >= 0 && p < 2 && g >= 0 && g < GRP_COUNT) {
+			g_move[p][g][0] = dx; g_move[p][g][1] = dy;
+		}
+	}
+	fclose(f);
+}
+
+static int portrait_now(int w, int h) { return gsr_host_portrait_picture_h(w, h) > 0; }
+
+static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+/* Adds the player's moves to the default layout, keeping every control on the screen. */
+static void apply_moves(int w, int h) {
+	const int p = portrait_now(w, h);
+	float dx = g_move[p][GRP_STICK][0] * w, dy = g_move[p][GRP_STICK][1] * h;
+	g_stick[0] = clampf(g_stick[0] + dx, g_stick[2], w - g_stick[2]);
+	g_stick[1] = clampf(g_stick[1] + dy, g_stick[2], h - g_stick[2]);
+	for (int i = 0; i < TB_COUNT; i++) {
+		float *r = g_tb_rect[i];
+		const int g = k_tb_group[i];
+		r[0] = clampf(r[0] + g_move[p][g][0] * w, 0.0f, w - r[2]);
+		r[1] = clampf(r[1] + g_move[p][g][1] * h, 0.0f, h - r[3]);
+	}
+}
+
+/* The control under (x, y) in the current layout, or -1. */
+static int group_at(float x, float y) {
+	float dx = x - g_stick[0], dy = y - g_stick[1], pad = g_stick[2] * 0.15f;
+	for (int i = 0; i < TB_COUNT; i++) {
+		const float *r = g_tb_rect[i];
+		if (x >= r[0] - pad && x < r[0] + r[2] + pad && y >= r[1] - pad && y < r[1] + r[3] + pad) return k_tb_group[i];
+	}
+	if (dx * dx + dy * dy <= g_stick[2] * g_stick[2] * 1.3f * 1.3f) return GRP_STICK;
+	return -1;
+}
+
+void gsr_controls_set_editing(int on) {
+	if (on == atomic_load(&g_editing)) return;
+	if (on) {
+		/* Show the controls (also with a gamepad connected) and make them easy to see while moving them. */
+		g_was_gamepad = descore_touch_gamepad_connected();
+		if (g_was_gamepad) descore_touch_set_gamepad_connected(false);
+		descore_touch_set_opacity(0.8f);
+		g_drag_group = g_drag_ptr = -1;
+		atomic_store(&g_editing, 1);
+	} else {
+		atomic_store(&g_editing, 0);
+		g_drag_group = g_drag_ptr = -1;
+		save_moves();
+		descore_touch_set_opacity(gsr_settings_get(GSR_S_TOUCH_OPACITY) / 100.0f);
+		if (g_was_gamepad) descore_touch_set_gamepad_connected(true);
+	}
+}
+
+int gsr_controls_editing(void) { return atomic_load(&g_editing); }
+
+void gsr_controls_reset_layout(void) {
+	if (g_w <= 0) return;
+	memset(g_move[portrait_now(g_w, g_h)], 0, sizeof g_move[0]);
+	save_moves();
+	atomic_store(&g_layout_dirty, 1);
+}
+
+int gsr_controls_take_layout_dirty(void) { return atomic_exchange(&g_layout_dirty, 0); }
+
+/* Descore's hook ahead of its own touch buttons: while editing, touches drag controls. */
+int descore_game_touch(int action, int pointer_id, float x, float y) {
+	if (!atomic_load(&g_editing) || g_w <= 0) return 0;
+	const int p = portrait_now(g_w, g_h);
+	switch (action) {
+	case DESCORE_TOUCH_ACTION_DOWN:
+	case DESCORE_TOUCH_ACTION_POINTER_DOWN:
+		if (g_drag_ptr < 0) {
+			int g = group_at(x, y);
+			if (g >= 0) {
+				g_drag_group = g; g_drag_ptr = pointer_id;
+				g_drag_x0 = x; g_drag_y0 = y;
+				g_drag_m0[0] = g_move[p][g][0]; g_drag_m0[1] = g_move[p][g][1];
+			}
+		}
+		break;
+	case DESCORE_TOUCH_ACTION_MOVE:
+		if (g_drag_ptr == pointer_id && g_drag_group >= 0) {
+			g_move[p][g_drag_group][0] = g_drag_m0[0] + (x - g_drag_x0) / g_w;
+			g_move[p][g_drag_group][1] = g_drag_m0[1] + (y - g_drag_y0) / g_h;
+			atomic_store(&g_layout_dirty, 1);
+		}
+		break;
+	case DESCORE_TOUCH_ACTION_UP:
+	case DESCORE_TOUCH_ACTION_POINTER_UP:
+		if (g_drag_ptr == pointer_id || action == DESCORE_TOUCH_ACTION_UP) {
+			g_drag_group = g_drag_ptr = -1;
+			save_moves();
+		}
+		break;
+	}
+	return 1;
+}
+
 /* Portrait: the same controls in the space below the picture, laid out like the handheld itself: L and R
  * (with FF and MENU between them) along the top of that space, the stick or d-pad on the left and A/B on the
  * right in the middle, SELECT and START at the bottom. */
@@ -263,8 +401,7 @@ static void portrait_layout(int w, int h, float cell, float m, float r, float sb
 		if (top < y0 + m) top = y0 + m;
 	}
 	float rx = w - m - sb * 2.4f, ry = mid - sb * 0.9f;
-	descore_touch_set_stick(0, m + r * 1.05f, mid, r, touch_stick);
-	descore_touch_set_stick_style(0, gsr_settings_get(GSR_S_TOUCH_DPAD) ? DESCORE_TOUCH_STICK_DPAD : DESCORE_TOUCH_STICK_ANALOG);
+	g_stick[0] = m + r * 1.05f; g_stick[1] = mid; g_stick[2] = r;
 	a[0] = rx + sb * 1.15f; a[1] = ry; a[2] = sb; a[3] = sb;
 	b[0] = rx; b[1] = ry + sb * 0.85f; b[2] = sb; b[3] = sb;
 	l[0] = m; l[1] = top; l[2] = cell * 1.8f; l[3] = cell * 0.95f;
@@ -293,8 +430,7 @@ void gsr_controls_layout(int w, int h) {
 	if (gsr_host_portrait_picture_h(w, h) > 0) {
 		portrait_layout(w, h, cell, m, r, sb);
 	} else {
-	descore_touch_set_stick(0, m + r * 1.05f, h - m - r * 1.05f, r, touch_stick);
-	descore_touch_set_stick_style(0, gsr_settings_get(GSR_S_TOUCH_DPAD) ? DESCORE_TOUCH_STICK_DPAD : DESCORE_TOUCH_STICK_ANALOG);
+	g_stick[0] = m + r * 1.05f; g_stick[1] = h - m - r * 1.05f; g_stick[2] = r;
 	{
 		float rx = w - m - sb * 2.4f, ry = h - m - sb * 1.9f;
 		float *a = g_tb_rect[TB_A], *b = g_tb_rect[TB_B], *l = g_tb_rect[TB_L], *rr = g_tb_rect[TB_R];
@@ -309,6 +445,9 @@ void gsr_controls_layout(int w, int h) {
 		mn[0] = w * 0.5f + cell * 0.1f; mn[1] = m; mn[2] = cell * 1.8f; mn[3] = cell * 0.8f;
 	}
 	}
+	apply_moves(w, h);
+	descore_touch_set_stick(0, g_stick[0], g_stick[1], g_stick[2], touch_stick);
+	descore_touch_set_stick_style(0, gsr_settings_get(GSR_S_TOUCH_DPAD) ? DESCORE_TOUCH_STICK_DPAD : DESCORE_TOUCH_STICK_ANALOG);
 	for (int i = 0; i < TB_COUNT; i++) {
 		unsigned char key = k_tb_action[i];
 		descore_touch_set_button(i, g_tb_rect[i][0], g_tb_rect[i][1], g_tb_rect[i][2], g_tb_rect[i][3], &key, 1, false);
@@ -323,6 +462,8 @@ void gsr_controls_touch_settings_changed(void) {
 
 void gsr_controls_init(const char *dir) {
 	snprintf(g_path, sizeof g_path, "%s/controls.ini", dir);
+	snprintf(g_layout_path, sizeof g_layout_path, "%s/touch_layout.txt", dir);
+	load_moves();
 	defaults();
 	load_binds();
 	descore_touch_init(TB_COUNT, touch_key, NULL);
@@ -381,7 +522,7 @@ static void build_prog(void) {
 
 void gsr_controls_draw_labels(int sw, int sh) {
 	float alpha;
-	if (descore_gamepad_connected() || g_w <= 0) return;
+	if ((descore_gamepad_connected() && !atomic_load(&g_editing)) || g_w <= 0) return;
 	if (!g_atlas_prog || !glIsProgram(g_atlas_prog)) build_prog();
 	if (!g_atlas_tex || !glIsTexture(g_atlas_tex)) build_atlas();
 	alpha = gsr_settings_get(GSR_S_TOUCH_OPACITY) / 100.0f + 0.35f;
@@ -424,4 +565,11 @@ void gsr_controls_draw_labels(int sw, int sh) {
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 	glDisable(GL_BLEND);
 	glUseProgram(0);
+	if (atomic_load(&g_editing)) {
+		/* The editor's hint, centred near the top (Done and Reset are Android buttons, GsrTouchEditor). */
+		const char *hint = "DRAG THE CONTROLS TO MOVE THEM";
+		int scale = sw / 480 < 2 ? 2 : sw / 480;
+		int tw = (int) strlen(hint) * gsr_text_cell_w(scale);
+		gsr_text_draw(sh, (sw - tw) / 2, sh / 3, scale, hint, 1.0f, 1.0f, 0.4f);
+	}
 }
