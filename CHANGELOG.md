@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.6. (11-14-2026)]
 
 ### Added
 - Touch layout editor: Settings > Controls > Edit touch layout. Drag the on-screen controls where you want them (saved separately for landscape and portrait); Reset puts them back  
