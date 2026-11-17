@@ -5900,7 +5900,7 @@ int golden_sun_battle_bg_sample_provider(int bg, int output_x, int screen_y,
 // GSR_ANDROID_ENGINE: true when the game's windows hide every shown field layer (BG1-BG3) across the
 // whole native screen, as full-screen menus like the status screen do. The margins ignore the windows
 // (they draw the room), so they would show the field's tiles there with the menu's graphics and colours.
-extern "C" unsigned g_gsr_field_px_last, g_gsr_field_px_now;  // gba_ppu.cpp
+extern "C" unsigned g_gsr_field_px_last, g_gsr_field_px_now, g_gsr_field_px_done;  // gba_ppu.cpp
 // Rows whose sides the menu rule below blacked out since the last present.
 unsigned g_android_menu_black_rows = 0;
 bool android_field_hidden_by_windows(std::uint16_t dispcnt, const std::uint8_t* io) {
@@ -10159,7 +10159,7 @@ bool golden_sun_present_override(std::uint8_t* rgb, std::uint32_t width,
         if (!geometry || (!room && !keep_holding)) {
             last_field.clear();
             holding = false;
-        } else if (!sides_black && room && g_gsr_field_px_now >= 1500u) {
+        } else if (!sides_black && room && g_gsr_field_px_done >= 1500u) {
             last_field.assign(rgb, rgb + bytes);  // a normal field frame: remember it
             last_w = width;
             last_h = height;

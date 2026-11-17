@@ -1109,7 +1109,11 @@ extern "C" unsigned long long g_gsr_wide_ns[3] = {0, 0, 0};
 // (BG1-BG3, on top or as the lower half of an alpha blend). A full-screen menu covers the field in
 // the native area; the game layer then stops continuing the room into the margins.
 extern "C" unsigned g_gsr_field_px_last = 0xFFFFFFFFu;
-extern "C" unsigned g_gsr_field_px_now = 0;  // the frame being drawn (complete at present time)
+extern "C" unsigned g_gsr_field_px_now = 0;  // the frame being drawn
+// The last finished frame's count, taken at VBlank (mark_framebuffer_latched). A present can come after the
+// next frame's first rows were drawn, when _now holds only those rows (#10: the held sides then showed for
+// that frame and the top and bottom margins lagged behind the picture while walking).
+extern "C" unsigned g_gsr_field_px_done = 0;
 namespace {
 struct GsrWideTimer {
     using clk = std::chrono::steady_clock;
@@ -2721,6 +2725,9 @@ void GbaPpu::latch_framebuffer(uint16_t dispcnt,
 }
 
 void GbaPpu::mark_framebuffer_latched() {
+#ifdef __ANDROID__
+    g_gsr_field_px_done = g_gsr_field_px_now;  // GSR-ANDROID: see g_gsr_field_px_done
+#endif
     // The run loop has already rendered the 160 authentic scanlines one at a
     // time. Synthesize only the host rows outside that raster from the VBlank
     // snapshot captured immediately before this call.
