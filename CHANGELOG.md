@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.1. (11-17-2026)]
+
+### Fixed
+- The Lost Age: the controls could stop working on the new-game questions (for example "Challenge run?") while the music kept playing  
+- Golden Sun, Expanded view: the top, bottom and sides could lag behind the picture while walking, showing as tearing (#10)  
+
+### Changed
+- The game code is rebuilt once on first start after updating  
+
 ## [0.6. (11-14-2026)]
 
 ### Added
