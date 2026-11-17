@@ -53,6 +53,7 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 |---|---|
 | `engine/src/runtime/host_window.cpp` | stub guard becomes `#elif !defined(GSR_ANDROID_HOST)` so the Android backend is used |
 | `engine/src/armv4t/runtime_arm.cpp` | `GSR_ANDROID_LATEBIND` |
+| `tla/config/tla/main.toml` (+ `assets/gsr_builder_data_tla`) | `GSR-ANDROID` `[[resume_range]]` entries for 0x081C0ABC, 0x08015930, 0x08000654: resume points upstream self-heals at run time on PC. Android cannot self-heal, and the interpreter bridge it falls back to could run the New Game questions' frame hold forever (controls dead). English only; a new dispatch miss in the debug log (`gsr-engine`) means another entry is needed |
 | `engine/src/gba/gba_ppu.h`, `gba_ppu.cpp` | `GSR-ANDROID`: optional `g_ws_field_tilemap_source_span` hook; the expanded compositor asks the room buffer once per run of pixels (rest of the tile / up to the room edge) instead of once per pixel |
 | `engine/src/gba/gba_ppu.cpp` (sprites) | `GSR-ANDROID` (`__ANDROID__`): the expanded compositor remembers each OBJ's x/y/park provider answers for the rest of the frame while its OAM attributes are unchanged, instead of asking on every row; also times its stages for the perf log |
 | `engine/src/gba/gba_ppu.h`, `gba_ppu.cpp` (latch) | `GSR-ANDROID` (`__ANDROID__`): `latched_framebuffer()` returns a copy taken when the frame was finished (`publish_latched_fb`), so a present after the next frame's first rows cannot tear |

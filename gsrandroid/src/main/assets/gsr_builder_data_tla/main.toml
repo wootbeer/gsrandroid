@@ -272,6 +272,28 @@ end = 0x08013544
 mode = "thumb"
 note = "host 0x0801353A..0x08013544; observed resume 0x0801353C x68, 0x0801353E x34, 0x08013540 x101, 0x08013542 x16"
 
+# GSR-ANDROID: the Android player cannot self-heal (no compiler to run on the device), so the resume points
+# upstream's PC build heals at run time are listed here. A dispatch to one of them otherwise falls to the
+# interpreter bridge, which can keep interpreting the New Game questions' frame hold so the menu stops
+# reading keys (0.8.1, the Challenge question freeze).
+[[resume_range]]
+start = 0x081C0ABC
+end = 0x081C0AD8
+mode = "thumb"
+note = "GSR-ANDROID: host 0x081C0ABC..0x081C0AD8; observed resume 0x081C0AD2 (dispatch miss on Android)"
+
+[[resume_range]]
+start = 0x08015930
+end = 0x08015958
+mode = "thumb"
+note = "GSR-ANDROID: host 0x08015930..0x08015958; observed resume 0x08015950 (dispatch miss on Android)"
+
+[[resume_range]]
+start = 0x08000654
+end = 0x08000670
+mode = "thumb"
+note = "GSR-ANDROID: host 0x08000654..0x08000670; observed resume 0x0800066E (dispatch miss on Android)"
+
 [[resume_range]]
 start = 0x08014376
 end = 0x0801438A
