@@ -32,10 +32,20 @@ final class GsrSaves {
 
 	GsrSaves(Activity a) { activity = a; }
 
-	/** The name a game's save is exported or backed up under: golden_sun.sav, lost_age_es.sav, ... */
+	/** The name a game's import backups are kept under in the app: golden_sun-..., lost_age_es-... */
 	static String saveName(int unit) {
 		int lang = GsrConfig.lang(unit);
 		return (GsrConfig.isTla(unit) ? "lost_age" : "golden_sun") + (lang == 0 ? "" : "_" + GsrConfig.LANG_CODES[lang]) + ".sav";
+	}
+
+	private static final String[] UPSTREAM_LANG = { "", "Spain", "Italy", "France", "Germany" };
+
+	/** The name GSRecomp (PC and its own Android app) keeps a game's save under in its Saves folder:
+	 *  The Broken Seal.sav, The Lost Age (Spain).sav, ... Exports use it, so a save copies straight over. */
+	static String exportName(int unit) {
+		int lang = GsrConfig.lang(unit);
+		return (GsrConfig.isTla(unit) ? "The Lost Age" : "The Broken Seal")
+				+ (lang == 0 ? "" : " (" + UPSTREAM_LANG[lang] + ")") + ".sav";
 	}
 
 	/** The save the engine keeps beside the ROM in the unit's own folder (<rom>.sav). */
@@ -177,20 +187,22 @@ final class GsrSaves {
 	}
 
 	/** Copies every game's and language's save (those that exist) into a new folder inside the folder the player picked. */
-	int backupAllTo(Uri tree) throws IOException {
+	int backupAllTo(Uri tree) throws IOException { return backupAllTo(tree, "Golden Sun saves " + stamp()); }
+
+	/** The same, into a new folder of the given name; the files have GSRecomp's names (exportName). */
+	int backupAllTo(Uri tree, String folderName) throws IOException {
 		ContentResolver cr = activity.getContentResolver();
 		Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
-		Uri folder = DocumentsContract.createDocument(cr, parent, DocumentsContract.Document.MIME_TYPE_DIR,
-				"Golden Sun saves " + stamp());
+		Uri folder = DocumentsContract.createDocument(cr, parent, DocumentsContract.Document.MIME_TYPE_DIR, folderName);
 		if (folder == null) throw new IOException("could not make a folder there");
 		int n = 0;
 		for (int unit = 1; unit <= 2 * GsrConfig.LANG_CODES.length; unit++) {
 			File f = saveFile(unit);
 			if (!f.isFile() || f.length() == 0) continue;
-			Uri doc = DocumentsContract.createDocument(cr, folder, "application/octet-stream", saveName(unit));
-			if (doc == null) throw new IOException("could not write " + saveName(unit));
+			Uri doc = DocumentsContract.createDocument(cr, folder, "application/octet-stream", exportName(unit));
+			if (doc == null) throw new IOException("could not write " + exportName(unit));
 			try (OutputStream os = cr.openOutputStream(doc, "w")) {
-				if (os == null) throw new IOException("could not write " + saveName(unit));
+				if (os == null) throw new IOException("could not write " + exportName(unit));
 				os.write(readFile(f));
 			}
 			n++;
