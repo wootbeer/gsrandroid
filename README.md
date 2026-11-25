@@ -50,6 +50,7 @@ Features
 - Party transfer: on a new Lost Age game, "Load a Golden Sun save file?" uses the Golden Sun save in the app or a .sav file you pick.  
 - Seamless mode: finish Golden Sun and continue straight into The Lost Age (asked when starting a new Golden Sun game, once The Lost Age is installed).  
 - Saves page: export and import .sav files (GBA emulators, flash carts), undo an import, and back up both games' saves to a folder of your choice.  
+- Moving to GSRecomp (PC or its own Android app): "Copy saves for GSRecomp" on the Saves page makes a folder of your saves, already named for GSRecomp's Saves folder.  
 - Renderer choice: Auto, CPU or GPU (experimental). Auto uses the CPU for Golden Sun and the GPU for The Lost Age in Expanded view.  
 - Touch layout editor: drag the on-screen controls where you want them.  
 - Portrait mode for phones (Settings > Display > Orientation), with the controls spread out, compact under the picture, or compact at the bottom.  

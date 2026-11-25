@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7. (11-25-2026)]
+
+### Added
+- Saves: "Copy saves for GSRecomp" puts all your saves in a folder, named the way GSRecomp wants, ready to copy into its Saves folder  
+- Exported saves now use GSRecomp's names (The Broken Seal.sav, The Lost Age.sav, ...)  
+
+### Changed
+- Bumped to GSRecomp 0.9  
+- The game code is rebuilt once on first start after updating  
+
 ## [0.6.1. (11-17-2026)]
 
 ### Fixed
