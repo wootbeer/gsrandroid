@@ -30,17 +30,29 @@
 #include "view_config.h"
 #include "tla.h"
 #include "../../shared_game/quality_of_life.h"
+#include "../../shared_game/battle_retarget.h"
 #include "host_config_ui.h"
 #include "../../shared_game/autosave.h"
 #include "../../shared_game/field_character.h"
 #include "../../shared_game/spanish_menu.h"
 #include "../../shared_game/italian_menu.h"
 #include "../../shared_game/french_menu.h"
+#include "../../shared_game/portuguese_menu.h"
+#include "../../shared_game/gs_text_encode.h"
 #include "../../shared_game/german_menu.h"
 
 namespace {
 
 void on_function_entry(std::uint32_t pc) {
+    // Every observer below acts only at a TLA_ROM address, except these
+    // three (a one-time load, RAM spark routines, a Seamless time limit).
+    // Any other pc (ROM or RAM code) no TLA_ROM address can be skips the rest.
+    if (!tla_rom::pc_filter().may_match(pc)) {
+        tla_publish_menu_art();
+        tla_gpu_field_on_entry(pc);
+        tla_gs_save_import_on_entry(pc);
+        return;
+    }
     // Autosave notes the field poll before the radial may answer it.
     gsr::autosave::on_entry(pc);
     // The radial first: it notes every dispatcher entry, Retreat's included.
@@ -60,6 +72,7 @@ void on_function_entry(std::uint32_t pc) {
     tla_local_music_on_entry(pc);
     tla_custom_battle_on_entry(pc);
     tla_enemy_hp_bar_on_entry(pc);
+    gsr::battle_retarget::on_entry(pc);
     tla_sprite_memory_on_entry(pc);
 }
 
@@ -107,11 +120,20 @@ int main(int argc, char** argv) {
     else if (tla_rom::version()==tla_rom::Version::German)
         gbarecomp::config_ui_set_translations(gsr::german_menu::kTlaTable.data(),
             static_cast<int>(gsr::german_menu::kTlaTable.size()));
+    else if (tla_rom::portuguese())
+        gbarecomp::config_ui_set_translations(gsr::portuguese_menu::kTable,
+            static_cast<int>(std::size(gsr::portuguese_menu::kTable)));
     else gbarecomp::config_ui_set_translations(nullptr,0);
+    // Feature text reads (trackers, Custom Battle, area names) follow the
+    // ROM's own text format.
+    if (std::uint32_t offsets = 0, base = 0; tla_rom::plain_text(&offsets, &base))
+        gsr::mods::set_plain_text({offsets, base});
     tla_install_ram_images();
 
     gbarecomp::RunOptions options;
     tla_install_text_speed(options);
+    // Every store hook in the chain acts only at a TLA_ROM store pc.
+    runtime_set_mem_write_override_filter(&tla_rom::pc_filter());
     tla_install_walk_speed(options);
     // Runner options that are not engine settings live next to the program.
     {
@@ -132,6 +154,10 @@ int main(int argc, char** argv) {
     tla_install_gs_save_import(options, headless);
     tla_install_custom_battle(options);
     tla_install_enemy_hp_bar();
+    // Command [sb-0xC], battle state [sb-0x10] (shared_game/battle_retarget.h).
+    static const gsr::battle_retarget::Game retarget = {
+        TLA_ROM(0x08123648u), -0x0C, -0x10, 0x02000520u, 0x030000D8u};
+    gsr::battle_retarget::install(retarget);
     tla_install_trackers();
     tla_install_text(options);
     tla_install_rewind();

@@ -8,9 +8,9 @@
 // Golden Sun 1's Hard Mode: enemies get 1.5x HP and 1.25x Attack and
 // Defence. Every new game offers Hard Mode on the New Game checklist
 // (src/tla_new_game.cpp), and the settings screen's Auto-Sleep row becomes a
-// Difficulty row (Normal, Scaled, Hard, Hard Scaled). That one byte is the only switch, so answering Hard on a
-// Clear Data file, the checklist row and the settings row are the same thing
-// and never stack.
+// Difficulty row (Normal, Scaled, Hard, Hard Scaled). That one byte is the
+// only switch, so answering Hard on a Clear Data file, the checklist row and
+// the settings row are the same thing and never stack.
 //
 // Enemies. Setup 0x080AFBEC copies the monster's table entry into its unit
 // (r5): base HP +0x10, also max HP +0x34 and HP +0x38; base Attack +0x18;
@@ -25,25 +25,27 @@
 // 0x02003860 (any slot with Clear Data, set by 0x080432A4) is non-zero:
 // "Play on EASY level?" (text 0x25, at 0x020085B2), "Play on HARD level?"
 // (0x27, at 0x02008648; Yes stores 2) and "Play on Normal level?" (0x28; No
-// asks again from Easy). Those stay the game's own; the checklist follows
-// them and shows Hard ticked when Hard was answered. (Until 5 November 2026
-// the runner forced the Hard question on files without Clear Data.)
+// asks again from Easy). The New Game flow's Difficulty question replaces
+// them: the gate's `beq` past the questions (0x020085B0, Spain/Italy/France/
+// Germany 0x020085AA, after `cmp r3, #0`; target 0x0200869C / 0x02008696) is
+// always taken, so every new game starts at Normal and the flow's choice
+// applies at the opening.
 //
-// Settings. Setup 0x0803FC38 copies Auto-Sleep [0x0200048A] into the screen;
-// A stores it back there and into the live flag 0x03001200 and branches
-// (0x08040528) past B's call to 0x0803F9C0; both then call 0x0803FD14 from
-// 0x0804058E. The runner shows Hard Mode in that byte while the screen is
-// open and takes it back on that last call, so Auto-Sleep itself stays 0
-// (after B the byte still holds what setup showed: no change). The idle count that sleeps after 10800 frames
-// (0x08013610 `beq` on the live flag) is always skipped, and the "In Sleep
-// Mode..." notice (0x1161, shown when the row is turned on, 0x080404D2) is
-// never shown. The row's label and help line are replaced (src/tla_text.cpp),
-// and its value is a word selector like Message speed's: "No" / "Yes", with
-// "< " / " >" while the cursor is on the row, centred on x 0x7C where the
-// row's two icons were (blanked, src/tla_text_speed.cpp). The redraw loads
-// the value's text ID 0x1144 + value at 0x08040346 (value in r2, screen r7,
-// cursor row halfword at +0x574), clears from x 0xA0 (0x08040350) and draws
-// at x 0xA0 (0x08040360).
+// Settings. Setup 0x0803FC38 copies Auto-Sleep [0x0200048A] into the screen.
+// A stores it back there and into the live flag 0x03001200, then branches
+// (0x08040528) past B's call to 0x0803F9C0. Both A and B then call 0x0803FD14
+// from 0x0804058E. The runner shows Hard Mode in that byte while the screen
+// is open and takes it back on that last call, so Auto-Sleep itself stays 0
+// (after B the byte still holds what setup showed, so nothing changes). The idle count
+// that sleeps after 10800 frames (0x08013610 `beq` on the live flag) is
+// always skipped, and the "In Sleep Mode..." notice (0x1161, shown when the
+// row is turned on, 0x080404D2) is never shown. The row's label and help line
+// are replaced (src/tla_text.cpp), and its value is a word selector like
+// Message speed's: "No" / "Yes", with "< " / " >" while the cursor is on the
+// row, centred on x 0x7C where the row's two icons were (blanked,
+// src/tla_text_speed.cpp). The redraw loads the value's text ID 0x1144 +
+// value at 0x08040346 (value in r2, screen r7, cursor row halfword at
+// +0x574), clears from x 0xA0 (0x08040350) and draws at x 0xA0 (0x08040360).
 
 #include "tla_rom_version.h"
 #include <cstdint>
@@ -74,6 +76,11 @@ const uint32_t kSettingsSetupEntry = TLA_ROM(0x0803FC38u);
 const uint32_t kSettingsCloseEntry = TLA_ROM(0x0803FD14u);
 const uint32_t kSettingsCloseReturn = TLA_ROM(0x08040593u);
 
+// The title overlay's level-question gate: `cmp r3, #0; beq` (both halfwords
+// measured in all six revisions' unpacked asset 1610).
+const uint32_t kLevelQuestionGatePc = TLA_OVL("title", 0x020085B0u);
+constexpr uint32_t kLevelQuestionGateWords = 0xD0742B00u;
+
 const uint32_t kIdleBranchPc = TLA_ROM(0x08013616u);
 const uint32_t kSleepNoticeBranchPc = TLA_ROM(0x080404D2u);
 
@@ -100,6 +107,15 @@ int hard_mode_branch(uint32_t pc, uint32_t original, uint32_t* out_decision) {
     if (pc == kIdleBranchPc || pc == kSleepNoticeBranchPc) {
         *out_decision = 1u;  // taken: no idle count, no notice
         return original != 1u;
+    }
+    if (pc >= 0x02000000u && pc < 0x02040000u) {
+        const uint32_t live_pc = g_runtime_image_base + (pc - 0x02000000u);
+        gba::GbaBus* b = gbarecomp::active_bus();
+        if (live_pc == kLevelQuestionGatePc && b &&
+            b->read32(live_pc - 2u) == kLevelQuestionGateWords) {
+            *out_decision = 1u;  // taken: no level questions
+            return original != 1u;
+        }
     }
     return g_next_branch ? g_next_branch(pc, original, out_decision) : 0;
 }

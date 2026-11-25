@@ -1,9 +1,11 @@
 #include "frame_history.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <mutex>
 #include <utility>
 
 #ifdef GBARECOMP_HAVE_SDL2
@@ -88,11 +90,20 @@ HistoryFrame& FrameHistory::record(const std::uint8_t* rgb, std::uint32_t width,
     last_live_guest_ = guest;
     const double now = now_ms();
     HistoryFrame& fr = ring_[next_];
+    // The slot's picture buffer is reused, not freed and reallocated.
+    std::vector<std::uint8_t> pixels = std::move(fr.rgb);
     fr = std::move(frame);
     fr.host_ms = last_present_ms_ >= 0.0 ? now - last_present_ms_ : 0.0;
     fr.width = width;
     fr.height = height;
-    fr.rgb.assign(rgb, rgb + static_cast<std::size_t>(width) * height * 3u);
+    // No picture: a phone frame shown straight from the graphics card
+    // (gpu_present.h); its scene still replays on the PC.
+    if (rgb) {
+        pixels.assign(rgb, rgb + static_cast<std::size_t>(width) * height * 3u);
+        fr.rgb = std::move(pixels);
+    } else {
+        fr.rgb.clear();
+    }
     next_ = (next_ + 1) % kFrames;
     if (count_ < kFrames) ++count_;
     last_present_ms_ = now;
@@ -107,12 +118,69 @@ const HistoryFrame& FrameHistory::oldest_first(std::size_t i) const {
     return ring_[(next_ + kFrames - count_ + i) % kFrames];
 }
 
+namespace {
+std::atomic<bool> g_capture_requested{false};
+
+// Sized for the 120 saved pictures at the widest Turbo stride the engine
+// allows: TurboPresentDecimator presents at least every 16.7 ms of wall
+// time, so a gap is at most one wall interval of guest frames. 4096 covers
+// ~34 guest frames per picture; write() says when it fell short.
+struct TraceEntry {
+    unsigned long long guest = 0, rows = 0, held_source = 0;
+    bool drawn = false, turbo = false, held = false;
+};
+constexpr std::size_t kTraceFrames = 4096;
+std::mutex g_trace_mutex;
+std::vector<TraceEntry> g_trace;
+std::size_t g_trace_next = 0, g_trace_count = 0;
+std::atomic<bool> g_trace_turbo{false};
+}  // namespace
+
+void frame_trace_set_turbo(bool on) { g_trace_turbo.store(on, std::memory_order_relaxed); }
+
+void frame_trace_vblank(unsigned long long guest_frame,
+                        unsigned long long rows_frame, bool drawn) {
+    std::lock_guard<std::mutex> lock(g_trace_mutex);
+    if (g_trace.empty()) g_trace.resize(kTraceFrames);
+    // A state load moves the guest clock back: start again.
+    if (g_trace_count &&
+        guest_frame <= g_trace[(g_trace_next + kTraceFrames - 1) % kTraceFrames].guest)
+        g_trace_count = g_trace_next = 0;
+    TraceEntry& e = g_trace[g_trace_next];
+    e = {};
+    e.guest = guest_frame;
+    e.rows = rows_frame;
+    e.drawn = drawn;
+    e.turbo = g_trace_turbo.load(std::memory_order_relaxed);
+    g_trace_next = (g_trace_next + 1) % kTraceFrames;
+    if (g_trace_count < kTraceFrames) ++g_trace_count;
+}
+
+void frame_trace_note_held_scene(unsigned long long shown,
+                                 unsigned long long source) {
+    std::lock_guard<std::mutex> lock(g_trace_mutex);
+    for (std::size_t i = 0; i < g_trace_count; ++i) {
+        TraceEntry& e = g_trace[(g_trace_next + kTraceFrames - 1 - i) % kTraceFrames];
+        if (e.guest == shown) {
+            e.held = true;
+            e.held_source = source;
+            return;
+        }
+        if (e.guest < shown) return;
+    }
+}
+
+void frame_history_request_capture() { g_capture_requested = true; }
+
 FrameHistory::ReportNotice FrameHistory::update_report(
     const std::string* automatic_note, const char* note_file) {
     const auto frame = runtime_current_frame();
     auto saved = ReportNotice::None;
     if (automatic_note && !write(*automatic_note, note_file).empty())
         saved = ReportNotice::Automatic;
+    if (g_capture_requested.exchange(false) && saved == ReportNotice::None &&
+        !write().empty())
+        saved = ReportNotice::Manual;
 #ifdef GBARECOMP_HAVE_SDL2
 #ifdef _WIN32
     const bool down = (GetAsyncKeyState(VK_F12) & 0x8000) != 0;
@@ -168,7 +236,7 @@ std::string FrameHistory::write(const std::string& note,
                             "gpu_drawn,held_frame,has_scene,width,height,scene_file,image_written\n");
     for (std::size_t i = 0; i < count_; ++i) {
         const HistoryFrame& fr = oldest_first(i);
-        scene_frames += !fr.scene.empty();
+        scene_frames += fr.scene != nullptr;
         held_frames += fr.held_frame;
         gpu_frames += fr.gpu_drawn;
         // The first interval starts outside the saved history.
@@ -184,15 +252,20 @@ std::string FrameHistory::write(const std::string& note,
         std::snprintf(name, sizeof name, "frame_%03zu.ppm", i);
         std::snprintf(scene_name, sizeof scene_name, "frame_%03zu.bin", i);
         bool image_written = false;
-        if (std::FILE* f = std::fopen((dir + "/" + name).c_str(), "wb")) {
+        if (fr.rgb.empty()) {
+            // A frame shown straight from the graphics card: no picture.
+        } else if (std::FILE* f = std::fopen((dir + "/" + name).c_str(), "wb")) {
             std::fprintf(f, "P6\n%u %u\n255\n", fr.width, fr.height);
             std::fwrite(fr.rgb.data(), 1, fr.rgb.size(), f);
             image_written = close_file(f);
+            if (!image_written) ++write_failures;
+        } else {
+            ++write_failures;
         }
-        if (!image_written) ++write_failures;
         bool scene_written = false;
-        if (!fr.scene.empty()) {
-            scene_written = write_file(dir + "/" + scene_name, fr.scene.data(), fr.scene.size());
+        if (fr.scene) {
+            const std::string bytes = fr.scene->bytes();
+            scene_written = write_file(dir + "/" + scene_name, bytes.data(), bytes.size());
             if (!scene_written)
                 std::fprintf(stderr, "[F12] could not write %s/%s\n", dir.c_str(), scene_name);
             if (!scene_written) ++write_failures;
@@ -221,9 +294,10 @@ std::string FrameHistory::write(const std::string& note,
     }
     // The newest snapshot under its old single-frame name, the SAME bytes as
     // the newest history entry.
-    if (count_ && !back(0).scene.empty() &&
-        !write_file(dir + "/gpu_frame.bin", back(0).scene.data(), back(0).scene.size()))
-        ++write_failures;
+    if (count_ && back(0).scene) {
+        const std::string bytes = back(0).scene->bytes();
+        if (!write_file(dir + "/gpu_frame.bin", bytes.data(), bytes.size())) ++write_failures;
+    }
     if (std::FILE* f = std::fopen((dir + "/rows.csv").c_str(), "wb")) {
         std::fprintf(f, "order,row");
         for (std::size_t o = 0; o < kRowBytes; o += 2) std::fprintf(f, ",io%02zX", o);
@@ -239,6 +313,27 @@ std::string FrameHistory::write(const std::string& note,
                 const std::int32_t* ref = &fr.refs[y * 4];
                 std::fprintf(f, ",%d,%d,%d,%d\n", ref[0], ref[1], ref[2], ref[3]);
             }
+        }
+        if (!close_file(f)) ++write_failures;
+    } else ++write_failures;
+    // frames.csv: every guest frame from the oldest saved picture on.
+    bool trace_covers = true;
+    if (std::FILE* f = std::fopen((dir + "/frames.csv").c_str(), "wb")) {
+        std::fprintf(f, "guest_frame,drawn,turbo,rows_frame,rows_stale,"
+                        "held_scene,held_scene_frame\n");
+        const unsigned long long from = count_ ? oldest_first(0).guest_frame : 0ull;
+        std::lock_guard<std::mutex> lock(g_trace_mutex);
+        if (g_trace_count) {
+            const std::size_t first = (g_trace_next + kTraceFrames - g_trace_count) % kTraceFrames;
+            trace_covers = g_trace[first].guest <= from;
+        }
+        for (std::size_t i = 0; i < g_trace_count; ++i) {
+            const TraceEntry& e = g_trace[(g_trace_next + kTraceFrames - g_trace_count + i) % kTraceFrames];
+            if (e.guest < from) continue;
+            std::fprintf(f, "%llu,%d,%d,%llu,%d,%d,%llu\n", e.guest,
+                         e.drawn ? 1 : 0, e.turbo ? 1 : 0, e.rows,
+                         e.rows != e.guest ? 1 : 0, e.held ? 1 : 0,
+                         e.held ? e.held_source : 0ull);
         }
         if (!close_file(f)) ++write_failures;
     } else ++write_failures;
@@ -262,6 +357,7 @@ std::string FrameHistory::write(const std::string& note,
                         "largest_interval_ms=%.3f\nlargest_interval_order=%zu\n"
                         "timing=host_presentation_intervals_not_cpu_cost\n"
                         "context_written=%d\ntrail_available=%d\ntrail_written=%d\n"
+                        "frame_trace_covers_history=%d\n"
                         "write_failures=%u\ncomplete=%d\n",
                      prefix_, trigger_frame, have_memory ? 1 : 0, count_,
                      count_ ? oldest_first(0).guest_frame : 0ull,
@@ -269,7 +365,7 @@ std::string FrameHistory::write(const std::string& note,
                      scene_frames, gpu_frames, held_frames, interval_sum, median,
                      largest_gap, largest_gap_order, context.context_written ? 1 : 0,
                      context.trail_available ? 1 : 0, context.trail_written ? 1 : 0,
-                     write_failures, write_failures ? 0 : 1);
+                     trace_covers ? 1 : 0, write_failures, write_failures ? 0 : 1);
         if (!close_file(f)) ++write_failures;
     } else ++write_failures;
     if (write_failures) {

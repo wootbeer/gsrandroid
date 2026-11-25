@@ -25,6 +25,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -44,12 +45,21 @@ namespace gbarecomp {
 // The caller decides that a battle is running and repeats its last picture.
 bool spell_setup_torn_frame(const gba::GbaPpu& ppu);
 
+// A frame's renderer snapshot (the game's own format, replayed by its bench
+// tool). It holds the game's capture of that frame, which nothing changes
+// once taken, and turns it into the file's bytes only when a capture is
+// saved, not every frame.
+struct SceneSnapshot {
+    virtual ~SceneSnapshot() = default;
+    virtual std::string bytes() const = 0;
+};
+
 struct HistoryFrame {
     unsigned long long guest_frame = 0;
     double host_ms = 0.0;
     std::uint32_t width = 0, height = 0;
     std::vector<std::uint8_t> rgb;
-    std::string scene;                 // renderer snapshot; empty = none
+    std::shared_ptr<const SceneSnapshot> scene;  // null = none
     std::uint64_t scene_frame = 0;
     bool gpu_drawn = false;
     bool battle_2x = false;
@@ -57,6 +67,26 @@ struct HistoryFrame {
     std::vector<std::uint8_t> rows;    // 160 x 0x58 register bytes
     std::vector<std::int32_t> refs;    // 160 x 4 affine references
 };
+
+// Per GUEST frame, shown or not (frames.csv in the F12 folder): whether
+// Turbo skipped drawing it, which frame its latched row registers came from,
+// and which frame any remembered scenery painted on it was taken from. The
+// picture history above holds presented frames only, so a Turbo gap is
+// otherwise invisible. Written from the frame the oldest saved picture shows.
+//   frame_trace_vblank   the engine, at each VBlank after the latch
+//   frame_trace_set_turbo  the run loop, as it decides each frame
+//   frame_trace_note_held_scene  a game, when it paints remembered scenery
+//                        (`shown`: the frame painted on; `source`: the
+//                        frame the remembered scenery was captured on)
+void frame_trace_vblank(unsigned long long guest_frame,
+                        unsigned long long rows_frame, bool drawn);
+void frame_trace_set_turbo(bool on);
+void frame_trace_note_held_scene(unsigned long long shown,
+                                 unsigned long long source);
+
+// Asks for one capture, as an F12 press would, at the next update_report
+// (the phone menu's Save capture: a phone has no F12).
+void frame_history_request_capture();
 
 class FrameHistory {
 public:
@@ -90,6 +120,10 @@ public:
     // Call after recording the picture, before painting any report notice.
     ReportNotice update_report(const std::string* automatic_note,
                                const char* note_file = "note.txt");
+    // Whether a report notice is on screen as of the last update_report.
+    bool report_notice_showing(unsigned long long frame) const {
+        return report_notice_ != ReportNotice::None && frame <= report_notice_until_;
+    }
 
 private:
     const HistoryFrame& oldest_first(std::size_t i) const;

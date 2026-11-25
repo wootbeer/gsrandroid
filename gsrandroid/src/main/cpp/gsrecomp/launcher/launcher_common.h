@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -50,12 +51,13 @@ inline std::string read_text(const fs::path& path) {
 }
 
 // Whether `path` is a supported ROM (with `language` >= 0, only that one of
-// game.rom_sha1s), or with the launcher's "Skip the ROM check" on, any
-// readable file. The error text is for the player.
+// game.rom_sha1s, or with `same_language` any revision playing as the same
+// language: clean USA/Europe or Reloaded), or with the launcher's "Skip the
+// ROM check" on, any readable file. The error text is for the player.
 inline bool validate_rom(const fs::path& path, std::string* error,
                          const GameIdentity& game = session_game(),
                          bool any_rom = gbarecomp::any_rom_allowed(),
-                         int language = -1) {
+                         int language = -1, bool same_language = false) {
     std::error_code ec;
     if (!fs::is_regular_file(path, ec)) {
         *error = "That file could not be opened.";
@@ -79,9 +81,9 @@ inline bool validate_rom(const fs::path& path, std::string* error,
         *error += "\n\nFound SHA-1:\n" + actual;
         return false;
     }
-    if (language >= 0 && actual != game.rom_sha1s[language]) {
-        int found = 0;
-        while (actual != game.rom_sha1s[found]) ++found;  // accepts_rom checked above
+    const int found = rom_revision_of(game, actual);  // accepts_rom checked above
+    if (language >= 0 && found != language &&
+        (!same_language || rom_language_row(game, found) != rom_language_row(game, language))) {
         *error = std::string("That is the ") + game.rom_names[found] + " ROM, but the flag under " +
                  game.title + " is set to " + game.rom_names[language] +
                  ".\n\nClick the flag to switch, or choose the " + game.rom_names[language] + " ROM.";
@@ -92,7 +94,7 @@ inline bool validate_rom(const fs::path& path, std::string* error,
 
 // Replaces each needle with its replacement, matching case-insensitively,
 // and only the whole folder name: it must be followed by the end of the text
-// or one of \ / " ' space CR LF ("Jim" must not match "Jimmy").
+// or one of \ / " ' space CR LF ("Al" must not match "Alex").
 inline std::string scrub_paths(
     std::string text,
     const std::vector<std::pair<std::string, std::string>>& swaps) {
@@ -297,14 +299,98 @@ inline StagedReport stage_bug_report(const ReportSources& sources, std::string i
     return staged;
 }
 
-// What the game code in a release is built from: its release version, then
-// one "path sha1" line per file: the engine, the builder, the translator and everything in
-// builder/data and builder/engine. Written beside the game library after a
-// build (GoldenSunGame.release.txt); any difference, such as a new release
-// unzipped over an old one, means building again. The engine check in
-// game_code_ready already caught a new engine; this also catches a release
-// that changes only the builder, the translator or its data. The toolchain is
-// left out: it is large, and it only changes together with the builder.
+// The file in a report's capture folder that lists its differenced frames.
+constexpr char kFrameDifferencesFile[] = "frame_differences.txt";
+
+// Copies one F12 capture folder into a report (`out`, created here), with
+// each frame_NNN.bin and frame_NNN.ppm from 001 on stored as its difference
+// from the frame before: every byte XORed with frame N-1's byte, when both
+// are the same size. Neighbouring frames are almost the same, so the
+// differences are almost all zeros, and zip/gzip (which look only 32 KB
+// back, less than one frame) shrink them to nearly nothing. Measured,
+// tla_rewind_0217: 26.8 MB packed before, about 1.2 MB after; gpu_rewind_0103
+// about 12 MB before, 2.9 MB after. kFrameDifferencesFile names each
+// differenced file; The Broken Seal/tools/restore_report_frames.py turns
+// them back.
+inline bool stage_capture(const fs::path& capture, const fs::path& out, std::string* error) {
+    std::error_code ec;
+    if (!fs::create_directory(out, ec) || ec) {
+        *error = "Could not create " + out.filename().string() + ": " + ec.message();
+        return false;
+    }
+    std::vector<fs::path> files;
+    for (fs::directory_iterator it(capture, ec), end; it != end && !ec; it.increment(ec)) {
+        std::error_code type_ec;
+        if (it->is_regular_file(type_ec)) files.push_back(it->path());
+    }
+    if (ec) {
+        *error = "Could not list " + capture.filename().string() + ": " + ec.message();
+        return false;
+    }
+    // frame_NNN.bin / frame_NNN.ppm: N, or -1 for any other file.
+    const auto frame_number = [](const std::string& name) {
+        if (name.size() != 13 || name.rfind("frame_", 0) != 0 || name[9] != '.') return -1;
+        const std::string ext = name.substr(10);
+        if (ext != "bin" && ext != "ppm") return -1;
+        int n = 0;
+        for (std::size_t i = 6; i < 9; ++i) {
+            if (name[i] < '0' || name[i] > '9') return -1;
+            n = n * 10 + (name[i] - '0');
+        }
+        return n;
+    };
+    std::string listed;
+    for (const fs::path& file : files) {
+        const std::string name = file.filename().string();
+        const int n = frame_number(name);
+        std::string previous;
+        if (n > 0) {
+            char before[16];
+            std::snprintf(before, sizeof before, "frame_%03d.%s", n - 1, name.c_str() + 10);
+            std::error_code size_ec;
+            if (fs::file_size(capture / before, size_ec) == fs::file_size(file, size_ec) &&
+                !size_ec)
+                previous = read_text(capture / before);
+        }
+        if (previous.empty()) {
+            if (!fs::copy_file(file, out / file.filename(), ec)) {
+                *error = "Could not copy " + name + ": " + ec.message();
+                return false;
+            }
+            continue;
+        }
+        std::string bytes = read_text(file);
+        if (bytes.size() != previous.size()) {
+            *error = "Could not read " + name;
+            return false;
+        }
+        for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] ^= previous[i];
+        std::ofstream written(out / file.filename(), std::ios::binary | std::ios::trunc);
+        written.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        written.close();
+        if (!written) {
+            *error = "Could not write " + name;
+            return false;
+        }
+        listed += name + "\n";
+    }
+    std::ofstream list(out / kFrameDifferencesFile, std::ios::binary | std::ios::trunc);
+    list << "Each file below holds its bytes XOR the frame before it (frame_NNN-1, same\n"
+            "extension), restored in order. Bug report from the launcher; restore with\n"
+            "The Broken Seal/tools/restore_report_frames.py.\n\n"
+         << listed;
+    list.close();
+    if (!list) {
+        *error = std::string("Could not write ") + kFrameDifferencesFile;
+        return false;
+    }
+    return true;
+}
+
+// Fingerprint the release version and hash each engine, builder, translator,
+// builder/data and builder/engine file. Save it beside the game library as
+// GoldenSunGame.release.txt. A mismatch makes the installed build stale.
+// Toolchain changes ship with a different builder.
 inline std::string release_fingerprint(const fs::path& root,
                                        const GameIdentity& game = session_game()) {
     std::vector<fs::path> files = {root / game.executable};
@@ -334,22 +420,17 @@ inline std::string release_fingerprint(const fs::path& root,
     return text;
 }
 
-// The ROM the game code must be built from: the copy this collection plays
-// for the chosen language (The Broken Seal's flag) when it is that one (or
-// with the ROM check off, any), so switching language asks for a rebuild.
-// Otherwise that language's ROM, or with the ROM check off, empty.
-inline std::string required_rom_sha1(const fs::path& root, const GameIdentity& game,
-                                     bool any_rom) {
-    std::string digest;
+// The ROM the game code must be built from: the clean ROM of the chosen
+// language (the game's flag), so switching language asks for a rebuild. With
+// "Skip the ROM check" on, the played ROM may be patched; the build still
+// comes from the clean one (collection_build.h), so playing it needs none.
+inline std::string required_rom_sha1(const fs::path& root, const GameIdentity& game) {
     int language = 0;
     try {
         const auto collection = gsr_collection::infer_collection_root(root);
         language = gsr_collection::rom_language(collection,&game == &kGames[1]);
-        const auto rom = gsr_collection::managed_paths(collection, game.stem).rom;
-        if (sha1_file(rom, &digest) && (any_rom || digest == game.rom_sha1s[language]))
-            return digest;
     } catch (const std::exception&) {}
-    return any_rom ? std::string{} : game.rom_sha1s[language];
+    return game.rom_sha1s[language];
 }
 
 inline bool player_build_inputs_match(const fs::path& root, const GameIdentity& game,
@@ -392,8 +473,7 @@ inline bool finish_player_build_record(const fs::path& root, const GameIdentity&
 }
 
 // Whether the installed library matches the build from this release and ROM.
-inline bool game_code_ready(const fs::path& root, const GameIdentity& game = session_game(),
-                            bool any_rom = gbarecomp::any_rom_allowed()) {
+inline bool game_code_ready(const fs::path& root, const GameIdentity& game = session_game()) {
     const auto library = root / game.library;
     if (!player_library_exists(library)) return false;
     const auto record = gsr_player::read_build_record(read_text(root / game.build_stamp));
@@ -401,7 +481,7 @@ inline bool game_code_ready(const fs::path& root, const GameIdentity& game = ses
     if (read_text(root / game.release_stamp) != release_fingerprint(root, game))
         return false;
     std::string library_now;
-    return player_build_inputs_match(root, game, record, required_rom_sha1(root, game, any_rom)) &&
+    return player_build_inputs_match(root, game, record, required_rom_sha1(root, game)) &&
            sha1_file(library, &library_now) &&
            *record.library_sha1 == library_now;
 }

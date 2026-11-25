@@ -33,6 +33,7 @@
 #include "runtime_arm.h"
 #include "runtime_bus_bridge.h"
 #include "tla.h"
+#include "../../shared_game/field_psynergy_options.h"
 
 namespace {
 
@@ -76,7 +77,6 @@ constexpr uint16_t kKeySelect = 0x0004u;
 constexpr unsigned kMinOverclock = 10u;
 
 std::atomic<bool> g_on{false};
-std::atomic<bool> g_field_fast{false};
 bool g_was_casting = false;
 bool g_select_held = false;
 bool g_was_in_battle = false;
@@ -91,7 +91,6 @@ unsigned g_saved_overclock_q8 = 0;
 gba::GbaBus* bus() { return gbarecomp::active_bus(); }
 
 constexpr const char* kOptionsKey = gbarecomp::kOptionBattleSpeed;
-constexpr const char* kFieldOptionsKey = gbarecomp::kOptionFieldPsynergy;
 
 void save_options() { gbarecomp::game_option_set(kOptionsKey, g_on.load() ? 1 : 0); }
 
@@ -110,15 +109,13 @@ void hold_overclock(bool hold) {
     }
 }
 
-// The arena's BG2CNT line table (FACTS.md, 2026-10-04): block at
-// [0x03000028], index word at +0, tables at block + 0x20 + index * 0x140.
-// At VBlank 0x08125C1E points HBlank DMA0 at the table the index names; the
-// game fills the other one and flips the index once per frame of work. With
-// two frames per VBlank the second fills the table on screen (a misplaced
-// band near the top while the camera moves). So on every skipped wait the index is put
-// back to the one the last VBlank used, and before the next real wait the
-// game's own choice is handed back if nothing flipped it since: that table
-// is the complete one. Golden Sun 1's fix for the same scheme.
+// Arena BG2CNT line tables (FACTS.md, 2026-10-04): [0x03000028] points to
+// the block, with the index at +0 and tables at +0x20 + index * 0x140.
+// At VBlank 0x08125C1E points HBlank DMA0 at the indexed table. The game
+// fills the other table and flips the index. A skipped wait would let the
+// next frame overwrite the active table, causing a band during camera
+// movement. Keep DMA's index on skipped waits. Restore the game's index
+// before the next real wait if the game hasn't changed it since.
 constexpr uint32_t kArenaBlockSlot = 0x03000028u;
 
 uint32_t arena_index_address(gba::GbaBus* b) {
@@ -233,7 +230,7 @@ void decide_pass() {
     }
     g_select_held = select;
     const bool battle_2x = in_battle && g_on.load();
-    const bool field_2x = !in_battle && g_field_fast.load() &&
+    const bool field_2x = !in_battle && gsr::field_psy::on(gsr::field_psy::kFaster) &&
                           b->read32(kFieldCastSlot) != 0u && dispatcher_on_stack(b);
     if (field_2x != g_was_casting) {
         g_was_casting = field_2x;
@@ -271,7 +268,7 @@ constexpr uint32_t kRevealRangeSquared = 0xE10u;
 
 int battle_speed_branch(uint32_t pc, uint32_t original, uint32_t* out_decision) {
     if (pc == kRevealRangeBranchPc) {
-        if (!g_field_fast.load() || g_cpu.R[1] != kRevealRangeSquared) return 0;
+        if (!gsr::field_psy::on(gsr::field_psy::kReveal) || g_cpu.R[1] != kRevealRangeSquared) return 0;
         *out_decision = static_cast<int32_t>(g_cpu.R[2]) >=
                         static_cast<int32_t>(4u * kRevealRangeSquared) ? 1u : 0u;
         return *out_decision != original;
@@ -309,18 +306,10 @@ bool indicator_visible() {
 // RunOptions; this chains in front of whatever immediate hook is there.
 void tla_install_battle_speed(gbarecomp::RunOptions& options) {
     g_on.store(gbarecomp::game_option_get(kOptionsKey, 0) != 0);
-    g_field_fast.store(gbarecomp::game_option_get(kFieldOptionsKey, 0) != 0);
+    gsr::field_psy::load();
     g_next_alu_immediate = options.thumb_alu_immediate_override;
     options.thumb_alu_immediate_override = battle_speed_alu_immediate;
     options.conditional_branch_override = battle_speed_branch;
-}
-
-// Called by the present hook (src/tla_rewind.cpp): ">>" at the native top
-// left while 2x runs, the two chevrons touching.
-bool tla_battle_speed_paint(uint8_t* rgb, uint32_t width, uint32_t height) {
-    if (!indicator_visible()) return false;
-    tla_paint_text(rgb, width, height, 4, 4, ">>", 5);
-    return true;
 }
 
 bool tla_battle_speed_active() { return indicator_visible(); }
@@ -337,10 +326,6 @@ bool tla_battle_spell_setup_frame() {
     return gbarecomp::spell_setup_torn_frame(*ppu);
 }
 
-// Better Field Psy (settings page two).
-bool tla_field_psy_fast() { return g_field_fast.load(); }
-
-void tla_set_field_psy_fast(bool on) {
-    g_field_fast.store(on);
-    gbarecomp::game_option_set(kFieldOptionsKey, on ? 1 : 0);
-}
+// Faster Psynergy's parts (Pause > Quality of Life > Faster Psynergy).
+bool tla_field_psy_reveal() { return gsr::field_psy::on(gsr::field_psy::kReveal); }
+bool tla_field_psy_retreat() { return gsr::field_psy::on(gsr::field_psy::kRetreat); }

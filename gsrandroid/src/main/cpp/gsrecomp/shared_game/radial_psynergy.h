@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 #include "auto_field_psynergy_labels.h"
+#include "flag_bank.h"
 #include "gba_bus.h"
 #include "gba_ppu.h"
 #include "game_hotkeys.h"
@@ -81,6 +82,15 @@ struct Game {
     std::size_t text_table, tree_table;
     void (*prepare_font)();        // the runner's menu font, before the box shows
     const AutoCast* auto_cast = nullptr;  // null: no Auto Field Psynergy
+    // The game's own icon-count routine, asked instead of icon_count when
+    // set: a patched ROM may change it (Reloaded TLA returns 0xFFFF for its
+    // 269-icon table, FACTS 15 November 2026).
+    std::uint32_t icon_count_routine = 0;
+    // The world map: the cast routine's own branch for it (state 3 at field
+    // + world_state, a byte or a halfword) answers L/R itself and drops the
+    // word, so the word goes in the field's cast request (field + request),
+    // as the game's Psynergy menu does there. 0: no such branch.
+    unsigned world_state = 0, world_state_size = 0, request = 0;
 };
 
 // Measured in both games (FACTS): 0x14C-byte character records, current HP
@@ -93,6 +103,10 @@ constexpr unsigned kTargetAlly = 2, kIconOffset = 4, kCostOffset = 9;
 constexpr std::uint32_t kIdMask = 0x3FFFu;
 // A shortcut / dispatcher word: id | caster << 10.
 constexpr std::uint32_t kWordId = 0x3FFu;
+// Both games' cast routines refuse while this flag is set, before any other
+// test (The Broken Seal 0x0800EA6A, The Lost Age 0x08026DDE).
+constexpr unsigned kCastRefusedFlag = 0x107u;
+constexpr unsigned kWorldMapState = 3u;
 constexpr unsigned kCasters = 8;
 
 // Hotkeys (F1 > Hotkeys), unbound by default: an unbound menu is no feature.
@@ -242,7 +256,7 @@ inline std::vector<unsigned> party(gba::GbaBus& b) {
 }
 
 // Whoever in the party knows `id` and has the most PP (first in order on a
-// tie). Members who are down count too (Jimmy, 4 November 2026: Challenge
+// tie). Members who are down count too (Challenge
 // Mode's left-out heroes stay down); the shortcut check the games make
 // (0x08091814 / 0x080D2414) asks only joined and knows.
 inline int caster(gba::GbaBus& b, unsigned id) {
@@ -286,6 +300,8 @@ inline std::vector<unsigned> castable(gba::GbaBus& b) {
 
 inline std::vector<Entry> build(gba::GbaBus& b) {
     std::vector<Entry> out;
+    const unsigned icon_count = game->icon_count_routine
+        ? guest(game->icon_count_routine) : game->icon_count;
     for (const unsigned id : castable(b)) {
         Entry e;
         e.id = id;
@@ -293,7 +309,7 @@ inline std::vector<Entry> build(gba::GbaBus& b) {
         e.name = name_of(b, id);
         unsigned icon = game->icon_halfword ? b.read16(ability(id) + kIconOffset)
                                             : b.read8(ability(id) + kIconOffset);
-        if (icon >= game->icon_count) icon = 0;  // as the games' icon routines do
+        if (icon >= icon_count) icon = 0;  // as the games' icon routines do
         if (!decode_icon(b, b.read32(game->icons + icon * 4u), e.pixels)) e.pixels.fill(0);
         out.push_back(std::move(e));
     }
@@ -382,8 +398,7 @@ inline std::uint16_t keyinput(std::uint16_t value) {
         held = pressed;
         const int count = static_cast<int>(entries.size());
         const unsigned id = count ? entries[cursor].id : 0u;
-        // B, the menu hotkey again, or a cast closes it (Jimmy, 4 November
-        // 2026); Start does not.
+        // B, the menu hotkey again, or a cast closes it; Start does not.
         if ((down & kB) || (down_keys & kMenu)) {
             open = false; swallowing = true; play(rt::kBack);
         } else if (down & kA) {
@@ -413,6 +428,14 @@ inline std::uint16_t keyinput(std::uint16_t value) {
     // A press waits for this frame's field poll only; elsewhere it lapses.
     requests = down_keys;
     return value;
+}
+
+// Where the cast routine would take its world-map branch.
+inline bool on_world_map(gba::GbaBus& b, std::uint32_t field) {
+    if (!game->world_state || read_flag(b.ewram_ptr(), kCastRefusedFlag)) return false;
+    const std::uint32_t at = field + game->world_state;
+    const unsigned state = game->world_state_size == 1 ? b.read8(at) : b.read16(at);
+    return state == kWorldMapState;
 }
 
 // Function entry. True when the poll was answered here. Game routines run
@@ -489,7 +512,11 @@ inline bool on_entry(std::uint32_t pc) {
     }
     bool answered = false;
     std::uint32_t result = 0;
-    if (w && gbarecomp::guest_call(game->cast | 1u, w, 0, 0, 0, &result)) {
+    if (w && on_world_map(*b, field)) {
+        b->write16(field + game->request, static_cast<std::uint16_t>(w));
+        gbarecomp::guest_return_now(pc, w);
+        answered = true;
+    } else if (w && gbarecomp::guest_call(game->cast | 1u, w, 0, 0, 0, &result)) {
         gbarecomp::guest_return_now(pc, result);
         answered = true;
     }
@@ -533,10 +560,10 @@ bool paint(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height, Box box
         p[2] = static_cast<std::uint8_t>((bl << 3) | (bl >> 2));
     };
     // The pulse runs at half the battle target cursor's beat (it bobs once
-    // every 8 frames, FACTS "The cursor bobs", F12 0062; Jimmy found that
-    // too quick, 4 November 2026). Counted in game frames, so it pauses and
-    // speeds up with the game. The highlighted
-    // frame brightens and dims and its icon grows by up to two pixels a side.
+    // every 8 frames, FACTS "The cursor bobs", F12 0062).
+    // Counted in game frames, so it pauses and speeds up with the game. The
+    // highlighted frame brightens and dims and its icon grows by up to two
+    // pixels a side.
     constexpr double kPi = 3.14159265358979;
     constexpr unsigned kBeat = 16;
     const double wave = 0.5 - 0.5 * std::cos(2 * kPi * (frames.load() % kBeat) / kBeat);

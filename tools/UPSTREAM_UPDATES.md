@@ -85,6 +85,9 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `tla/src/tla_gs_save_import.cpp` | `GSR_ANDROID_ENGINE`: no SDL; the save-file browser is the host's (`gsr_host_pick_gs_save_begin/poll`) |
 | `tla/src/tla_gpu_field.cpp` | `GSR_ANDROID_ENGINE`: the Renderer setting decides live (`gpu_on()` asks `gsr_host_gpu_wanted`; Auto uses the GPU in the Expanded view), init/frame results go to the host, and CPU-drawn frames get black sides (upstream has no CPU margin source for The Lost Age) |
 | `tla/src/tla_reloc_images.inc` (ours) | the builder's list of The Lost Age RAM routines (names, ROM addresses, sizes; no code), made once from the ROM; regenerate when `config/tla/reloc` changes |
+| `engine/src/runtime/overlay_compile.cpp` | `GSR-ANDROID`: self-heal never starts a compiler (upstream's Android build ships one and uses vfork); misses stay on the interpreter bridge |
+| `engine/src/runtime/gpu_present.cpp` | built for its stubs only (no SDL): the GPU picture is always read back, never shown directly as upstream's phone build does |
+| `tbs/src/runner_main.cpp`, `tla/src/tla_gpu_field.cpp` (0.9) | the host-report wrappers take upstream's new `direct_ok` argument; `g_gpu_field_capture` is a `shared_ptr` since 0.9 |
 | `CMakeLists.txt` | source lists, include dirs, `GSR_ANDROID_*` defines, `gpu_surface_android.cpp` instead of upstream `gpu_surface.cpp`; `-Wno-invalid-constexpr` for the game layers (clang refuses a `constexpr` upstream's GCC accepts in `walk_through_walls.h`) |
 
 Files we replace rather than patch: upstream `gpu_surface.cpp` (desktop GL + SDL) is not built; its
@@ -109,8 +112,10 @@ The view modes now come from `engine/src/runtime/view_config.h` (Original 240x16
 Extra Wide 480x320). The side menu's View setting still offers the first two; the Android HostWindow
 reports the Original aspect, so a mode's size is used as is.
 
-Vendored engine version: 0.8.1 (upstream tag 0.8.1, commit e92ca58), updated 2026-11-14 from https://github.com/Shmargus/GSRecomp
-(0.8.3 deliberately not taken yet: patched-ROM builds). (previously 0.7.1 = 2574e72, updated 2026-11-07; 0.6 = c72ef00, updated 2026-10-24; 0.5.3 = 27fedb5, updated 2026-10-20; 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
+Vendored engine version: 0.9 (upstream tag 0.9, commit 1669a14), updated 2026-11-25 from https://github.com/Shmargus/GSRecomp
+(upstream now has an Android build of its own; this port keeps its own Android host and only takes the engine and games).
+The Golden Sun Reloaded and Portuguese patched-ROM configs (`config/rl`, `config/pt`) are vendored but not shipped in the
+app's assets or offered in the launcher. (previously 0.8.1 = e92ca58, updated 2026-11-14; 0.7.1 = 2574e72, updated 2026-11-07; 0.6 = c72ef00, updated 2026-10-24; 0.5.3 = 27fedb5, updated 2026-10-20; 0.5.2 = 7958fa6, updated 2026-10-19; 0.4.4 = 8770e0d, updated 2026-10-12; 0.4.3 = 53d2eeb, updated 2026-10-09; 0.3.1 = ddde2e2; before that 0.2.3).
 
 How the update is done (repeat this next time): a three-way git merge with base = the upstream commit we
 were on (only the files we vendor), ours = the vendored folder, theirs = the new upstream commit. Only files we

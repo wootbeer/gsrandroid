@@ -1,4 +1,5 @@
 #include "frame_capture.h"
+#include "host_overlay.h"
 
 #include <algorithm>
 #include <cstring>
@@ -8,6 +9,8 @@ namespace gsr {
 // GSRGPUF1 follows map_recorder.cpp's GSRSNAP1 layout: an 88-byte header,
 // then 24-byte directory entries (8-byte name, u64 offset, u64 length),
 // then the section bytes.
+
+std::string GpuFieldCapture::bytes() const { return gpu_field_dump_bytes(*this); }
 
 std::string gpu_field_dump_bytes(const GpuFieldCapture& capture) {
     const gsr::FieldScene& scene = capture.scene;
@@ -84,51 +87,34 @@ std::string gpu_field_dump_bytes(const GpuFieldCapture& capture) {
         std::memcpy(&header[16], frm.data(), 8);
     }
 
-    std::string table;
-    std::string data;
+    // One allocation, one copy of each section: this runs every frame for the
+    // rewind ring, and growing a separate data string then copying it again
+    // was 2-3% of the phone's game thread (GS1 FACTS, battle profile of
+    // 18 November 2026).
+    std::uint64_t data_bytes = 0;
+    for (const Section& s : sections) data_bytes += s.length;
+    std::string out;
+    out.reserve(header.size() + kSectionCount * 24u + data_bytes);
+    out += header;
     std::uint64_t data_off = 88 + kSectionCount * 24u;
     for (const Section& s : sections) {
-        std::string name_field(8, '\0');
-        std::memcpy(&name_field[0], s.name,
-                   std::min(std::strlen(s.name), std::size_t{8}));
-        table += name_field;
-        put_u64(table, data_off);
-        put_u64(table, s.length);
-        if (s.length) data.append(reinterpret_cast<const char*>(s.data), s.length);
+        char name_field[8] = {};
+        std::memcpy(name_field, s.name, std::min(std::strlen(s.name), std::size_t{8}));
+        out.append(name_field, 8);
+        put_u64(out, data_off);
+        put_u64(out, s.length);
         data_off += s.length;
     }
-
-    std::string out;
-    out.reserve(header.size() + table.size() + data.size());
-    out += header;
-    out += table;
-    out += data;
+    for (const Section& s : sections)
+        if (s.length) out.append(reinterpret_cast<const char*>(s.data), s.length);
     return out;
 }
 
-// "BUG REPORT SAVED" at the top right, in a small built-in font (the game's
-// menu font is only read once a menu has opened), white on a dark box.
+// "BUG REPORT SAVED" at the top right, in the engine's small font
+// (host_overlay.h; the game's menu font is only read once a menu has
+// opened), white on a dark box.
 void paint_bug_report_notice(std::uint8_t* rgb, std::uint32_t width,
                              std::uint32_t height, const char* text) {
-    struct Glyph { char c; const char* rows[7]; };
-    static const Glyph kGlyphs[] = {
-        {'A', {".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"}},
-        {'B', {"####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."}},
-        {'C', {".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."}},
-        {'D', {"####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."}},
-        {'E', {"#####", "#....", "#....", "####.", "#....", "#....", "#####"}},
-        {'G', {".###.", "#...#", "#....", "#.###", "#...#", "#...#", ".####"}},
-        {'H', {"#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"}},
-        {'I', {"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "#####"}},
-        {'L', {"#....", "#....", "#....", "#....", "#....", "#....", "#####"}},
-        {'O', {".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."}},
-        {'P', {"####.", "#...#", "#...#", "####.", "#....", "#....", "#...."}},
-        {'R', {"####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"}},
-        {'S', {".####", "#....", "#....", ".###.", "....#", "....#", "####."}},
-        {'T', {"#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."}},
-        {'U', {"#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."}},
-        {'V', {"#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."}},
-    };
     const int text_w = static_cast<int>(std::strlen(text)) * 6 - 1;
     const int box_w = text_w + 8, box_h = 7 + 8;
     const int x0 = static_cast<int>(width) - box_w - 4, y0 = 4;
@@ -146,12 +132,10 @@ void paint_bug_report_notice(std::uint8_t* rgb, std::uint32_t width,
         }
     int cx = x0 + 4;
     for (const char* s = text; *s; ++s, cx += 6) {
-        for (const Glyph& g : kGlyphs) {
-            if (g.c != *s) continue;
-            for (int ry = 0; ry < 7; ++ry)
-                for (int rx = 0; rx < 5; ++rx)
-                    if (g.rows[ry][rx] == '#') put(cx + rx, y0 + 4 + ry, 255, 255, 255);
-        }
+        const std::uint8_t* rows = gbarecomp::overlay_glyph(*s);
+        for (int ry = 0; ry < 7; ++ry)
+            for (int rx = 0; rx < 5; ++rx)
+                if (rows[ry] & (0x80u >> rx)) put(cx + rx, y0 + 4 + ry, 255, 255, 255);
     }
 }
 

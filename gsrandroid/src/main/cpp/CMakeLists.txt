@@ -85,6 +85,7 @@ add_library(gsrecomp_core STATIC
 		${GSRC_GB}/src/runtime/frame_interpolation.cpp
 		${GSRC_GB}/src/runtime/frame_timing.cpp
 		${GSRC_GB}/src/runtime/frame_history.cpp
+		${GSRC_GB}/src/runtime/gpu_present.cpp  # GSR-ANDROID: stubs here (no SDL); upstream shows the card's texture directly with it
 		${GSRC_GB}/src/runtime/game_options.cpp
 		${GSRC_GB}/src/runtime/memory_snapshot.cpp
 		${GSRC_GB}/src/runtime/host_config_ui.cpp

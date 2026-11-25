@@ -1,4 +1,3 @@
-// gba_bus.cpp — see gba_bus.h.
 //
 // Region dispatch follows `gba_memory.h::classify()` and uses the
 // canonical mirror behavior from `resolve_offset()`. The hot loop
@@ -8,6 +7,7 @@
 
 #include "gba_bus.h"
 #include "gba_vram_trace.h"
+#include "le_bytes.h"
 #include "env_flag.h"
 #include "game_ram_layout.h"
 #include "runtime_arm.h"
@@ -142,26 +142,6 @@ void GbaBus::deserialize(gbarecomp::debug::SnapshotReader& r) {
 
 namespace {
 
-// Helper: read a little-endian halfword/word from a byte buffer at
-// the given offset. Caller has already bounds-checked.
-uint16_t load_u16(const uint8_t* p) {
-    return static_cast<uint16_t>(p[0] | (p[1] << 8));
-}
-uint32_t load_u32(const uint8_t* p) {
-    return static_cast<uint32_t>(p[0] | (p[1] << 8) |
-                                 (p[2] << 16) | (p[3] << 24));
-}
-void store_u16(uint8_t* p, uint16_t v) {
-    p[0] = static_cast<uint8_t>(v & 0xFF);
-    p[1] = static_cast<uint8_t>((v >> 8) & 0xFF);
-}
-void store_u32(uint8_t* p, uint32_t v) {
-    p[0] = static_cast<uint8_t>(v & 0xFF);
-    p[1] = static_cast<uint8_t>((v >> 8) & 0xFF);
-    p[2] = static_cast<uint8_t>((v >> 16) & 0xFF);
-    p[3] = static_cast<uint8_t>((v >> 24) & 0xFF);
-}
-
 bool is_eeprom_addr(uint32_t addr, const GbaSave& save) {
     return save.eeprom_enabled() && ((addr >> 24) == 0x0Du);
 }
@@ -176,7 +156,7 @@ bool is_eeprom_addr(uint32_t addr, const GbaSave& save) {
 // recently pre-fetched opcode. We read it straight from the BIOS/ROM image at
 // the prefetch slot (ARM: word at PC+8; THUMB: the PC+4 halfword mirrored into
 // both halves, per GBATEK). The prefetch source is the same image the CPU is
-// fetching from — never recurse through the bus accessors.
+// fetching from. Never recurse through the bus accessors.
 uint32_t GbaBus::prefetch_word(uint32_t pc, bool thumb) const {
     auto code32 = [&](uint32_t a) -> uint32_t {
         if (a < 0x00004000u) return bios_ ? bios_->read32(a & 0x3FFFu) : 0u;
@@ -225,7 +205,7 @@ uint8_t GbaBus::read8(uint32_t addr) {
             }
             if (rom_ && off < rom_size_) return rom_[off];
             // No-cart open-bus: ROM reads return the cart-address-bus
-            // value (per GBATEK § "GBA Cartridge ROM" — when no cart
+            // value (per GBATEK § "GBA Cartridge ROM": when no cart
             // asserts data, the 16-bit address drives the data lines).
             // read16(0x08000000 + 2N) = N. Byte reads pick the right
             // half. Native must match mGBA here for BIOS-only diff.
@@ -632,7 +612,7 @@ uint32_t GbaBus::access_cycles(uint32_t addr, uint8_t width,
             }
             return (sequential ? s16 : n16) + 1u;
         }
-        case 0xE:  // SRAM / Flash region — 8-bit bus, ~5 cycles
+        case 0xE:  // SRAM / Flash region, 8-bit bus, ~5 cycles
         {
             static constexpr uint8_t kSramWait[4] = {4, 3, 2, 8};
             return static_cast<uint32_t>(kSramWait[waitcnt & 3u]) + 1u;

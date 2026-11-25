@@ -4,11 +4,13 @@
 #pragma once
 
 #include "tla_rom_version.h"
+#include "frame_history.h"
 #include <cstdint>
 #include <functional>
 #include <string>
 
 #include "game_options.h"
+#include "../../shared_game/instant_text.h"
 
 namespace gbarecomp { struct RunOptions; struct HistoryFrame; }
 
@@ -24,6 +26,7 @@ void tla_install_custom_battle(gbarecomp::RunOptions& options);
 void tla_custom_battle_on_entry(std::uint32_t pc);
 bool tla_custom_battle_text(std::uint32_t text_id, std::string& out);
 bool tla_custom_battle_paint(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height);
+bool tla_custom_battle_visible();
 void tla_custom_battle_reset();
 
 // src/tla_save_files.cpp: nine save files on the game's own file screens
@@ -31,6 +34,7 @@ void tla_custom_battle_reset();
 void tla_install_save_files(gbarecomp::RunOptions& options);
 void tla_save_files_on_entry(std::uint32_t pc);
 bool tla_save_files_paint(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height);
+bool tla_save_files_visible();
 // "No autosaved data" on an empty Autosave row (save_files_picker.h).
 bool tla_save_files_text(std::uint32_t text_id, std::string& out);
 
@@ -39,6 +43,7 @@ void tla_install_retreat_travel(gbarecomp::RunOptions& options);
 bool tla_retreat_travel_on_entry(std::uint32_t pc);
 void tla_retreat_travel_reset();
 bool tla_retreat_travel_paint(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height);
+bool tla_retreat_travel_visible();
 
 // Radial Psynergy menu and the L2/R2 field shortcuts (hotkeys; one copy with
 // The Broken Seal, shared_game/radial_psynergy.h).
@@ -46,6 +51,7 @@ void tla_install_radial_psynergy(gbarecomp::RunOptions& options);
 bool tla_radial_psynergy_on_entry(std::uint32_t pc);
 void tla_radial_psynergy_reset();
 bool tla_radial_psynergy_paint(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height);
+bool tla_radial_psynergy_visible();
 
 // src/tla_enemy_hp_bar.cpp: the enemy's HP over its name while choosing a
 // target (F1 switch; one copy with The Broken Seal, enemy_hp_bar.h).
@@ -75,9 +81,9 @@ void tla_install_walk_speed(gbarecomp::RunOptions& options);
 void tla_install_walk_through_walls(gbarecomp::RunOptions& options);
 
 // Allocation slot table 0x03000000 + id (allocator 0x08014CC0): slot 0x24
-// is non-zero exactly during battles, entry fade included (session
-// 20261003_201931 replayed, frames 2542-3295 of 3424 with title, menus,
-// field and cutscenes; the save-state battle bench, frames 10021-11771).
+// is non-zero exactly during battles, entry fade included (measured over a
+// replay, frames 2542-3295 of 3424 with title, menus, field and cutscenes,
+// and the save-state battle bench, frames 10021-11771).
 constexpr std::uint32_t kTlaBattleSlot = 0x03000024u;
 
 // The window system's block, [slot 0x3C]: + 8 is its 32x32 map of BG0,
@@ -95,14 +101,13 @@ constexpr std::uint32_t kTlaMapIdAddr = 0x02000428u;
 void tla_install_battle_speed(gbarecomp::RunOptions& options);
 bool tla_battle_speed_active();
 bool tla_battle_spell_setup_frame();
-bool tla_battle_speed_paint(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height);
-bool tla_field_psy_fast();
-void tla_set_field_psy_fast(bool on);
+// Faster Psynergy's parts (shared_game/field_psynergy_options.h).
+bool tla_field_psy_reveal();
+bool tla_field_psy_retreat();
 
 // src/tla_encounters.cpp: Encounters (settings page two).
 void tla_install_encounters(gbarecomp::RunOptions& options);
 int tla_encounter_rate();
-int tla_encounter_rate_count();
 void tla_set_encounter_rate(int rate);
 
 // src/tla_settings_page.cpp: the Pause menu's Quality of Life menu.
@@ -117,6 +122,7 @@ void tla_install_new_game(gbarecomp::RunOptions& options);
 // True when the routine was answered (the caller stops there).
 bool tla_new_game_on_entry(std::uint32_t pc);
 bool tla_new_game_paint(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height);
+bool tla_new_game_visible();
 void tla_new_game_reset();
 // The import took a Broken Seal file; `bytes` = its payload +0x30..+0x3F (the
 // run's blocks). A randomized run then goes on in this game.
@@ -124,6 +130,10 @@ void tla_new_game_imported_run(const std::uint8_t* bytes);
 void tla_new_game_draw_page();
 // Scaled difficulty is on for the loaded file (tla_new_game.cpp).
 bool tla_scaled_difficulty();
+// The Treasure Tracker's planned reward for a field treasure flag (Random
+// Treasure): item ID or coins, 0 when none (shared_game/treasure_randomizer.h).
+unsigned tla_tracker_reward(unsigned flag);
+unsigned tla_tracker_gift(unsigned pack, unsigned item);
 // Sets it (the settings screen's Difficulty row, tla_hard_mode.cpp).
 void tla_set_scaled_difficulty(bool on);
 // Left/Right on the settings screen's Difficulty row (tla_hard_mode.cpp).
@@ -188,7 +198,8 @@ void tla_menu_paint_text(std::uint8_t* rgb, std::uint32_t width, std::uint32_t h
 // centred on 0x7C where the rows' icons were. The Auto-Sleep row's value clear
 // `movs r1,#0xa0` is at 0x08040350.
 constexpr std::uint32_t kTlaSettingsCursorRowOffset = 0x574u;
-constexpr std::uint32_t kTlaValueClearX = 0x54u, kTlaValueCentreX = 0x7Cu;
+constexpr std::uint32_t kTlaValueClearX = gsr::instant_text::kCaptionClearX,
+                        kTlaValueCentreX = gsr::instant_text::kCaptionCentreX;
 const std::uint32_t kTlaAutoSleepClearXPc = TLA_ROM(0x08040350u);
 // A word row's value: armed when the game loads the row's value text, then
 // drawn once in its place (src/tla_text.cpp).
@@ -238,11 +249,14 @@ void tla_gpu_field_on_entry(std::uint32_t pc);
 // tla_flat_map::past_table). True when that call was answered.
 bool tla_flat_map_on_entry(std::uint32_t pc);
 bool tla_gpu_field_present(std::uint8_t* rgb, std::uint32_t width, std::uint32_t height,
-                           gbarecomp::HistoryFrame& frame, bool synchronous);
+                           gbarecomp::HistoryFrame& frame, bool synchronous,
+                           bool direct_ok);
 void tla_rewind_reset();
 void tla_gpu_field_dump(const std::string& path);
-std::string tla_gpu_field_snapshot(std::uint32_t width, std::uint32_t height,
-                                   std::uint64_t* scene_frame = nullptr);
+// This frame's capture for the F12 history (null: none); its TLAGPUF2
+// bytes are made only when a capture is saved.
+std::shared_ptr<const gbarecomp::SceneSnapshot> tla_gpu_field_snapshot(
+    std::uint32_t width, std::uint32_t height, std::uint64_t* scene_frame = nullptr);
 
 // src/tla_rewind.cpp: F12 saves the last 2 seconds of frames.
 void tla_install_rewind();
