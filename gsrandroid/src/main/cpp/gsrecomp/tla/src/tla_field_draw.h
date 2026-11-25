@@ -1,12 +1,9 @@
 // tla_field_draw.h -- one frame's margin rules and renderer uploads, from the
 // scene to FieldSceneRenderer::draw.
 //
-// The one copy the game (src/tla_gpu_field.cpp) and the bench
-// (tools/tla_frame_check.cpp) both draw with, so a rule added for the game is
-// what the bench checks. Before this the bench kept its own list of steps and
-// fell behind (it never kept the camera rule's wider bounds, Lemuria's dock
-// stairs, F12 0136). Reading back the picture, and anything painted over it
-// afterwards (the flat map's margins), stays with the caller.
+// The game and tla_frame_check.cpp share these draw steps, including the
+// wider camera bounds used at Lemuria's dock stairs (F12 0136). The caller
+// reads back pixels and draws any extra margins.
 #pragma once
 
 #include <cstddef>
@@ -56,6 +53,9 @@ struct TlaFieldFrame {
     // Flicker reduction's weight for sprites shown every other frame
     // (FieldSceneRenderer::set_flicker_smoothing); 0 = off.
     float flicker_weight = 0.0f;
+    // An extra draw this frame (live world-map margins): FieldSceneRenderer::
+    // draw's side_picture.
+    bool side_picture = false;
     unsigned ripple_phase = 0;
     int camera_hold_y = 0;      // tla_camera_hold_y
     // tla_camera_kept_bounds (x, y), whole pixels.
@@ -244,5 +244,5 @@ inline bool tla_field_draw(gsr::FieldSceneRenderer& renderer, gsr::FieldScene& s
         }
     }
     renderer.set_scene_margins(&margins);
-    return renderer.draw(scene);
+    return renderer.draw(scene, in.side_picture);
 }

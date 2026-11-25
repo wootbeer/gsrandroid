@@ -23,6 +23,8 @@
 #include "runtime_bus_bridge.h"
 #include "tla.h"
 #include "../../shared_game/quality_of_life.h"
+#include "../../shared_game/field_psynergy_options.h"
+#include "../../shared_game/battle_retarget.h"
 
 namespace {
 
@@ -59,7 +61,6 @@ std::string row_value(int row) {
     case kEncounterRow: return kEncounterWords[tla_encounter_rate() & 3];
     case kScreenRow: return kScreenWords[std::clamp(runtime_get_view_mode(), 0, gbarecomp::kViewModeCount - 1)];
     case kNoSlowdownRow: return kOnOffWords[runtime_get_no_slowdown() != 0 ? 1 : 0];
-    case kFieldPsyRow: return kOnOffWords[tla_field_psy_fast() ? 1 : 0];
     }
     return "";
 }
@@ -82,9 +83,6 @@ void change_row(int row, bool right) {
     case kNoSlowdownRow:
         runtime_request_no_slowdown(runtime_get_no_slowdown() != 0 ? 0 : 1);
         break;
-    case kFieldPsyRow:
-        tla_set_field_psy_fast(!tla_field_psy_fast());
-        break;
     }
 }
 
@@ -96,8 +94,8 @@ int keys_literal(uint32_t* out_value) {
     if (pressed & (kKeyA | kKeyB | kKeyStart)) {
         return 0;  // the game closes the screen
     }
-    // The game's own five rows, Difficulty last (tla_hard_mode.cpp); the old
-    // page two now lives in the Quality of Life menu.
+    // The game's own five rows, Difficulty last (tla_hard_mode.cpp). Page
+    // two lives in the Quality of Life menu.
     tla_difficulty_row_keys(row, b->read32(kKeyBlock + kRepeatOffset));
     return 0;
 }
@@ -130,12 +128,16 @@ bool tla_settings_page_paint(uint8_t* rgb, uint32_t width, uint32_t height) {
 namespace {
 std::vector<gsr::qol_menu::Row> quality_of_life_rows() {
     std::vector<gsr::qol_menu::Row> rows;
-    for (int i = 0; i < kRowCount; ++i)
-#ifdef GSR_ANDROID_ENGINE  // GSR_ANDROID: the side menu owns the view size, and Android has no overclock to switch
-        if (i != kScreenRow && i != kNoSlowdownRow)
+    for (int i = 0; i < kRowCount; ++i) {
+#ifdef GSR_ANDROID_ENGINE  // GSR_ANDROID: the side menu owns the view size (and aspect), and Android has no overclock to switch
+        if (i == kScreenRow || i == kNoSlowdownRow) continue;
 #endif
-        rows.push_back({kRowLabels[i], kRowHelp[i], [i] { return row_value(i); },
+        if (i == kFieldPsyRow) rows.push_back(gsr::field_psy::qol_row(kRowLabels[i], kRowHelp[i]));
+        else rows.push_back({kRowLabels[i], kRowHelp[i], [i] { return row_value(i); },
             [i](int direction) { change_row(i, direction > 0); }});
+        if (i == kScreenRow) rows.push_back(gsr::qol::aspect_row());
+    }
+    rows.push_back(gsr::battle_retarget::qol_row());
     gsr::qol::append_switches(rows);
     return rows;
 }
@@ -153,7 +155,8 @@ void tla_install_settings_page(gbarecomp::RunOptions& options) {
         TLA_ROM(0x0803A7ACu), TLA_ROM(0x0804E127u), TLA_ROM(0x0804E0D4u),
         TLA_ROM(0x08013560u), TLA_ROM(0x081C0010u),
         TLA_TEXT(0x1155u), TLA_TEXT(0x1159u), TLA_ROM(0x08045048u),
-        42u, 23u, tla_publish_menu_art, quality_of_life_rows}; // Sleep 42 (pause icon table); 23 picked by Jimmy from the icon sheet, 11 November 2026. TODO-EVIDENCE: sheet not confirmed as TLA's.
+        42u, 23u, tla_publish_menu_art, quality_of_life_rows}; // Sleep 42 (pause icon table); 23 from the icon sheet
+        // TODO-EVIDENCE: sheet not confirmed as TLA's.
     gsr::qol::install(profile);
     next_quality_keys = options.keyinput_filter;
     options.keyinput_filter = quality_keys;

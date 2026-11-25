@@ -79,6 +79,8 @@ bool ensure_context() {
 
 // ---- per-texture bookkeeping (GLES cannot query a level's internal format) ---------------------------
 std::unordered_map<GLuint, GpuTextureFormat> g_formats;
+// The vertex buffer's size in bytes (GSRecomp 0.9 dropped GpuSurface::vbo_capacity_ from the header).
+std::size_t g_vbo_capacity = 0;
 GLuint g_read_fbo = 0;
 
 constexpr int kFloatsPerVertex = 9;
@@ -203,6 +205,7 @@ bool GpuSurface::init() {
     readback_ = new Readback();
     glGenVertexArrays(1, &vao_);
     glGenBuffers(1, &vbo_);
+    g_vbo_capacity = 0;
     glGenFramebuffers(1, &fbo_);
     if (!vao_ || !vbo_ || !fbo_) {
         failure_ = "could not create the vertex array, buffer or framebuffer";
@@ -618,9 +621,9 @@ void GpuSurface::draw_quads(GpuProgram program, const GpuQuad* quads, std::size_
     glBindVertexArray(vao_);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
     const std::size_t bytes = vertices.size() * sizeof(float);
-    if (bytes > vbo_capacity_) {
+    if (bytes > g_vbo_capacity) {
         glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(bytes), vertices.data(), GL_STREAM_DRAW);
-        vbo_capacity_ = bytes;
+        g_vbo_capacity = bytes;
     } else {
         glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(bytes), vertices.data());
     }

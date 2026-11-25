@@ -1,4 +1,4 @@
-// runtime.h — glue that game binaries link against.
+// runtime.h: glue that game binaries link against.
 //
 // Owns lifecycle: ROM load + hash verify, BIOS load, CPU + bus + PPU
 // init, scheduler start, debug server start, main loop. The generated
@@ -15,7 +15,7 @@ namespace gbarecomp {
 
 // Per-game built-in defaults baked into a game runner at compile time.
 // Lets a standalone release .exe ship
-// without a sibling game.toml — the runtime falls back to these
+// without a sibling game.toml: the runtime falls back to these
 // values when no TOML is found and no CLI override is supplied.
 //
 // All fields are optional. A null pointer / 0 means "no built-in" and
@@ -122,8 +122,7 @@ struct RunOptions {
 
     // ---- launcher-facing options, all optional ----
     // Games set these for the launcher. The engine itself reads only the
-    // launcher_aspect_* vocabulary below (the old launcher seam that consumed
-    // the rest is gone).
+    // launcher_aspect_* vocabulary below; the launcher consumes the rest.
     const char* launcher_region = nullptr;      // display region, e.g. "USA"
     // The game's default game.toml path.
     const char* launcher_game_config = nullptr;
@@ -214,5 +213,15 @@ bool guest_call(std::uint32_t pc, std::uint32_t r0, std::uint32_t r1,
 // caller at once with r0 = value instead of running, as if the game itself
 // had answered. For a question the game asks that we answer for the player.
 void guest_return_now(std::uint32_t entry_pc, std::uint32_t value);
+
+// Aspect ratio for game code (the Quality of Life menu). A request is applied
+// by the host window on its next pump, the same way as a change in the F1
+// menu. view_aspect_choices() is how many ratios can be picked right now: 0
+// while the view size is Original (aspect only applies to Wide/Extra Wide).
+void request_view_aspect(int aspect);
+int  take_view_aspect_request();
+void publish_view_aspect(int aspect, int choices);
+int  view_aspect();
+int  view_aspect_choices();
 
 }  // namespace gbarecomp

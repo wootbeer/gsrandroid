@@ -2,31 +2,31 @@
 // Random Psynergy (rules: shared_game/challenge_mode.h and
 // shared_game/random_psynergy.h, one copy with The Broken Seal).
 //
-// Jimmy's design for this game (5 November 2026): the same checklist as The
-// Broken Seal (Hard Mode, Challenge Mode, Random Psynergy, Begin); any of the
-// eight can be picked and travels from Idejima; Challenge and Random
-// Psynergy are fresh games only (not with data transferred from Golden Sun);
-// picks start at Felix's level.
+// Design: the same checklist as The Broken Seal (Hard Mode, Challenge Mode,
+// Random Psynergy, Begin); any of the eight can be picked and travels from
+// Idejima; Challenge and Random Psynergy are fresh games only (not with data
+// transferred from Golden Sun); picks start at Felix's level.
 //
 // Measured, verified ROMs (FACTS.md "Challenge Mode and Random Psynergy",
 // 5 November 2026; English address, the others in tla_rom_addresses.inc):
 //
-// Checklist. Before the transfer message (the importer's measured
-// 0x08038040, text 0x24), the same frame hold shows the checklist. Fresh-only
-// choices answer No without drawing the question; ordinary choices keep it.
-// Answers wait until the opening hook below before modifying the new party.
-// The title overlay's new game (asset 1610, unpacked to
-// 0x02008000) names the characters (0x02008580), asks the level questions
-// only while 0x02003860 (Clear Data) is set, then at 0x020086A0 calls
-// 0x080D2AA4(0, 8) (veneer 0x080C8268; sets the opening's room and
-// entrance) and goes on to the game. On that entry the checklist opens and
-// the game waits in its frame routine 0x08013560(1), as The Broken Seal's
-// does, until Begin; then the call goes ahead with its own arguments.
-// The hero builder 0x080AF7AC (new game 0x080ADDF0, before the transfer
-// question) builds all eight: items, class, then 0x080AFBB4(id, table
-// 0x080C0F4C + id*0xB4 + 0x96) from level 0 (call 0x080AF89A), class update
-// 0x080B0298, stats 0x080AD3F8. Story levels: Felix, Jenna, Sheba 5, Piers
-// 18, Isaac's party 28.
+// Checklist. The same frame hold that precedes the transfer message (the
+// importer's measured 0x08038040, text 0x24) shows the checklist. A
+// fresh-only choice makes the transfer question answer No without drawing it;
+// ordinary choices keep the question. Answers wait until the opening hook
+// below before they modify the new party.
+// The title overlay's new game (asset 1610, unpacked to 0x02008000) names the
+// characters (0x02008580); its own level questions are skipped
+// (tla_hard_mode.cpp). Then at 0x020086A0 it calls 0x080D2AA4(0, 8) (veneer
+// 0x080C8268), which sets the opening's room and entrance, and goes on to the
+// game. On that entry the checklist opens and the game waits in its frame
+// routine 0x08013560(1), as The Broken Seal's does, until Begin; then the call
+// goes ahead with its own arguments.
+// The hero builder 0x080AF7AC (called from the new game 0x080ADDF0, before the
+// transfer question) builds all eight heroes in this order: items, class,
+// then 0x080AFBB4(id, table 0x080C0F4C + id*0xB4 + 0x96) from level 0 (call
+// 0x080AF89A), class update 0x080B0298, stats 0x080AD3F8. Story levels:
+// Felix, Jenna, Sheba 5, Piers 18, Isaac's party 28.
 //
 // Storage. The header builder 0x08043358 writes payload 0x02000000..0x27 and
 // 0x2C..0x2F only (r7 = 0x01FFFFF0, stores up to +0x3C); 0x02000028..0x2B
@@ -34,22 +34,25 @@
 // of every TLA save in the collection and in all 212 F12 memory captures.
 // A transfer from Golden Sun sets story flag 0x2F (importer 0x080AE5C2).
 //
-// Challenge hooks. Join 0x080AFDD8 / leave 0x080AFE1C keep the order bytes
-// 0x02000458 (as The Broken Seal's); party of eight. Battle lists the living
-// in 0x0811A188 (HP +0x38 > 0); the per-target check 0x080B075C(?, id, ?,
-// kind) returns 0 for a revive kind (0x080B0740: 5, 0x38, 0x39, 0x49) on a
-// living member; Sanctum 0x0810A898(id, service 0 revives) returns 0 when not
-// needed; the field ability routine 0x081007F8(ability, user, target, ?)
-// leaves message 0xD (revive on the living) at [0x030000DC] + 0x25E and
-// returns -1. Djinn grant 0x080B0AB8 hands (id, element, index) to 0x080B0B78
-// (call 0x080B0B50), keeping the id in r9; counts at record +0x118.
-// Djinn menu give check 0x0810498C(from slot, to slot), only caller
-// 0x0810495E in the target list 0x08104928: totals from 0x081049C8 (menu
-// [0x030000DC] +0x215 count, +0x204 u16 ids; bits 0..19 of +0xF8 | +0x108
-// per element, as The Broken Seal), one moved, returns 1 when the
-// receiver's new total is at most the giver's + 1 (only the two compared,
-// unlike The Broken Seal's every pair). Byte-identical in all five ROMs
-// (8 November 2026).
+// Challenge hooks. Join 0x080AFDD8 and leave 0x080AFE1C keep the order bytes
+// at 0x02000458 (as The Broken Seal does); the party holds eight.
+// - Battle lists the living in 0x0811A188 (HP at +0x38 > 0).
+// - The per-target check 0x080B075C(?, id, ?, kind) returns 0 when a revive
+//   kind (0x080B0740: 5, 0x38, 0x39, 0x49) targets a living member.
+// - Sanctum 0x0810A898(id, service) returns 0 when no revive is needed
+//   (service 0 revives).
+// - The field ability routine 0x081007F8(ability, user, target, ?) writes
+//   message 0xD (revive on the living) at [0x030000DC] + 0x25E and returns -1.
+// - The Djinn grant 0x080B0AB8 passes (id, element, index) to 0x080B0B78
+//   (call 0x080B0B50), keeping the id in r9; the counts are at record +0x118.
+// - The Djinn menu give check 0x0810498C(from slot, to slot) has one caller,
+//   0x0810495E in the target list 0x08104928. It takes totals from
+//   0x081049C8 (menu [0x030000DC] +0x215 count, +0x204 u16 ids; bits 0..19 of
+//   +0xF8 | +0x108 per element, as in The Broken Seal), moves one Djinn, and
+//   returns 1 when the receiver's new total is at most the giver's + 1. Only
+//   those two members are compared, unlike The Broken Seal, which compares
+//   every pair.
+// All of these are byte-identical in all five ROMs (8 November 2026).
 //
 // Random Psynergy. The rebuild 0x080AF4E4(id) (only from the class update
 // 0x080B0298) has The Broken Seal's rules: class table 0x080C15F4 + class *
@@ -74,11 +77,14 @@
 #include "tla.h"
 #include "../../shared_game/autosave.h"
 #include "../../shared_game/challenge_mode.h"
+#include "../../shared_game/random_djinn.h"
 #include "../../shared_game/random_psynergy.h"
 #include "../../shared_game/random_weapons.h"
 #include "../../shared_game/run_code.h"
 #include "../../shared_game/code_box.h"
 #include "../../shared_game/run_sheet.h"
+#include "../../shared_game/save_editor.h"
+#include "../../shared_game/name_scroll.h"
 #include "../../shared_game/new_game_flow.h"
 #include "tla_treasure_randomizer.h"
 
@@ -121,6 +127,140 @@ constexpr rp::Key kKeys[] = {
     {12, kStarters}, {24, kStarters}, {33, kStarters}, {78, kStarters}, {185, kStarters},
 };
 
+// Enemy skills (FACTS.md "Enemy skills", 21 November 2026): enemy records
+// 0x080B9E7C + (id - 8) * 0x4C, 0x17B of them (row 0x17B is the 0xFF end;
+// the getter 0x080AD3A8 itself allows 1000), abilities at +0x2E; ability rows
+// 0x080B7C14, 12 bytes, getter 0x080AF43C clamps ids > 0x2DE. The PP readers
+// by return address (the call + 4): the hero's menus, command checks and
+// field dispatcher; the battle's spend (actor byte at [r5]) and cast check
+// (actor halfword at [[sl] + 0]).
+std::span<const rp::PpSite> rp_pp_sites() {
+    static const rp::PpSite sites[] = {
+        {TLA_ROM(0x0804684Cu), rp::PpSite::kHero}, {TLA_ROM(0x080CE8C2u), rp::PpSite::kHero},
+        {TLA_ROM(0x080FDA3Au), rp::PpSite::kHero}, {TLA_ROM(0x080FDE6Eu), rp::PpSite::kHero},
+        {TLA_ROM(0x080FFBF6u), rp::PpSite::kHero}, {TLA_ROM(0x081038DAu), rp::PpSite::kHero},
+        {TLA_ROM(0x080FCE14u), rp::PpSite::kByteAtR5}, {TLA_ROM(0x08123CB8u), rp::PpSite::kHalfAtR10Action},
+        // 22 November (all getter calls, +9 reads within 0x200 bytes): the
+        // field menu's cost-against-PP check, and the enemies' choice
+        // (predicate 0x081224C0, builder 0x0812282C/0x0812284E).
+        {TLA_ROM(0x0804C354u), rp::PpSite::kHero},
+        {TLA_ROM(0x081224CEu), rp::PpSite::kEnemy}, {TLA_ROM(0x08122830u), rp::PpSite::kEnemy},
+        {TLA_ROM(0x08122852u), rp::PpSite::kEnemy},
+        // 22 November, Jimmy's log: the Psynergy list the battle and field
+        // menus share (0x0804A2xx: getter 0x0804A32A, cost checks
+        // 0x0804A3B2/0x0804A3EE) and its sibling 0x080478D8 (cost 0x08047986).
+        // The first scan stopped at literal pools and missed both.
+        {TLA_ROM(0x0804A32Eu), rp::PpSite::kHero}, {TLA_ROM(0x080478DCu), rp::PpSite::kHero},
+    };
+    return sites;
+}
+
+// Icons for this game's own enemy-only skills (the shared rows:
+// rp::kIconLike): the class spell whose picture fits the name. 0x63 Cure
+// Poison stands for poison, 0xC0 Ragnarok for plain blows, 0xC1 Cutting Edge
+// for claws and fangs.
+constexpr rp::IconLike kRpIcons[] = {
+    {0x280, 0x003}, {0x281, 0x004}, {0x282, 0x01C},  // Sand Breath: Quake; Desert Gasp: Earthquake; Black Ice: Ice Horn
+    {0x283, 0x063}, {0x284, 0x0BA}, {0x285, 0x038},  // Toxic Breath; Typhoon Blow: Typhoon; Blast Breath: Fiery Blast
+    {0x286, 0x0A5}, {0x287, 0x0A1}, {0x288, 0x03E},  // Gravel Blow: Rockslide; Darksol Gasp: Demon Night; Flame Breath: Dragon Fume
+    {0x289, 0x022}, {0x28A, 0x03D}, {0x28B, 0x029},  // Aqua Breath: Drench; Fire Breath: Serpent Fume; Chill Breath: Megacool
+    {0x294, 0x0C3}, {0x295, 0x036}, {0x296, 0x0C1},  // Flash Punch: Astral Blast; Formic Acid: Blast; Claw Attack
+    {0x297, 0x066}, {0x298, 0x0C1}, {0x299, 0x079},  // Beat Dance: Impact; Twin Shear; Paralytail: Bind
+    {0x29A, 0x04B}, {0x29C, 0x0C1}, {0x29D, 0x023},  // Echo Cut: Slash; Triple Chomp; Raging Flood: Deluge
+    {0x29E, 0x063}, {0x29F, 0x06D}, {0x2A0, 0x0A2},  // Rising Venom; Slaver: Debilitate; Mighty Press: Helm Splitter
+    {0x2A2, 0x0C2}, {0x2A3, 0x0CB}, {0x2A4, 0x026},  // Heat Stun: Heat Wave; Ocean Fist: Diamond Berg; Watery Grave: Froth Spiral
+    {0x2A5, 0x066}, {0x2A7, 0x0C0}, {0x2A8, 0x0C0},  // Counter-rush: Impact; Bosca Hit; Strong Hit
+    {0x2A9, 0x0C4}, {0x2AA, 0x0A0}, {0x2AC, 0x079},  // Rolling Flame: Planet Diver; Rising Dragon: Dragon Cloud; Cage: Bind
+    {0x2AD, 0x0C2}, {0x2AF, 0x068}, {0x2B0, 0x0C1},  // Stun Muscle: Heat Wave; Heat Kiss: Dull; Fatal Fang
+    {0x2B1, 0x0B3}, {0x2B2, 0x0A3}, {0x2B3, 0x0A3},  // Angle Spike: Punji; Quick Slash, Doublestep: Quick Strike
+    {0x2B4, 0x07D}, {0x2B5, 0x04B}, {0x2B6, 0x04C},  // Maneater: Drain; Claw Slash: Slash; Mega Slash: Wind Slash
+    {0x2B7, 0x0BF}, {0x2B8, 0x079}, {0x2B9, 0x0C3},  // Vanish Claw: Mist; Crusher Grip: Bind; Ur Flash: Astral Blast
+    {0x2BA, 0x0C1}, {0x2BB, 0x0C0}, {0x2BC, 0x063},  // Power Bite; Terrible Bite; Poison Sting
+    {0x2BD, 0x0B2}, {0x2BE, 0x01C}, {0x2BF, 0x063},  // Kill Sting: Annihilation; Beast Needle: Ice Horn; Poison Sting
+    {0x2C0, 0x079}, {0x2C1, 0x024}, {0x2C2, 0x025},  // Stun Sting: Bind; Mucous Gel: Froth; Poison Gel: Froth Sphere
+    {0x2C3, 0x0C8}, {0x2C5, 0x030}, {0x2C6, 0x0C6},  // Hydro Slash: Plume Edge; Fire Dance: Fire; Power Crush: Odyssey
+    {0x2C7, 0x066}, {0x2C8, 0x0C3}, {0x2C9, 0x0CF},  // Sack: Impact; Vital Moon: Astral Blast; Human Hunt: Skull Splitter
+    {0x2CA, 0x0A1}, {0x2CB, 0x0B0}, {0x2CC, 0x0A3},  // Demon Eye: Demon Night; Stun Jip: Death Plunge; Pike Assault: Quick Strike
+    {0x2CD, 0x0C9}, {0x2CE, 0x0C6}, {0x2CF, 0x06C},  // Formina Sage: Thunder Mine; True Collide: Odyssey; Armor Crush: Impair
+    {0x2D2, 0x066}, {0x2D6, 0x0C9}, {0x2D7, 0x0CD},  // Earth Force: Impact; Mine Ball: Thunder Mine; Angry Mine: Epicenter
+    {0x2DC, 0x07E},                                  // Psy Boost: Psy Drain
+};
+
+// Descriptions for this game's own enemy-only skills (the shared rows:
+// rp::kLines), from each one's name and row; each fits 222 pixels.
+constexpr rp::Line kRpLines[] = {
+    {0x280, "Whip up a blast of stinging sand."},
+    {0x281, "Exhale a desert wind that wears armor."},
+    {0x282, "Breathe shards of black ice at foes."},
+    {0x283, "Exhale a toxic cloud that poisons foes."},
+    {0x284, "Blow a raging typhoon at foes."},
+    {0x285, "Breathe a blast that scorches armor."},
+    {0x286, "Spray foes with a hail of gravel."},
+    {0x287, "Exhale an eclipse's gloom to haunt foes."},
+    {0x288, "Breathe a torrent of searing flame."},
+    {0x289, "Spew a crushing jet of water at foes."},
+    {0x28A, "Breathe a firestorm over foes."},
+    {0x28B, "Breathe a freezing blast at foes."},
+    {0x294, "Punch with a flash that deludes a foe."},
+    {0x295, "Spray stinging acid that stuns a foe."},
+    {0x296, "Rake a foe with sharp claws."},
+    {0x297, "Dance to the beat to boost your Attack."},
+    {0x298, "Snip at a foe with twin shears."},
+    {0x299, "Stun a foe with a lash of its tail."},
+    {0x29A, "Slash a foe with a ringing blade."},
+    {0x29C, "Chomp a foe with snapping jaws."},
+    {0x29D, "Flood the field with raging water."},
+    {0x29E, "Poison a foe with a surge of venom."},
+    {0x29F, "Slaver on foes to soften their armor."},
+    {0x2A0, "Crush a foe flat to try to fell it."},
+    {0x2A2, "Sear a foe with heat that stuns."},
+    {0x2A3, "Pound a foe with a tidal fist."},
+    {0x2A4, "Drag foes down into a watery grave."},
+    {0x2A5, "Brace to counter the enemy's attack."},
+    {0x2A7, "Smash a foe with a mighty swing."},
+    {0x2A8, "Strike a foe with great force."},
+    {0x2A9, "Roll into foes wreathed in flame."},
+    {0x2AA, "Rise as a fiery dragon to burn a foe."},
+    {0x2AC, "Trap a foe inside a fiery cage."},
+    {0x2AD, "Flex and land a stunning blow."},
+    {0x2AF, "Blow a hot kiss that saps foes' Attack."},
+    {0x2B0, "Lunge at a foe with deadly fangs."},
+    {0x2B1, "Jab a foe with a burning spike."},
+    {0x2B2, "Slash a foe in the blink of an eye."},
+    {0x2B3, "Dart in with a two-step strike."},
+    {0x2B4, "Devour a foe and drain its HP."},
+    {0x2B5, "Slash a foe with whirling claws."},
+    {0x2B6, "Rend a foe with a huge slash."},
+    {0x2B7, "Vanish, then claw a deluded foe."},
+    {0x2B8, "Crush a foe in a stunning grip."},
+    {0x2B9, "Strike a foe with a primal flash."},
+    {0x2BA, "Clamp down on a foe with strong jaws."},
+    {0x2BB, "Sink terrible fangs into a foe."},
+    {0x2BC, "Jab a foe with a poisoned stinger."},
+    {0x2BD, "Stab with a sting that can fell a foe."},
+    {0x2BE, "Pierce a foe with an icy needle."},
+    {0x2BF, "Sting a foe with chilling venom."},
+    {0x2C0, "Stun a foe with a numbing sting."},
+    {0x2C1, "Ooze a slimy gel that deludes a foe."},
+    {0x2C2, "Spit a toxic gel that poisons a foe."},
+    {0x2C3, "Slash a foe with a blade of water."},
+    {0x2C5, "Whirl in a fiery dance at a foe."},
+    {0x2C6, "Crush a foe with overwhelming power."},
+    {0x2C7, "Steel yourself to boost your Attack."},
+    {0x2C8, "Strike a foe by the light of the moon."},
+    {0x2C9, "Hunt down a foe and try to fell it."},
+    {0x2CA, "Glare with demon eyes to haunt foes."},
+    {0x2CB, "Jab a foe with a stunning strike."},
+    {0x2CC, "Charge a foe with a thrusting pike."},
+    {0x2CD, "Call down a sage's storm on a foe."},
+    {0x2CE, "Collide with foes and drain their HP."},
+    {0x2CF, "Smash a foe's armor to drop Defense."},
+    {0x2D2, "Bind a foe with the force of the earth."},
+    {0x2D6, "Scatter exploding mines at foes."},
+    {0x2D7, "Detonate in a furious blast at foes."},
+    {0x2DC, "Focus your mind to restore PP."},
+};
+
 const rp::Game& rp_game() {
     // Ids Isaac..Mia 0..3, Felix 4, Jenna 5, Sheba 6, Piers 7; the builder's
     // story levels (hero table +0x96).
@@ -130,6 +270,70 @@ const rp::Game& rp_game() {
         8, {28, 28, 28, 28, 5, 5, 5, 18},
         kKeys, static_cast<int>(std::size(kKeys)),
         kStarters,  // Felix and Jenna, there from the first scene
+        {TLA_ROM(0x080B9E7Cu), 0x17B, 0x4Cu, 0x2Eu},
+        {TLA_ROM(0x080B7C14u), 12u, 0x2DFu},
+        TLA_ROM(0x080AF43Cu), rp_pp_sites(),
+        kRpIcons,
+        TLA_TEXT(0x885u),  // descriptions: Quake 3 is base + 3 (Spain, Italy, France, Germany 0xA52)
+        kRpLines,
+    };
+    return g;
+}
+
+// --- Random Djinn: this game's places ---------------------------------------------
+// FACTS.md "Random Djinn" (21 November 2026): join 0x080D7788(r0, element,
+// index) (index 0x13 takes a RAM table's Djinni; the lesson flag 0x16E only
+// sets the flag) calls the grant through the veneer 0x080AD248 at 0x080D77D4
+// (return 0x080D77D8), plays the element's scene and shows the message
+// 0x08038328(recipient, element, index). Grant 0x080B0AB8 tests flag 0x30 +
+// element*20 + index with 0x08016CE4 (return 0x080B0AE8) and sets it with
+// 0x08016CFC (return 0x080B0B64). The grant's other caller, 0x080AE98E, deals
+// The Broken Seal's Djinn to Isaac's party and is left alone. The shuffled
+// set: this game's own 44 Djinn, index 7..17 of each element (0..6 are The
+// Broken Seal's; FACTS "Djinn Tracker").
+// Scrolling names (shared_game/name_scroll.h; FACTS "Scrolling names", 22
+// November 2026): the printer 0x08042010 (veneer 0x08038080), window block
+// [0x0300003C] (tilemap shadow +8, mode byte +7, colour +0xF3E: the glyph
+// routine 0x080416CC), font advances 0x0805F484. The lists that print an
+// ability name (text 0x5A7 + id) and then read its cost, by return address:
+// 0x0804681A, the battle's 0x080FDA8C, 0x080FFC14 (its Psynergy list) and
+// 0x081038CE.
+const gsr::name_scroll::Game& scroll_game() {
+    static const std::uint32_t sites[] = {TLA_ROM(0x0804681Eu), TLA_ROM(0x080FDA90u), TLA_ROM(0x080FFC18u),
+                                          TLA_ROM(0x081038D2u), TLA_ROM(0x0804A3EEu), TLA_ROM(0x08047984u)};
+    static const gsr::name_scroll::Game g{
+        TLA_ROM(0x08042010u), sites, static_cast<int>(std::size(sites)),
+        0x0300003Cu, 0x8u, 0x7u, 0xF3Eu,
+        TLA_ROM(0x080A9F54u) - 0x08000000u, TLA_ROM(0x08060C30u) - 0x08000000u, TLA_ROM(0x0805F484u),
+        TLA_TEXT(0x5A7u),
+        [](std::uint16_t id) { return rp::scrolls(rp_game(), id); },
+        [] { return rp::reference_ids(rp_game()); },
+    };
+    return g;
+}
+
+const gsr::random_djinn::Game& rd_game() {
+    static const std::vector<gsr::random_djinn::Djinni> djinn = [] {
+        std::vector<gsr::random_djinn::Djinni> out;
+        for (std::uint8_t e = 0; e < 4; ++e)
+            for (std::uint8_t i = 7; i <= 17; ++i) out.push_back({e, i});
+        return out;
+    }();
+    static const gsr::random_djinn::Game g{
+        &rp_game(),
+        TLA_ROM(0x080D7788u), TLA_ROM(0x080D77D8u), TLA_ROM(0x080B0AB8u),
+        TLA_ROM(0x08016CE4u), TLA_ROM(0x080B0AE8u), TLA_ROM(0x08016CFCu), TLA_ROM(0x080B0B64u),
+        kRecords, kRecordSize, 8,
+        djinn.data(), static_cast<int>(djinn.size()),
+        // The look (FACTS "Random Djinn", 22 November): join's caller
+        // 0x080D7940.. finds the map Djinni among ids 8..0x4F through the
+        // object lookup 0x080CCCB8 (context [0x0300006C]); sprite at actor
+        // +0x50, Djinni sprites 243..246, records 0x08300000 + id*20 (layer
+        // reload 0x0802296C, animation start 0x08022AC4..). Fights: 0x080D2BBE
+        // stores 0x12C + n and calls 0x080CA1A4(n) at 0x080D2BC2; (set, index)
+        // at 0x080EEF54 + 4n, sets 1..8, two per element.
+        0x0300006Cu, 8, 0x4F, TLA_ROM(0x08300000u), {243, 244, 245, 246},
+        TLA_ROM(0x080CA1A4u), TLA_ROM(0x080D2BC6u),
     };
     return g;
 }
@@ -157,8 +361,29 @@ const rw::Game& rw_game() {
     return g;
 }
 
+// --- F1 > Cheats > Save editor (shared_game/save_editor.h) -----------------------
+// Verified English ROM (FACTS.md "Save editor routines", 22 November 2026):
+// coins 0x02000250, clamped to 999,999 by the adder 0x080AFEB0; joined bits
+// in the story flags; level +0xF, experience +0x124. Raise 0x080AFBB4(id,
+// level): level-up 0x080AF91C per level (none at 99, experience raised to
+// 0x080AF8D0's threshold), then the stats 0x080AD3F8. Give item 0x080AED6C,
+// remove 0x080AF148(id, slot) (one fewer, else clear and pack, then the
+// stats). Djinn: owned +0xF8 + element*4, count +0x118 + element, flag 0x30
+// + element*20 + index, names 0x6D3 + element*20 + index, 18 per element;
+// give 0x080B0B78 and list 0x080B0E04 (as the grant 0x080B0AB8), unset
+// 0x080B0D04 and off the list 0x080B0D58 (as the move takes from the giver).
+const gsr::save_editor::Game& editor_game() {
+    static const gsr::save_editor::Game g{
+        &rw_game(), 0x02000250u, 999999u, kStoryFlags, kLevel, 0x124u, 99u,
+        TLA_ROM(0x080AFBB4u), TLA_ROM(0x080AED6Cu), TLA_ROM(0x080AF148u),
+        0xF8u, 0x118u, 0x30u, TLA_TEXT(0x6D3u), 18u,
+        TLA_ROM(0x080B0B78u), TLA_ROM(0x080B0E04u), TLA_ROM(0x080B0D04u), TLA_ROM(0x080B0D58u),
+    };
+    return g;
+}
+
 // --- the onboarding (shared_game/new_game_flow.h) --------------------------------
-// Jimmy, 7 November 2026. "Name the other characters?" on entry to the
+// "Name the other characters?" on entry to the
 // naming routine for the second hero; the rest where the checklist opened
 // (before the Golden Sun transfer question, or at the opening).
 // Challenge sizes (index + 1 heroes).
@@ -170,7 +395,11 @@ constexpr const char* kHeroNames[8] = {"Isaac", "Garet", "Ivan", "Mia",
 
 // The run's F1 page (run_sheet.h): the code and the spoiler sheet.
 const gsr::run_sheet::Game& sheet_game() {
-    static const gsr::run_sheet::Game g{&rp_game(), &rw_game(), kHeroNames, &gsr::treasure::tla::sheet_lines};
+    // Class names: text 0xB63 + class (0xB64 Squire; the nine code literals
+    // 0xB63 pair with 0xD30 in Spain, Italy, France and Germany).
+    // Djinni names: 0x6D3 + element*20 + index (FACTS "Djinn Tracker").
+    static const gsr::run_sheet::Game g{&rp_game(), &rw_game(), kHeroNames, &gsr::treasure::tla::sheet_lines,
+                                        TLA_TEXT(0xB63u), &rd_game(), TLA_TEXT(0x6D3u)};
     return g;
 }
 
@@ -179,7 +408,7 @@ bool g_transferred = false;       // data from Golden Sun: no randomizing, no ch
 unsigned long long g_row_since = 0;
 std::uint16_t g_keys_down = 0;   // pressed now (KEYINPUT inverted)
 std::uint16_t g_keys_held = 0;   // seen last frame
-bool g_levels_pending = false, g_random_pending = false, g_weapons_pending = false;
+bool g_levels_pending = false, g_weapons_pending = false;
 bool g_skip_opening_pending = false;
 // The questions open before the Golden Sun transfer question, after naming,
 // so a fresh-only choice can refuse the import. Their answers wait here until
@@ -199,8 +428,7 @@ enum class Names { Unasked, Yes, No };
 Names g_names = Names::Unasked;
 bool g_names_open = false;
 
-// A randomized Broken Seal run carried over by the import (Jimmy, 7 November
-// 2026): its two blocks (payload +0x30 and +0x38) win over this game's choices.
+// A randomized Broken Seal run carried over by the import: its two blocks (payload +0x30 and +0x38) win over this game's choices.
 std::array<std::uint8_t, 16> g_imported_run{};
 bool g_imported_run_set = false;
 
@@ -264,23 +492,13 @@ void apply_choices(const gsr::new_game::Result& r) {
     if (!b) return;
     const bool hard = r.difficulty == ng::kHard || r.difficulty == ng::kHardScaled;
     const bool scaled = r.difficulty == ng::kScaled || r.difficulty == ng::kHardScaled;
-    // Hard Mode: the difficulty byte (tla_hard_mode.cpp). Easy (Clear Data)
-    // stays Easy unless Hard is chosen.
-    if (hard) b->write8(kDifficulty, kHard);
-    else if (b->read8(kDifficulty) == kHard) b->write8(kDifficulty, 0u);
+    // Hard Mode: the difficulty byte (tla_hard_mode.cpp); otherwise Normal.
+    b->write8(kDifficulty, hard ? kHard : 0u);
     gbarecomp::game_option_set(gsr::autosave::kOptionKey, r.autosave ? 1 : 0);
     // Always written, so a new game never keeps an earlier game's choice.
     ch::store(r.challenge);
-    // One seed for the whole run (run_code.h), as in The Broken Seal: Weapons
-    // and Armor change the finds; their stats shuffle only with Stats.
-    const bool psynergy = r.random[ng::kPsynergy], items = r.random[ng::kItems], coins = r.random[ng::kCoins];
-    const bool finds_weapons = r.random[ng::kWeapons], finds_armour = r.random[ng::kArmor];
-    const bool weapons = finds_weapons && r.stats, armour = finds_armour && r.stats;
-    const bool run = psynergy || items || coins || scaled || finds_weapons || finds_armour;
-    rp::store(rp_game(), {run ? r.seed : 0u, psynergy, r.fair_on(ng::kFairPsynergy), items, items && r.bargains,
-                          coins, scaled, finds_weapons, finds_armour, r.fair_on(ng::kFairItems),
-                          r.fair_on(ng::kFairCoins), r.fair_on(ng::kFairShops)});
-    rw::store(rw_game(), {weapons || armour ? r.seed : 0u, (weapons || armour) && r.scaling, armour, weapons});
+    rp::store(rp_game(), r.psynergy_config(scaled));
+    rw::store(rw_game(), r.equipment_config());
     if (g_imported_run_set) {
         // A randomized Broken Seal run goes on as it was, with this game's
         // Scaled choice added.
@@ -292,7 +510,6 @@ void apply_choices(const gsr::new_game::Result& r) {
         rw::store(rw_game(), iw);
         g_imported_run_set = false;
     }
-    g_random_pending = rp::current(rp_game()).psynergy;
     g_weapons_pending = rw::current(rw_game()).seed != 0;
     g_levels_pending = r.challenge.size > 0;
     g_skip_opening_pending = r.skip_opening;
@@ -366,7 +583,7 @@ void give_starting_gear(gba::GbaBus& b, unsigned id) {
     }
 }
 
-// Picks at Felix's level (Jimmy, 5 November). Above it: the kept level-0
+// Picks at Felix's level. Above it: the kept level-0
 // record comes back (challenge_mode.h) and the builder's own raise runs;
 // below it (Easy's Clear Data levels): the raise alone. Then the class update
 // and stats, as the builder does, and full HP and PP.
@@ -394,8 +611,8 @@ void apply_levels() {
     }
 }
 
-// Skip the opening (Jimmy, 8 November 2026: start where his F12 0215 stands,
-// on the world map just outside Idejima; FACTS "Skip the opening"). At the
+// Skip the opening (start where F12 0215 stands, on the world map just
+// outside Idejima; FACTS "Skip the opening"). At the
 // opening's room request 0x080D2AA4(0, 8), the new game already built and
 // the choices applied, it leaves what Venus Lighthouse and Idejima would:
 //  - Sheba joins through the game's join 0x080AFDD8 (Challenge Mode's rules
@@ -426,6 +643,27 @@ void skip_opening(std::uint32_t args[4]) {
     for (const std::uint16_t flag : kSkipOpeningFlags) {
         const std::uint32_t at = kStoryFlags + (flag >> 3);
         b->write8(at, static_cast<std::uint8_t>(b->read8(at) | (1u << (flag & 7u))));
+    }
+    // Echo (Venus Djinni 7), which the world map's tutorial would give next:
+    // the Djinn grant 0x080B0AB8's own steps with Felix as the recipient
+    // (a Challenge pick instead when Felix is left out): hand-over
+    // 0x080B0B78(id, element, index), set 0x080B0E04(id, element, index),
+    // then its obtained flag 0x30 + element * 20 + index (FACTS). The picks
+    // otherwise join on the first field frame, after this; join them now so
+    // a challenge without Felix has someone to take it (Jimmy's PC save,
+    // 18 November 2026: Solo Piers, no Echo).
+    constexpr std::uint32_t kVenus = 0, kEcho = 7;
+    int echo_to = static_cast<int>(kFelix);
+    if (ch::excluded(kFelix)) {
+        ch::join_picks(*b, ch::current());
+        echo_to = ch::djinn_recipient(kVenus, 0x118u);
+    }
+    const std::uint32_t echo_flag = 0x30u + kVenus * 20u + kEcho;
+    const std::uint32_t echo_at = kStoryFlags + (echo_flag >> 3);
+    if (echo_to >= 0 && !(b->read8(echo_at) & (1u << (echo_flag & 7u)))) {
+        gbarecomp::guest_call(TLA_ROM(0x080B0B78u) | 1u, std::uint32_t(echo_to), kVenus, kEcho, 0, nullptr);
+        gbarecomp::guest_call(TLA_ROM(0x080B0E04u) | 1u, std::uint32_t(echo_to), kVenus, kEcho, 0, nullptr);
+        b->write8(echo_at, static_cast<std::uint8_t>(b->read8(echo_at) | (1u << (echo_flag & 7u))));
     }
     for (std::uint32_t i = 0; i < std::size(kSkipRoomHistory); ++i)
         b->write16(kRoom + 4u + i * 2u, kSkipRoomHistory[i]);
@@ -488,7 +726,7 @@ bool naming_entry(std::uint32_t pc) {
         b->write16(TLA_OVL("title", 0x0200A4F8u), 1u);
         return false;
     }
-    // Isaac is always named, as in the game (Jimmy, 10 November 2026).
+    // Isaac is always named, as in the game.
     if (index == 0 || index > 7) return false;
     if (g_names == Names::No) {
         gbarecomp::guest_return_now(pc, 0u);
@@ -519,11 +757,12 @@ void hold_frame_entry() {
         return;
     }
     apply_levels();
-    // After the picks' levels: the plan's lists from the start.
-    if (g_random_pending) rp::apply_new_game(rp_game());
-    g_random_pending = false;
-    // The new equipment, and the stats of the heroes wearing any.
-    if (g_weapons_pending) rw::apply_new_game(rw_game(), kHp, kMaxHp, kPp, kMaxPp);
+    // After the picks' levels: the plan's lists from the start (and a
+    // challenge leader's puzzle Psynergy; a no-op otherwise).
+    rp::apply_new_game(rp_game());
+    // Install the location-scaled equipment before rebuilding hero stats.
+    if (gsr::treasure::tla::frame(rp::current(rp_game()), rw_game()) || g_weapons_pending)
+        rw::rebuild_equipped_stats(rw_game(), kHp, kMaxHp, kPp, kMaxPp);
     g_weapons_pending = false;
     // Last: "Skip the opening", if chosen (Sheba joins, flags, room).
     skip_opening(g_args);
@@ -629,7 +868,7 @@ void paint_flow(std::uint8_t* rgb, std::uint32_t w, std::uint32_t h) {
         const auto& r = view.rows[static_cast<std::size_t>(row)];
         const int y = top + first + row * kPitch + (view.gap_before >= 0 && row >= view.gap_before ? kGapY : 0);
         if (row == view.cursor) tla_menu_draw_text(">", kInnerX + kLabelX, y, put);
-        int x = kInnerX + kLabelX + 10;
+        int x = kInnerX + kLabelX + 10 + r.indent;
         if (r.box >= 0) {
             checkbox(x, y, r.box == 1, r.locked);
             x += 12;
@@ -658,6 +897,8 @@ void tla_install_new_game(gbarecomp::RunOptions& options) {
     };
     ch::install(challenge);
     gsr::run_sheet::install(sheet_game());
+    gsr::save_editor::install(editor_game());
+    gbarecomp::config_ui_set_cheats_page(gsr::save_editor::draw);
 }
 
 bool tla_new_game_on_entry(std::uint32_t pc) {
@@ -666,6 +907,11 @@ bool tla_new_game_on_entry(std::uint32_t pc) {
         gbarecomp::guest_return_now(pc, 0u);
         return true;
     }
+    // Random Djinn: a Djinni joining from the field is swapped.
+    gsr::random_djinn::on_entry(rd_game(), pc, g_cpu.R);
+    gsr::name_scroll::on_entry(scroll_game(), pc, g_cpu.R);
+    // Enemy skills: the hero's PP readers see the hero cost.
+    rp::pp_on_getter(rp_game(), pc, g_cpu.R[0], g_cpu.R[5], g_cpu.R[10], g_cpu.R[14]);
     const std::uint32_t lr = g_cpu.R[14] & ~1u;
     {
         // Random Treasure: gifts and big coin amounts.
@@ -674,10 +920,12 @@ bool tla_new_game_on_entry(std::uint32_t pc) {
     }
     if (pc == TLA_ROM(0x08013560u)) {
         hold_frame_entry();
+        gsr::random_djinn::frame(rd_game());
+        gsr::name_scroll::frame(scroll_game());
         ch::frame();
-        rw::frame(rw_game());
-        gsr::treasure::tla::frame(rp::current(rp_game()));
+        gsr::treasure::tla::frame(rp::current(rp_game()), rw_game());
         gsr::run_sheet::frame();
+        gsr::save_editor::frame();  // F1 > Cheats > Save editor
     } else if (pc == TLA_ROM(0x080D2AA4u) && (g_cpu.R[14] == TLA_OVL("title", 0x020086A5u) ||
                                               (g_hold == Hold::Resuming && g_hold_pc == pc))) {
         hold_entry(pc);
@@ -689,7 +937,7 @@ bool tla_new_game_on_entry(std::uint32_t pc) {
         ch::keep_start_record(g_cpu.R[0]);
     } else if (pc == TLA_ROM(0x0811A038u) || pc == TLA_ROM(0x0811A0B0u)) {
         // Battle's party list and waiting list (out): left-out heroes are
-        // left off (Jimmy, 12 November: hidden in battle only). Fighting: at
+        // left off (hidden in battle only). Fighting: at
         // most 4, 3 when [battle] +0x44 is set; waiting: those after the
         // first 4, none when it is set. Record +0x12A = 2 per member. With
         // the picks first in the order the lists stay its prefix, as the
@@ -734,8 +982,8 @@ bool tla_new_game_on_entry(std::uint32_t pc) {
         return true;
     } else if (pc == TLA_ROM(0x0810498Cu)) {
         // Djinn menu give check (from slot, to slot): in a Challenge file a
-        // left-out hero may hand over or take any number (Jimmy's rule for
-        // The Broken Seal, 5 November); between picks the game's own rule.
+        // left-out hero may hand over or take any number (the same rule as
+        // The Broken Seal); between picks the game's own rule.
         gba::GbaBus* b = bus();
         if (!b || ch::current().size == 0) return false;
         const std::uint32_t menu = b->read32(0x030000DCu);
@@ -762,21 +1010,30 @@ bool tla_new_game_paint(std::uint8_t* rgb, std::uint32_t width, std::uint32_t he
     return true;
 }
 
+unsigned tla_tracker_reward(unsigned flag) {
+    return gsr::treasure::tla::state.tracker_reward(static_cast<std::uint16_t>(flag));
+}
+
+unsigned tla_tracker_gift(unsigned pack, unsigned item) {
+    return gsr::treasure::tla::state.tracker_gift(static_cast<std::uint16_t>(pack), static_cast<std::uint16_t>(item));
+}
+
 void tla_new_game_reset() {
     g_flow = {};
     g_early = g_chosen = false;
     g_hold = Hold::Off;
     g_before_import = g_skip_import_question = false;
-    g_levels_pending = g_random_pending = g_weapons_pending = false;
+    g_levels_pending = g_weapons_pending = false;
     g_skip_opening_pending = false;
     g_imported_run_set = false;
     g_names = Names::Unasked;
     rw::reset();
+    gsr::name_scroll::reset();
 }
 
-// Fresh-only choices (Jimmy, 5 November 2026): a randomizer or a challenge
+// Fresh-only choices: a randomizer or a challenge
 // chosen here means no transfer from Golden Sun (a randomized Broken Seal run
-// brings its own, 7 November).
+// brings its own).
 bool tla_new_game_fresh_only() {
     if (!g_chosen) return false;
     return g_chosen_result.any_random() || g_chosen_result.challenge.size > 0;
@@ -825,7 +1082,10 @@ bool tla_new_game_import_question(std::uint32_t pc) {
 void tla_new_game_draw_page() { gsr::run_sheet::draw(); }
 
 bool tla_random_weapons_text(std::uint32_t text_id, std::string& out) {
-    return rw::line_text(rw_game(), text_id, out);
+    // Enemy skills' descriptions too, in the loaded language (not Golden Sun
+    // Reloaded, whose abilities are its own).
+    return gsr::name_scroll::line_text(text_id, out) || rw::line_text(rw_game(), text_id, out) ||
+           rp::description(rp_game(), !tla_rom::reloaded(), text_id, out);
 }
 
 // A Challenge Mode file's four bytes (red on the file screens).
@@ -840,3 +1100,5 @@ void tla_set_scaled_difficulty(bool on) {
 bool tla_challenge_bytes(const std::uint8_t* bytes) {
     return bytes && ch::decode(bytes).size > 0;
 }
+
+bool tla_new_game_visible() { return flow_open(); }

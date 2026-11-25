@@ -1,4 +1,4 @@
-﻿// host_window.cpp — SDL2-backed window. Stubs out when SDL2 isn't found.
+﻿// host_window.cpp: SDL2-backed window. Stubs out when SDL2 isn't found.
 
 #include "host_window.h"
 #include "runtime.h"
@@ -64,6 +64,12 @@
 #include <windows.h>
 #include <dwmapi.h>
 #endif
+#if defined(__ANDROID__)
+#include "android_display.h"
+#endif
+#include "gl_platform.h"
+#include "touch_controls.h"
+#include "gpu_present.h"
 
 namespace gbarecomp {
 
@@ -175,14 +181,15 @@ constexpr float kStickDeadZone = 7849.0f;
 constexpr float kStickSectorSin = 0.38268343f;
 
 // ── MC-WS-002 present-cadence ring ───────────────────────────────────────
-// Always-on (Release too) ring recording EVERY SDL_RenderPresent from window
-// open: wall time blocked inside the call, entry-to-entry gap, and the DWM
-// composition refresh counter (cRefresh) at exit — the scanout-side ruler
-// that delivered-content framedumps cannot see. The ring records
+// A ring that is always on, in Release builds too. From window open it
+// records every SDL_RenderPresent: the wall time spent blocked inside the
+// call, the gap since the previous call, and the DWM composition refresh
+// counter (cRefresh) at exit. That counter shows what reaches the screen,
+// which framedumps of the delivered content cannot. The ring records
 // unconditionally (~24 B/present); GBARECOMP_PRESENT_CADENCE=1 adds a
 // periodic stderr summary and a full CSV dump at close
 // (GBARECOMP_PRESENT_CADENCE_DUMP=path overrides ./_present_cadence.csv).
-// Interpretation:
+// Reading the numbers (rdelta = change in the refresh counter per present):
 //   block_us ≈ 0 on every present → vsync is NOT blocking (tear-prone);
 //   rdelta 1,1,1… at ~16.74 ms gaps on a high-Hz VRR panel → VRR engaged;
 //   rdelta 2/3 alternation on 164 Hz → 59.73→164 pulldown (cadence judder);
@@ -319,7 +326,7 @@ struct PresentCadence {
         std::fflush(stderr);
     }
 
-    // Full-ring CSV dump (verbose only) — the queryable record of the run.
+    // Full-ring CSV dump (verbose only): the queryable record of the run.
     void dump() {
         if (!verbose || total == 0) return;
         std::FILE* f = std::fopen(dump_path.c_str(), "w");
@@ -378,7 +385,7 @@ struct Backend {
     // SDL_GetRendererInfo after creation, never assumed from the hint).
     // Drives config_ui_init()'s runtime choice between the ImGui OpenGL3
     // backend (real multi-viewport) and the SDLRenderer2 backend (docking
-    // only, no viewports) — see host_config_ui.h.
+    // only, no viewports): see host_config_ui.h.
     bool          renderer_is_opengl = false;
     SDL_Texture*  texture  = nullptr;
     SDL_Texture*  native_texture = nullptr;
@@ -429,17 +436,17 @@ struct Backend {
     int native_scene_h = 0;
 
     // VFX-FLICKER-02/03: temporal frame blend ("LCD ghosting").
-    // temporal_blend_index is the persisted/applied setting (mirrors
-    // overclock_factor's relationship to cfg.overclock_index below);
-    // temporal_blend_prev/prev2 hold the RAW (unblended) previous two
-    // PRESENTED frames (N-1, N-2 — needed by the selective/"flicker only"
-    // filter's exact-2-frame-period check), temporal_blend_out is blend
-    // scratch. All three are base_w*base_h*3 and resized alongside
-    // graded_fb. temporal_blend_history_count tracks how many of
-    // prev/prev2 currently hold real previous frames (0, 1, or 2) rather
-    // than stale/zeroed data, so present() knows when it's safe to blend
-    // vs. must pass the frame through untouched. See present() for where
-    // this runs.
+    // temporal_blend_index is the saved and applied setting (it relates to
+    // this the way overclock_factor relates to cfg.overclock_index below).
+    // temporal_blend_prev and temporal_blend_prev2 hold the raw (unblended)
+    // previous two presented frames, N-1 and N-2. The selective ("flicker
+    // only") filter needs both to check for a flicker with a period of
+    // exactly two frames. temporal_blend_out is scratch for the blended
+    // result. All three are base_w*base_h*3 and are resized together with
+    // graded_fb. temporal_blend_history_count says how many of prev and
+    // prev2 hold real previous frames (0, 1 or 2) instead of stale or zeroed
+    // data. present() uses it to decide whether it can blend or must pass
+    // the frame through untouched. See present() for where this runs.
     int temporal_blend_index = gbarecomp::kTemporalBlendDefaultIndex;
     bool temporal_blend_needs_normalization = false;
     std::vector<uint8_t> temporal_blend_prev;
@@ -518,10 +525,12 @@ struct Backend {
     // TURBO-B2-UI: guest CPU overclock, Off/On, set by the game's No Slowdown
     // option (runtime_take_no_slowdown_request). Persisted as the literal
     // factor (1 or 50) in config.ini and applied live via
-    // runtime_set_overclock_factor — see write_enhancements_ini and the
+    // runtime_set_overclock_factor: see write_enhancements_ini and the
     // enhancements_changed handler in pump().
     unsigned     overclock_factor = 1;
     double       display_refresh_hz = 0.0;
+    // Android: the picture rate last told to the system (0 = say it again).
+    double       told_frame_rate = 0.0;
     int          volume = 100;          // 0..100 gain on pushed samples
     std::vector<int16_t> volume_buf;    // scratch for gain != 100
     // What config.ini [Audio] last recorded, so a change from the menu or
@@ -532,6 +541,11 @@ struct Backend {
     // The latter advances from every guest frame, including Turbo frames that
     // the presentation decimator skips.
     bool         fps_readout = false;
+    // Phones: on-screen buttons shown, and whether the player was asked about
+    // hiding them when a controller first connected ([Video] TouchButtons,
+    // ControllerAsked).
+    bool         touch_buttons = true;
+    bool         controller_asked = false;
     std::string  title;                 // base window title (readout restores it)
     Uint64       fps_window_start = 0;
     uint64_t     fps_presents = 0;
@@ -657,6 +671,13 @@ int shown_width(const Backend* b, int w, int h) {
     return h * 4 / 3;
 }
 
+// How many aspect ratios can be picked now; 0 in the Original view size. The
+// F1 menu's Aspect ratio list follows the same rule (host_config_ui.cpp).
+int aspect_choice_count(const Backend* b) {
+    if (!b->widescreen_game_allowed || !b->widescreen) return 0;
+    return b->aspect_view_available ? kViewAspectCount : 2;
+}
+
 // Resize and re-centre the window to the current shown width at the current
 // scale. Fullscreen and resize-driven views own their geometry.
 void apply_aspect_window_size(Backend* b) {
@@ -749,7 +770,7 @@ const char* const kHotkeyDefaults[HK_COUNT] = {
     "", "",
     "", "", "F",
     // In-window rebind menu. F2..F10 are the save-state slots, so F1
-    // is free. Rebindable like any other hotkey — set
+    // is free. Rebindable like any other hotkey: set
     // config.ini [KeyMap] Menu= to something else and F1 goes back to being
     // an ordinary (unbound) key.
     "F1",
@@ -839,7 +860,7 @@ HotkeyBind parse_hotkey(const char* value) {
 }
 
 // True when `hb` is bound and its required modifiers are (all) held. Ctrl/
-// Alt/Shift not required by the binding must NOT be held — so "P" and
+// Alt/Shift not required by the binding must NOT be held, so "P" and
 // "Shift+P" stay distinct bindings.
 bool hotkey_mods_ok(const HotkeyBind& hb, Uint16 state_mods) {
     auto want = [&](Uint16 m) { return (hb.mods & m) != 0; };
@@ -1089,7 +1110,7 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
         }
     }
     if (SDL_WasInit(SDL_INIT_AUDIO) == 0) {
-        // Non-fatal if audio fails — keep video working.
+        // Non-fatal if audio fails: keep video working.
         if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
             std::fprintf(stderr, "host_window: SDL_InitSubSystem(AUDIO) failed: %s\n",
                          SDL_GetError());
@@ -1109,7 +1130,7 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     b->title = title ? title : "gbarecomp";
     // Gamepad. A host-side convenience: if it fails to come up the emulator
     // runs exactly as before, just without pad input. (The config UI is
-    // initialized further down — it needs the window and renderer, which do
+    // initialized further down: it needs the window and renderer, which do
     // not exist yet here.)
     if (SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) == 0) {
         for (int i = 0; i < SDL_NumJoysticks(); ++i) {
@@ -1154,6 +1175,12 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
 #endif
     Uint32 window_flags = SDL_WINDOW_SHOWN |
         static_cast<Uint32>(SDL_WINDOW_RESIZABLE);
+#if defined(__ANDROID__)
+    // A phone's window is the whole screen. SDL still keeps a "window size"
+    // there: a windowed size (the window scale setting) shrinks the drawing
+    // area to a corner of the screen, so the window is always fullscreen.
+    window_flags |= static_cast<Uint32>(SDL_WINDOW_FULLSCREEN_DESKTOP);
+#endif
 #if defined(GBARECOMP_HAVE_IMGUI)
     // Real ImGui multi-viewport needs a GL-capable window: imgui_impl_opengl3
     // is the only backend among the ones we ship with viewport support
@@ -1190,6 +1217,9 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
         delete b;
         return false;
     }
+#if defined(__ANDROID__)
+    b->fullscreen = true;
+#endif
     // The FramePacer governs emulation at 59.7275 Hz; vsync below only aligns
     // scanout after the pacer and never becomes the game clock.
     // Every path requests a synchronized present. The cadence probe measured
@@ -1208,12 +1238,12 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     // needs imgui_impl_opengl3, the only shipped backend with upstream
     // viewport support. Try the "opengl" SDL render driver first; if this
     // system can't create one (no GL, driver issue), b->renderer stays null
-    // and the direct3d11/software chain below runs exactly as before —
+    // and the direct3d11/software chain below runs exactly as before;
     // config_ui_init() below detects which driver actually won and routes
     // to the matching ImGui backend (docking-only, no viewports) at runtime,
     // not via a compile-time driver choice.
     if (!direct3d_compat) {
-        SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER, "opengl",
+        SDL_SetHintWithPriority(SDL_HINT_RENDER_DRIVER, gl_sdl_render_driver(),
                                 SDL_HINT_DEFAULT);
         b->renderer = SDL_CreateRenderer(b->window, -1, renderer_flags);
         if (!b->renderer) {
@@ -1273,11 +1303,11 @@ bool HostWindow::open(int scale, int base_w, int base_h, const char* title,
     {
         SDL_RendererInfo info{};
         if (SDL_GetRendererInfo(b->renderer, &info) == 0) {
-            // The actual driver that won, not the one we hinted for — the
+            // The actual driver that won, not the one we hinted for: the
             // hint is a preference, not a guarantee. Multi-viewport ImGui
             // is only wired up when this really is the opengl driver.
             b->renderer_is_opengl =
-                info.name && std::strcmp(info.name, "opengl") == 0;
+                info.name && std::strcmp(info.name, gl_sdl_render_driver()) == 0;
             std::fprintf(stderr,
                          "host_window: renderer=%s flags=0x%08x vsync=%s%s\n",
                          info.name ? info.name : "unknown",
@@ -1493,7 +1523,7 @@ void HostWindow::push_audio_samples(const int16_t* samples, std::size_t count) {
 
     // Producer: append mono frames into the bridge ring. The SDL callback
     // (gba_audio_callback) drains it at the device rate with band-limited
-    // resampling + a P-only fill servo — no queue underrun, no hard flush.
+    // resampling + a P-only fill servo: no queue underrun, no hard flush.
     SDL_LockMutex(b->audio_mtx);
     rab_push(&b->bridge, samples, static_cast<int>(count)); // mono: count == frames
     SDL_UnlockMutex(b->audio_mtx);
@@ -1811,6 +1841,36 @@ void HostWindow::present(const uint8_t* rgb888) {
         !b->native_fb.empty() && b->native_scene_w > 0 && b->native_scene_h > 0;
     if (!rgb888 && !supplied_native) return;
 
+    // Phones: the graphics card's picture straight from its texture
+    // (gpu_present.h), when this window shows the frame as it comes: no
+    // colour grading, screen filter, 2x in-between frames, native-scale
+    // texture, smooth scaling or diagnostic marker. Published for the
+    // runner's next frame; this frame uses a texture only if one is on offer.
+    const bool interpolation_on =
+        b->cfg.frame_interpolation_available && b->cfg.frame_interpolation_2x;
+#if defined(__ANDROID__)
+    {
+        const double shown_hz =
+            emulation_normal_hz(b) * (interpolation_on ? 2.0 : 1.0);
+        if (shown_hz != b->told_frame_rate) {
+            android_set_frame_rate(shown_hz);
+            b->told_frame_rate = shown_hz;
+        }
+    }
+#endif
+    const bool can_take_texture = touch_controls_enabled() && !b->native_renderer &&
+        (!b->color_lut || b->color_lut->is_passthrough()) &&
+        b->screen_filter == ScreenFilter::Off && !interpolation_on &&
+        !b->obj_record_frame_marker && !b->linear_filter;
+    gbarecomp::gpu_present_set_accepting(can_take_texture);
+    const gbarecomp::GpuPresentFrame* direct = nullptr;
+    if (can_take_texture && !supplied_native) {
+        direct = gbarecomp::gpu_present_current();
+        if (direct && (direct->width != b->base_w || direct->height != b->base_h))
+            direct = nullptr;
+    }
+    if (!direct) gbarecomp::gpu_present_reset_history();
+
     // VFX-FLICKER-02: temporal frame blend ("LCD ghosting"), selectable in
     // the F1 menu (default: Flicker only, Strong). Runs first, directly on the PPU
     // frame and before colour grading and scaling, like the pixels blending
@@ -1829,8 +1889,9 @@ void HostWindow::present(const uint8_t* rgb888) {
         const int blend_index = std::clamp(b->temporal_blend_index, 0,
                                            gbarecomp::kTemporalBlendItemCount - 1);
         gbarecomp::set_flicker_reduction_index(blend_index);
+        // A texture frame blends on the card (gpu_present_draw).
         const bool blend_engaged = !supplied_native && rgb888 != nullptr &&
-            blend_index != 0 && !interpolation_engaged;
+            blend_index != 0 && !interpolation_engaged && !direct;
         if (blend_engaged) {
             const bool selective =
                 gbarecomp::temporal_blend_index_is_selective(blend_index);
@@ -1884,7 +1945,7 @@ void HostWindow::present(const uint8_t* rgb888) {
 
     // Present-time color grading (opt-in). Raw is passthrough: the raw
     // PPU frame is uploaded untouched, so verify/frame-hash are unaffected.
-    if (!supplied_native && b->color_lut && !b->color_lut->is_passthrough() &&
+    if (!supplied_native && !direct && b->color_lut && !b->color_lut->is_passthrough() &&
         b->graded_fb.size() == static_cast<std::size_t>(b->base_w) * b->base_h * 3u) {
         b->color_lut->map_rgb888(rgb888, b->graded_fb.data(), b->base_w, b->base_h);
         rgb888 = b->graded_fb.data();
@@ -1948,10 +2009,12 @@ void HostWindow::present(const uint8_t* rgb888) {
         }
         SDL_UpdateTexture(b->native_texture, nullptr, native_upload,
                           frame_w * 3);
-    } else {
+    } else if (!direct) {
         SDL_UpdateTexture(b->texture, nullptr, diagnostic_rgb888,
                           b->base_w * 3);
     }
+    const int direct_blend = std::clamp(b->temporal_blend_index, 0,
+                                        gbarecomp::kTemporalBlendItemCount - 1);
     SDL_RenderClear(b->renderer);
     if (!b->aspect_view_available && !b->expanded_view &&
         !b->resize_driven_view && !use_native) {
@@ -1974,6 +2037,20 @@ void HostWindow::present(const uint8_t* rgb888) {
                                           b->screen_filter_params.data(),
                                           whole, b->base_w, b->base_h,
                                           destination);
+        }
+        if (!filtered && direct) {
+            // The texture is drawn in output pixels by the same layout.
+            int out_w = 0, out_h = 0;
+            SDL_GetRendererOutputSize(b->renderer, &out_w, &out_h);
+            const PresentationLayout layout = compute_presentation_layout(
+                out_w, out_h, b->base_w, b->base_h,
+                b->integer_scale ? ScalingMode::IntegerLetterbox
+                                 : ScalingMode::AspectFill);
+            const SDL_Rect whole = {0, 0, b->base_w, b->base_h};
+            const SDL_Rect destination = {layout.x, layout.y, layout.width, layout.height};
+            filtered = layout.width > 0 && layout.height > 0 &&
+                gbarecomp::gpu_present_draw(b->renderer, *direct, whole, destination,
+                                            direct_blend);
         }
         if (!filtered)
             SDL_RenderCopy(b->renderer, frame_texture, nullptr, nullptr);
@@ -2039,15 +2116,20 @@ void HostWindow::present(const uint8_t* rgb888) {
                                    b->screen_filter_params.data(), source,
                                    shown_width(b, b->base_w, b->base_h),
                                    b->base_h, destination);
+            const bool drawn_direct = !filtered && direct &&
+                gbarecomp::gpu_present_draw(
+                    b->renderer, *direct,
+                    shown_w < frame_w ? source : SDL_Rect{0, 0, frame_w, frame_h},
+                    destination, direct_blend);
             // 3:2 copies the whole texture, exactly as before 4:3 existed.
-            if (!filtered)
+            if (!filtered && !drawn_direct)
                 SDL_RenderCopy(b->renderer, frame_texture,
                                shown_w < frame_w ? &source : nullptr,
                                &destination);
         }
     }
     draw_screen_veil(b->renderer);
-    // MC-WS-002: time the present itself (vsync blocks here — or doesn't)
+    // MC-WS-002: time the present itself (vsync blocks here, or doesn't)
     // and stamp the DWM refresh counter into the always-on cadence ring.
     const uint64_t cad_qpc0 = SDL_GetPerformanceCounter();
     // Config UI last, so it draws over the scaled guest frame at WINDOW
@@ -2058,14 +2140,14 @@ void HostWindow::present(const uint8_t* rgb888) {
     if (b->cfg_ready) {
         // Commit SDL_Renderer's batched draw commands (the guest frame copy
         // above) to the GPU before ImGui issues its own GL calls on the
-        // opengl path — SDL_Renderer batches by default, and leaving that
+        // opengl path: SDL_Renderer batches by default, and leaving that
         // batch pending while ImGui draws would interleave state and corrupt
         // both pictures. A no-op on the non-GL renderer paths.
         SDL_RenderFlush(b->renderer);
         b->cfg.fps = b->fps_last;
         b->cfg.frame_ms = b->fps_last > 0.0f ? 1000.0f / b->fps_last : 0.0f;
         // The faithful path pins a 240x160 logical size, and the SDL_Renderer
-        // ImGui backend draws in renderer coordinates — so the UI would come
+        // ImGui backend draws in renderer coordinates, so the UI would come
         // out magnified by the window scale and clipped to the top-left
         // sixteenth of the window. ImGui already lays out in window pixels
         // (its io.DisplaySize is the window), so drop to 1:1 for the UI pass
@@ -2080,7 +2162,7 @@ void HostWindow::present(const uint8_t* rgb888) {
             SDL_RenderSetLogicalSize(b->renderer, logical_w, logical_h);
     }
     // Harness: GBARECOMP_WINDOW_SHOT=<path> writes ONE readback of the actual
-    // renderer output — scaled guest frame plus any UI drawn over it — as a
+    // renderer output, scaled guest frame plus any UI drawn over it, as a
     // binary PPM. The framedump path records the guest framebuffer instead, so
     // it cannot show host UI; this is the only capture that proves what was
     // really on screen.
@@ -2149,6 +2231,7 @@ namespace {
 bool write_keybinds_ini(const std::string& dir, const SDL_Scancode* bind_sc,
                         const int* pad_bind, const int* pad_bind_alt);
 bool write_hotkeys_ini(const std::string& dir, const HotkeyBind* hotkeys);
+void ask_about_touch_buttons(Backend* b);
 }
 
 void HostWindow::load_input_config(const char* dir) {
@@ -2191,6 +2274,10 @@ void HostWindow::load_input_config(const char* dir) {
             b->cfg.fullscreen = on;
         } else if (SDL_strcasecmp(key, "ShowFPS") == 0) {
             b->cfg.show_fps = on;
+        } else if (SDL_strcasecmp(key, "TouchButtons") == 0) {
+            b->touch_buttons = on;
+        } else if (SDL_strcasecmp(key, "ControllerAsked") == 0) {
+            b->controller_asked = on;
         } else if (SDL_strcasecmp(key, "VSync") == 0) {
             b->cfg.vsync = on;
         } else if (SDL_strcasecmp(key, "LinearFilter") == 0) {
@@ -2351,9 +2438,9 @@ void HostWindow::load_input_config(const char* dir) {
 
     ini_scan_section((base + "config.ini").c_str(), "Enhancements",
                      [b](const char* key, const char* val) {
-        // EnhancedTiming is no longer a user setting: exact 60 Hz timing is
-        // always on where the game allows it (see saved_enhanced_timing()),
-        // so an old saved "false" is deliberately ignored.
+        // EnhancedTiming is not a user setting: exact 60 Hz timing is always
+        // on where the game allows it (see saved_enhanced_timing()), so an old
+        // saved "false" is deliberately ignored.
         if (SDL_strcasecmp(key, "CpuOverclock") == 0) {
             if (SDL_strcasecmp(val, "auto") == 0) {
                 b->overclock_factor = kOverclockFactors[1];
@@ -2439,6 +2526,9 @@ void HostWindow::load_input_config(const char* dir) {
     set_fullscreen(b->cfg.fullscreen);
     set_fps_readout(b->cfg.show_fps);
     apply_vsync(b, b->cfg.vsync);
+    b->cfg.touch_buttons = b->touch_buttons;
+    touch_controls_set_buttons_shown(b->touch_buttons);
+    if (b->pad) ask_about_touch_buttons(b);  // connected before the game started
     b->linear_filter = b->cfg.linear_filter;
     SDL_SetTextureScaleMode(b->texture, b->linear_filter ? SDL_ScaleModeLinear
                                                       : SDL_ScaleModeNearest);
@@ -2558,6 +2648,9 @@ void HostWindow::load_input_config(const char* dir) {
 void HostWindow::set_fullscreen(bool on) {
     if (!open_ || !impl_) return;
     auto* b = static_cast<Backend*>(impl_);
+#if defined(__ANDROID__)
+    on = true;  // see open(): a phone's window is the whole screen
+#endif
     if (b->fullscreen == on) return;
     if (SDL_SetWindowFullscreen(b->window,
                                 on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) == 0) {
@@ -2972,6 +3065,32 @@ bool write_keybinds_ini(const std::string& dir, const SDL_Scancode* bind_sc,
     return true;
 }
 
+// config.ini as lines (no line endings); empty when the file is absent.
+std::vector<std::string> read_ini_lines(const std::string& path) {
+    std::vector<std::string> lines;
+    std::FILE* in = std::fopen(path.c_str(), "rb");
+    if (!in) return lines;
+    std::string cur;
+    int c;
+    while ((c = std::fgetc(in)) != EOF) {
+        if (c == '\n') { lines.push_back(cur); cur.clear(); }
+        else if (c != '\r') cur.push_back(static_cast<char>(c));
+    }
+    if (!cur.empty()) lines.push_back(cur);
+    std::fclose(in);
+    return lines;
+}
+
+bool write_ini_lines(const std::string& path,
+                     const std::vector<std::string>& lines) {
+    std::FILE* out = std::fopen(path.c_str(), "wb");
+    if (!out) return false;
+    bool ok = true;
+    for (const std::string& line : lines)
+        if (std::fprintf(out, "%s\n", line.c_str()) < 0) ok = false;
+    return std::fclose(out) == 0 && ok;
+}
+
 // Replace the keys of one named INI section in place, appending any of
 // `names`/`values` not already present at the end of that section (creating
 // the section if it was absent). Used by the [KeyMap], [KeyMap.Pad], [Video],
@@ -3056,17 +3175,7 @@ bool write_hotkeys_ini(const std::string& dir, const HotkeyBind* hotkeys) {
     };
 
     // Read the existing file (if any) into lines.
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
 
     std::vector<std::string> key_values(hotkey_count());
     std::vector<std::string> pad_values(hotkey_count());
@@ -3079,11 +3188,7 @@ bool write_hotkeys_ini(const std::string& dir, const HotkeyBind* hotkeys) {
     rewrite_ini_section(lines, "KeyMap.Pad", all_hotkey_names().data(), pad_values.data(),
                         hotkey_count());
 
-    std::FILE* f = std::fopen(path.c_str(), "wb");
-    if (!f) return false;
-    for (const std::string& l : lines) std::fprintf(f, "%s\n", l.c_str());
-    std::fclose(f);
-    return true;
+    return write_ini_lines(path, lines);
 }
 
 void read_menu_layout_ini(const std::string& path, ConfigUiState& state) {
@@ -3102,29 +3207,14 @@ void read_menu_layout_ini(const std::string& path, ConfigUiState& state) {
 
 bool write_menu_layout_ini(const std::string& dir, const ConfigUiState& state) {
     const std::string path = dir + "/config.ini";
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
     static const char* const names[] = {"Width", "Height", "X", "Y"};
     const std::string values[] = {
         std::to_string(state.menu_width), std::to_string(state.menu_height),
         std::to_string(state.menu_x), std::to_string(state.menu_y)
     };
     rewrite_ini_section(lines, "SettingsWindow", names, values, int(std::size(names)));
-    std::FILE* out = std::fopen(path.c_str(), "wb");
-    if (!out) return false;
-    bool ok = true;
-    for (const std::string& line : lines)
-        if (std::fprintf(out, "%s\n", line.c_str()) < 0) ok = false;
-    return std::fclose(out) == 0 && ok;
+    return write_ini_lines(path, lines);
 }
 
 void save_menu_layout(Backend* b) {
@@ -3137,27 +3227,18 @@ void save_menu_layout(Backend* b) {
 // Update only [Video], preserving launcher settings and unknown sections.
 bool write_video_ini(const Backend* b) {
     const std::string path = b->config_dir + "/config.ini";
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
     std::vector<const char*> names = {
         "WindowScale", "Fullscreen", "VSync", "LinearFilter",
-        "IntegerScale", "ScreenFilter", "ShowFPS"
+        "IntegerScale", "ScreenFilter", "ShowFPS", "TouchButtons", "ControllerAsked"
     };
     std::vector<std::string> values = {
         std::to_string(b->scale), b->preferred_fullscreen ? "true" : "false",
         b->vsync ? "true" : "false", b->linear_filter ? "true" : "false",
         b->integer_scale ? "true" : "false",
         std::to_string(static_cast<int>(b->preferred_screen_filter)),
-        b->fps_readout ? "true" : "false"
+        b->fps_readout ? "true" : "false",
+        b->touch_buttons ? "true" : "false", b->controller_asked ? "true" : "false"
     };
     for (int i = 0; i < kScreenFilterParamCount; ++i) {
         char text[32];
@@ -3178,21 +3259,22 @@ void persist_video(Backend* b) {
                      b->config_dir.c_str());
 }
 
+// Phones: the first time a controller is
+// connected, the menu asks whether to hide the on-screen buttons. Asked once;
+// the Controls page turns them back on.
+void ask_about_touch_buttons(Backend* b) {
+    if (!touch_controls_enabled() || b->controller_asked || !b->cfg_ready) return;
+    b->controller_asked = true;
+    persist_video(b);
+    b->cfg.controller_prompt = true;
+    config_ui_set_visible(true);
+}
+
 // Update only [Speed], preserving launcher settings and unknown sections.
 bool write_speed_ini(const std::string& dir, float multiplier,
                      bool mute_during_turbo, bool uncapped) {
     const std::string path = dir + "/config.ini";
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
 
     const char* const names[] = {
         "TurboMultiplier", "MuteDuringTurbo", "Uncapped"
@@ -3243,12 +3325,7 @@ bool write_speed_ini(const std::string& dir, float multiplier,
                      add.begin(), add.end());
     }
 
-    std::FILE* out = std::fopen(path.c_str(), "wb");
-    if (!out) return false;
-    for (const std::string& line : lines)
-        std::fprintf(out, "%s\n", line.c_str());
-    std::fclose(out);
-    return true;
+    return write_ini_lines(path, lines);
 }
 
 // Update only [Enhancements], preserving launcher settings and unknown
@@ -3258,17 +3335,7 @@ bool write_enhancements_ini(const std::string& dir, bool enhanced_timing,
                             int temporal_blend_index,
                             int view_mode) {
     const std::string path = dir + "/config.ini";
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
 
     bool in_section = false;
     bool seen_section = false;
@@ -3338,12 +3405,7 @@ bool write_enhancements_ini(const std::string& dir, bool enhanced_timing,
                      add.begin(), add.end());
     }
 
-    std::FILE* out = std::fopen(path.c_str(), "wb");
-    if (!out) return false;
-    for (const std::string& line : lines)
-        std::fprintf(out, "%s\n", line.c_str());
-    std::fclose(out);
-    return true;
+    return write_ini_lines(path, lines);
 }
 
 // Update only [Enhancements] ColorProfile=, ColorSaturation=, ColorHue=,
@@ -3369,17 +3431,7 @@ bool write_picture_ini(const std::string& dir, int screen_kind,
         keys[5] + "=" + std::to_string(custom.darken),
         keys[6] + "=" + kViewAspectKeys[std::clamp(aspect, 0, kViewAspectCount - 1)],
         keys[7] + "=" + (vision_name ? vision_name : "normal")};
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
     bool in_section = false;
     bool seen_section = false;
     bool written[8] = {false, false, false, false, false, false, false, false};
@@ -3419,29 +3471,14 @@ bool write_picture_ini(const std::string& dir, int screen_kind,
                      rows[k]);
         ++section_end;
     }
-    std::FILE* out = std::fopen(path.c_str(), "wb");
-    if (!out) return false;
-    for (const std::string& line : lines)
-        std::fprintf(out, "%s\n", line.c_str());
-    std::fclose(out);
-    return true;
+    return write_ini_lines(path, lines);
 }
 
 // Update only [Cheats], preserving launcher settings and unknown sections.
 bool write_cheats_ini(const std::string& dir, bool infinite_hp,
                       bool infinite_pp, int player_speed_multiplier) {
     const std::string path = dir + "/config.ini";
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
 
     bool in_section = false;
     bool seen_section = false;
@@ -3505,28 +3542,13 @@ bool write_cheats_ini(const std::string& dir, bool infinite_hp,
                      add.begin(), add.end());
     }
 
-    std::FILE* out = std::fopen(path.c_str(), "wb");
-    if (!out) return false;
-    for (const std::string& line : lines)
-        std::fprintf(out, "%s\n", line.c_str());
-    std::fclose(out);
-    return true;
+    return write_ini_lines(path, lines);
 }
 
 // Update only [Audio], preserving launcher settings and unknown sections.
 bool write_audio_ini(const std::string& dir, int volume, bool mute) {
     const std::string path = dir + "/config.ini";
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
 
     static const char* const kNames[] = {"Volume", "Mute"};
     const std::string values[] = {std::to_string(volume),
@@ -3556,17 +3578,7 @@ void persist_audio(Backend* b) {
 bool write_logging_ini(const std::string& dir, bool additional_debug_logging,
                        bool crash_log) {
     const std::string path = dir + "/config.ini";
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
 
     static const char* const kNames[] = {"AdditionalDebugLogging",
                                          "CrashLog"};
@@ -3574,28 +3586,13 @@ bool write_logging_ini(const std::string& dir, bool additional_debug_logging,
                                   crash_log ? "true" : "false"};
     rewrite_ini_section(lines, "Logging", kNames, values, 2);
 
-    std::FILE* out = std::fopen(path.c_str(), "wb");
-    if (!out) return false;
-    for (const std::string& line : lines)
-        std::fprintf(out, "%s\n", line.c_str());
-    std::fclose(out);
-    return true;
+    return write_ini_lines(path, lines);
 }
 
 // Update only [Debug], preserving launcher settings and unknown sections.
 bool write_debug_overlay_ini(const std::string& dir, bool debug_overlay) {
     const std::string path = dir + "/config.ini";
-    std::vector<std::string> lines;
-    if (std::FILE* in = std::fopen(path.c_str(), "rb")) {
-        std::string cur;
-        int c;
-        while ((c = std::fgetc(in)) != EOF) {
-            if (c == '\n') { lines.push_back(cur); cur.clear(); }
-            else if (c != '\r') cur.push_back(static_cast<char>(c));
-        }
-        if (!cur.empty()) lines.push_back(cur);
-        std::fclose(in);
-    }
+    std::vector<std::string> lines = read_ini_lines(path);
 
     bool in_section = false;
     bool seen_section = false;
@@ -3635,12 +3632,7 @@ bool write_debug_overlay_ini(const std::string& dir, bool debug_overlay) {
                      add.begin(), add.end());
     }
 
-    std::FILE* out = std::fopen(path.c_str(), "wb");
-    if (!out) return false;
-    for (const std::string& line : lines)
-        std::fprintf(out, "%s\n", line.c_str());
-    std::fclose(out);
-    return true;
+    return write_ini_lines(path, lines);
 }
 
 }  // namespace
@@ -3693,8 +3685,8 @@ HostWindow::Events HostWindow::pump() {
     // show what is actually in effect rather than a stale copy.
     //
     // Each group is skipped while its change flag is pending. The UI runs at
-    // present time — i.e. AFTER the apply block at the bottom of the previous
-    // pump — so an unguarded publish here would overwrite the edit the user
+    // present time (i.e. AFTER the apply block at the bottom of the previous
+    // pump), so an unguarded publish here would overwrite the edit the user
     // just made with the old backend value and the change would vanish.
     static constexpr ConfigUiColourChoice colour_choices[] = {
         {static_cast<int>(runtime::ScreenKind::Raw), "Raw (as the game draws it)", false},
@@ -3794,7 +3786,7 @@ HostWindow::Events HostWindow::pump() {
     // Harness switch: run the save path once, with the bindings exactly as
     // just published, so the keybinds.ini + config.ini [KeyMap] round-trip can
     // be checked without a human clicking a bind box. A no-op edit by
-    // construction — what it writes is what it just read. Deliberately AFTER
+    // construction: what it writes is what it just read. Deliberately AFTER
     // the publish above: setting the flag any earlier would suppress the
     // publish and save an empty layout.
     {
@@ -3963,6 +3955,7 @@ HostWindow::Events HostWindow::pump() {
         }
         if (e.type == SDL_CONTROLLERDEVICEADDED && !b->pad) {
             b->pad = SDL_GameControllerOpen(e.cdevice.which);
+            if (b->pad) ask_about_touch_buttons(b);
         } else if (e.type == SDL_CONTROLLERDEVICEREMOVED && b->pad &&
                    SDL_GameControllerFromInstanceID(e.cdevice.which) == b->pad) {
             SDL_GameControllerClose(b->pad);
@@ -3978,6 +3971,9 @@ HostWindow::Events HostWindow::pump() {
             // handle.
             if (SDL_GetWindowID(b->window) == e.window.windowID)
                 ev.quit = true;
+        } else if (e.type == SDL_APP_DIDENTERFOREGROUND) {
+            // Android: the drawing surface is new; say the picture rate again.
+            b->told_frame_rate = 0.0;
         } else if (e.type == SDL_KEYDOWN && e.key.repeat == 0) {
             // Edge-triggered hotkeys (ignore key-repeat). F2..F10 are
             // save-state slots: plain = load, Shift = save. SDL's F1..F12
@@ -3985,7 +3981,8 @@ HostWindow::Events HostWindow::pump() {
             // the rebind menu.
             SDL_Keycode sym = e.key.keysym.sym;
             Uint16 mods = e.key.keysym.mod;
-            if (sym == SDLK_ESCAPE) {
+            // Android's Back button is the phone's Escape.
+            if (sym == SDLK_ESCAPE || sym == SDLK_AC_BACK) {
                 ev.quit = true;
             } else if (sym >= SDLK_F2 && sym <= SDLK_F10) {
                 int slot = static_cast<int>(sym - SDLK_F2) + 1;
@@ -4111,6 +4108,15 @@ HostWindow::Events HostWindow::pump() {
                 }
             }
         }
+        // On-screen buttons (touch screens): additive like the controller.
+        if (touch_controls_enabled()) {
+            int touch_w = 0, touch_h = 0;
+            SDL_GetWindowSize(b->window, &touch_w, &touch_h);
+            const TouchControlsInput touch =
+                touch_controls_poll(touch_w, touch_h, config_ui_visible());
+            keys &= static_cast<uint16_t>(~touch.held);
+            if (touch.menu_pressed && !quit_owns_input) config_ui_toggle();
+        }
         // Auto Fire: two frames pressed, two released, so the game sees a
         // fresh press every fourth frame. Keyed to the guest frame so the
         // rhythm does not change with the paused/idle pump rate.
@@ -4162,6 +4168,15 @@ HostWindow::Events HostWindow::pump() {
             }
             b->cfg.binds_changed = false;
         }
+        // An aspect ratio requested by game code (Quality of Life menu) goes
+        // through the same path as a change made in this menu.
+        if (const int requested = take_view_aspect_request();
+            requested >= 0 && requested < aspect_choice_count(b) &&
+            requested != b->aspect) {
+            b->cfg.aspect = requested;
+            if (requested == ViewAspectMinimalSharpPixels) b->cfg.integer_scale = true;
+            b->cfg.video_changed = true;
+        }
         if (b->aspect_view_available && b->cfg.widescreen && b->cfg.aspect == ViewAspectMinimalSharpPixels)
             b->cfg.integer_scale = true;
         if (b->cfg.video_changed || b->cfg.color_save ||
@@ -4169,6 +4184,7 @@ HostWindow::Events HostWindow::pump() {
             const bool video_settings_changed =
                 b->cfg.fullscreen != b->fullscreen || b->cfg.scale != b->scale ||
                 b->cfg.show_fps != b->fps_readout || b->cfg.vsync != b->vsync ||
+                b->cfg.touch_buttons != b->touch_buttons ||
                 b->cfg.linear_filter != b->linear_filter ||
                 b->cfg.integer_scale != b->integer_scale ||
                 b->cfg.screen_filter != static_cast<int>(b->preferred_screen_filter) ||
@@ -4182,6 +4198,8 @@ HostWindow::Events HostWindow::pump() {
                 adjust_scale(b->cfg.scale - b->scale);
             set_fps_readout(b->cfg.show_fps);
             apply_vsync(b, b->cfg.vsync);
+            b->touch_buttons = b->cfg.touch_buttons;
+            touch_controls_set_buttons_shown(b->touch_buttons);
             if (b->cfg.linear_filter != b->linear_filter) {
                 b->linear_filter = b->cfg.linear_filter;
                 SDL_SetTextureScaleMode(b->texture,
@@ -4292,7 +4310,7 @@ HostWindow::Events HostWindow::pump() {
             b->cfg.enhancements_changed = true;
         }
         if (b->cfg.enhancements_changed) {
-            // CPU Overclock (TURBO-B2-UI): apply live immediately — the
+            // CPU Overclock (TURBO-B2-UI): apply live immediately: the
             // factor is read with a relaxed atomic load from runtime_tick,
             // so this takes effect mid-run, including while a nested
             // wake-from-HALT runtime_dispatch is executing.
@@ -4300,7 +4318,7 @@ HostWindow::Events HostWindow::pump() {
                                        gbarecomp::kOverclockItemCount - 1);
             b->overclock_factor = kOverclockFactors[idx];
             runtime_set_overclock_factor(b->overclock_factor);
-            // VFX-FLICKER-02: applied live the same way — present() reads
+            // VFX-FLICKER-02: applied live the same way: present() reads
             // b->temporal_blend_index directly every frame, no extra hook.
             b->temporal_blend_index = std::clamp(
                 b->cfg.temporal_blend_index, 0,
@@ -4337,6 +4355,7 @@ HostWindow::Events HostWindow::pump() {
             b->cfg.enhancements_changed = false;
         }
         runtime_publish_view_mode(b->fixed_view_mode);
+        publish_view_aspect(b->aspect, aspect_choice_count(b));
         runtime_publish_no_slowdown(
             b->overclock_factor == kOverclockFactors[1]);
         if (b->cfg.layers_changed) {
@@ -4368,7 +4387,7 @@ HostWindow::Events HostWindow::pump() {
             b->cfg.cheats_changed = false;
         }
         if (b->cfg.logging_changed) {
-            // Applied live immediately — see gsr_set_additional_debug_logging
+            // Applied live immediately: see gsr_set_additional_debug_logging
             // (relaxed atomic, safe from any point mid-run). Some diagnostic
             // streams check their env var / toggle only once, at process or
             // machine bring-up, so flipping this mid-session does not start

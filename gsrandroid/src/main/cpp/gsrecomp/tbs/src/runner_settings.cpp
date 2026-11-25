@@ -72,6 +72,7 @@
 #include "../../shared_game/settings_help.h"
 #include "battle_speed.h"
 #include "../../shared_game/enemy_hp_bar.h"
+#include "../../shared_game/battle_retarget.h"
 #include "../../shared_game/field_character.h"
 #include "../../shared_game/challenge_mode.h"
 #include "../../shared_game/spanish_menu.h"
@@ -96,14 +97,6 @@
 #include "rom_version.h"
 #include "runner_shared.h"
 #include "../../shared_game/quality_of_life.h"
-
-extern "C" unsigned g_ws_active;
-extern "C" unsigned long long runtime_current_frame();
-extern "C" void runtime_iwram_code_write_dump(const char* why);
-extern "C" void runtime_iwram_code_write_dump_range(const char* why,
-                                                    std::uint32_t lo,
-                                                    std::uint32_t hi);
-extern "C" void runtime_unpacker_slot_dump(const char* why);
 
 namespace {
 using namespace gsr_runner;
@@ -131,11 +124,6 @@ namespace {
 // with the other options.
 std::atomic<bool> g_battle_speed_on{false};
 }  // namespace
-namespace gsr_runner {
-// Better Field Psy: Off / On (src/battle_speed.h), saved with the other
-// options.
-std::atomic<int> g_field_psynergy_fast{0};
-}  // namespace gsr_runner
 namespace {
 std::string g_options_path = gsr::settings_page::kOptionsFile;
 
@@ -154,8 +142,7 @@ void load_game_options(const char* argv0) {
         g_encounter_rate.store(encounters);
     g_battle_speed_on.store(
         gbarecomp::game_option_get(gsr::battle_speed::kOptionsKey, 0) != 0);
-    g_field_psynergy_fast.store(
-        gbarecomp::game_option_get(kFieldPsynergyKey, 0) != 0 ? 1 : 0);
+    gsr::field_psy::load();
 }
 }  // namespace gsr_runner
 namespace {
@@ -165,8 +152,6 @@ void save_game_options() {
                                g_encounter_rate.load());
     gbarecomp::game_option_set(gsr::battle_speed::kOptionsKey,
                                g_battle_speed_on.load() ? 1 : 0);
-    gbarecomp::game_option_set(gsr::settings_page::kFieldPsynergyKey,
-                               g_field_psynergy_fast.load() ? 1 : 0);
 }
 
 }  // namespace
@@ -205,8 +190,8 @@ void play_menu_sounds() {
 
 // The repeat-keys load: Left/Right on the Difficulty row.
 int settings_page_repeat_keys(std::uint32_t*) {
-    // The game's own five rows, Difficulty last (hard_mode.h); the old page
-    // two now lives in the Quality of Life menu, so the loop moves as usual.
+    // The game's own five rows, Difficulty last (hard_mode.h). The extra
+    // options live in the Quality of Life menu, so the loop moves as usual.
     // Up and Down are tested first and end the frame's input.
     using namespace gsr::settings_page;
     const std::uint32_t keys = bus_read_u32(kRepeatKeys);
@@ -337,7 +322,7 @@ int battle_speed_wait_mask(std::uint32_t* out_value) {
     g_battle_toggle_held = toggle;
     const bool battle_2x = in_battle && g_battle_speed_on.load();
     // A field Psynergy cast at Fast: the same 2x, outside battle only.
-    const bool field_2x = !in_battle && g_field_psynergy_fast.load() != 0 &&
+    const bool field_2x = !in_battle && gsr::field_psy::on(gsr::field_psy::kFaster) &&
                           field_psynergy_casting();
     if (field_2x != g_field_psy_running) {
         g_field_psy_running = field_2x;
@@ -498,13 +483,13 @@ std::vector<gsr::qol_menu::Row> quality_of_life_rows() {
     rows.push_back({kRowLabels[kScreenRow], kRowHelp[kScreenRow],
         [] { return std::string(gbarecomp::kViewModeLabels[std::clamp(runtime_get_view_mode(), 0, gbarecomp::kViewModeCount - 1)]); },
         [](int direction) { runtime_request_view_mode(step(runtime_get_view_mode(), gbarecomp::kViewModeCount, direction)); }});
+    rows.push_back(gsr::qol::aspect_row());
     rows.push_back({kRowLabels[kNoSlowdownRow], kRowHelp[kNoSlowdownRow],
         [] { return runtime_get_no_slowdown() ? "On" : "Off"; },
         [](int) { runtime_request_no_slowdown(!runtime_get_no_slowdown()); }});
 #endif
-    rows.push_back({kRowLabels[kFieldPsynergyRow], kRowHelp[kFieldPsynergyRow],
-        [] { return g_field_psynergy_fast.load() ? "On" : "Off"; },
-        [](int) { g_field_psynergy_fast.store(!g_field_psynergy_fast.load()); save_game_options(); }});
+    rows.push_back(gsr::field_psy::qol_row(kRowLabels[kFieldPsynergyRow], kRowHelp[kFieldPsynergyRow]));
+    rows.push_back(gsr::battle_retarget::qol_row());
     gsr::qol::append_switches(rows);
     return rows;
 }
@@ -513,7 +498,7 @@ void install_quality_of_life() {
         GS_ROM(0x0801776Cu), GS_ROM(0x08029531u), GS_ROM(0x08029506u),
         GS_ROM(0x080030F8u), GS_ROM(0x080F9010u),
         gs::text(0xC24u), gs::text(0xC28u), GS_ROM(0x080216E8u),
-        42u, 23u, load_menu_font, quality_of_life_rows}; // Sleep 42 (pause icon table); 23 picked by Jimmy from the icon sheet, 11 November 2026.
+        42u, 23u, load_menu_font, quality_of_life_rows}; // Sleep 42 (pause icon table); 23 from the icon sheet
     gsr::qol::install(profile);
 }
 } // namespace gsr_runner

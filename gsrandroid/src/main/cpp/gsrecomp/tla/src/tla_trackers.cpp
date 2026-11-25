@@ -1,23 +1,25 @@
 // Golden Sun: The Lost Age -- the Djinn Tracker and the Treasure Tracker.
 // The windows and the rules both games share are in ../../The Broken
 // Seal/src/ (trackers.h, djinn_tracker.h, treasure_tracker.h; one copy);
-// this file installs The Lost Age's tables. F1 Game switches
-// (src/tla_walk_speed.cpp lists them) and launcher checkboxes, off by default.
+// this file installs The Lost Age's tables. Both trackers are F1 > Game
+// switches (src/tla_walk_speed.cpp lists them) with launcher checkboxes, and
+// are off by default.
 //
 // Djinn Tracker.
 // Measured, verified ROM b500663220cb9bf56b9f8e8c0c544f1d6fa3a824 (FACTS.md,
 // "Djinn Tracker", 2026-10-30):
 //   Names: text 0x6D3 + element * 20 + index (tables 0x080A9F54/0x08060C30),
 //   18 per element: The Broken Seal's seven, then this game's eleven.
-//   Owned: party records 0x02000520 + character * 0x14C, all eight (Isaac's
-//   four, Felix's four), +0xF8; Jimmy's save: bits 0..16 in use, each
-//   record's count at +0x118 equals its bits, nothing above bit 17.
+//   Owned: the bits at +0xF8 of each party record (0x02000520 + character *
+//   0x14C), across all eight records (Isaac's four, Felix's four). In the
+//   measured save, bits 0..16 are in use, each record's count at +0x118
+//   equals its number of set bits, and nothing is set above bit 17.
 //   Pictures: sprite records 0x08300000 + sprite * 20 (0x080227E0); the
 //   Djinni are sprites 243 Venus, 244 Mercury, 245 Mars, 246 Jupiter, records
 //   byte-identical to The Broken Seal's 90..93, and frame 0 decodes pixel for
 //   pixel the same with the palette at 0x08017B10 (its 0xE0 colours equal
 //   The Broken Seal's 0x0800779C).
-// Locations (Kraden's, checked against a public Djinn list, 2026-10-30;
+// Locations (checked against a public Djinn list, 2026-10-30;
 // unconfirmed in game). Four of The Broken Seal's Djinn can also be found
 // here when a game starts without a transfer.
 //
@@ -26,7 +28,10 @@
 // "Treasure Tracker", 2026-10-30): the table is the ROM's treasure table
 // 0x080F2204 (tla_treasure_tracker_data.h); location lookup 0x080CA280 over
 // the records at 0x080EF4A4, room keys 0x080F17A8 + room * 8 + 2; current
-// room/entrance 0x02000420/0x02000422.
+// room/entrance 0x02000420/0x02000422. Rewards: item names text 0x25F + id
+// (461 items), a tablet's summon ability name 0x5A7 + id (FACTS.md "Random
+// Weapons", 5 November 2026); the item word is re-read from the running
+// table, which Random Treasure rewrites.
 
 #include "../../shared_game/trackers.h"
 #include "tla_treasure_tracker_data.h"
@@ -118,18 +123,35 @@ constexpr dt::Djinni kDjinn[72] = {
 
 const dt::Game kDjinnGame = {kDjinn, 18, 9, 0x520u, 8, TLA_ROM(0x08300000u) - 0x08000000u, TLA_ROM(0x08017B10u) - 0x08000000u, {243, 244, 245, 246}};
 
+// Gifts Random Treasure moves (tla_treasure_randomizer_data.h, not the story
+// items) and the flag each one's scene sets as it gives the item (FACTS.md
+// "Treasure Tracker: gifts", 22 November 2026; room code, gameplay
+// unconfirmed). Not listed (TODO-EVIDENCE): Golden Boots (file 0x64B),
+// Golden Ring (0x682) and Golden Shirt (0x695), whose flags 0xA77, 0xA74 and
+// 0xA73 are cleared when the item is handed over, so clear also means not
+// offered yet; Hover Jade (0x697), whose scene has no flag of its own.
+const tt::Gift kGifts[] = {
+    {"Kandorean Temple", 0x84A, 0x653, 198},    // set as the giving scene ends
+    {"Dehkan Plateau", 0x878, 0x655, 199},      // set after the gift
+    {"Madra", 0x918, 0x658, 210},               // set after the gift
+    {"Yampi Desert", 0x88C, 0x661, 209},        // set after the gift
+    {"Gondowan Settlement", 0xF5D, 0x690, 193}, // set before the gift
+};
+
 const tt::Game kTreasureGame = {tt::tla_data::places, tt::tla_data::place_names, tt::tla_data::containers,
-                                    tt::tla_data::treasures, TLA_ROM(0x080F17A8u) - 0x08000000u, TLA_ROM(0x080EF4A4u) - 0x08000000u, 0x420u};
+                                    tt::tla_data::treasures, TLA_ROM(0x080F17A8u) - 0x08000000u, TLA_ROM(0x080EF4A4u) - 0x08000000u, 0x420u,
+                                    TLA_ROM(0x080F2204u) - 0x08000000u, {}, kGifts};
 
 const gsr::tracker_text::Config kTrackerText = {gsr::tracker_text::tla_data::names,
     TLA_ROM(0x080A9F54u) - 0x08000000u, TLA_ROM(0x08060C30u) - 0x08000000u,
-    static_cast<unsigned>(tla_rom::version())};
+    static_cast<unsigned>(tla_rom::version()), TLA_TEXT(0x25Fu), 461u, TLA_TEXT(0x5A7u)};
 
 }  // namespace
 
 void tla_trackers_sample() {
     if (const auto* bus = gbarecomp::active_bus())
-        gsr::trackers::sample(bus->ewram_ptr(), bus->rom_ptr(), bus->rom_size());
+        gsr::trackers::sample(bus->ewram_ptr(), bus->rom_ptr(), bus->rom_size(), &tla_tracker_reward,
+                              &tla_tracker_gift);
 }
 
 void tla_install_trackers() { gsr::trackers::install(kDjinnGame, kTreasureGame, kTrackerText); }

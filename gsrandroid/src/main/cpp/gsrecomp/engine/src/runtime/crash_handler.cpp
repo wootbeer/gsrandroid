@@ -125,8 +125,8 @@ void write_code_mappings(int fd) {
 }
 
 // Everything that cannot fault is written first. The backtrace comes last:
-// glibc's unwinder can itself crash on a damaged stack, and before this order
-// that second fault left a report ending at "Backtrace:" with nothing else.
+// glibc's unwinder can itself crash on a damaged stack. Writing it last means
+// such a second fault still leaves the rest of the report intact.
 void write_report(const char* what, const void* address, const void* ucontext) {
     const int fd = open(g_report_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) return;
@@ -211,12 +211,18 @@ void crash_handler_install(const char* log_dir) {
     if (log_dir && log_dir[0]) {
         std::snprintf(g_dir, sizeof(g_dir), "%s", log_dir);
     } else {
+#if defined(__ANDROID__)
+        // The process is Android's app_process; android_main.cpp has moved
+        // into the app's storage folder, which is where reports belong.
+        if (!getcwd(g_dir, sizeof(g_dir))) return;
+#else
         char exe[1024] = {};
         const ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
         if (n <= 0) return;
         exe[n] = '\0';
         if (char* slash = std::strrchr(exe, '/')) *slash = '\0';
         std::snprintf(g_dir, sizeof(g_dir), "%s", exe);
+#endif
     }
     std::snprintf(g_report_path, sizeof(g_report_path), "%s/crash_report.txt", g_dir);
     std::snprintf(g_run_state_path, sizeof(g_run_state_path), "%s/run_state.txt", g_dir);
@@ -548,8 +554,8 @@ void write_minidump(EXCEPTION_POINTERS* ep) {
     if (!ok && info_ptr) {
         // The local dbghelp.dll (observed: Windows' own, version 10.0.26100.x)
         // can fail ERROR_NOACCESS internally on the ExceptionParam path even
-        // for a textbook-correct EXCEPTION_POINTERS/CONTEXT — reproduced in a
-        // minimal repro outside this codebase, so it is a host dbghelp defect,
+        // for a textbook-correct EXCEPTION_POINTERS/CONTEXT (reproduced in a
+        // minimal repro outside this codebase), so it is a host dbghelp defect,
         // not a bug in the pointers we pass. Retry without exception info so a
         // run on an affected machine still gets a usable dump (missing only
         // the embedded exception record, which crash_report.txt already has)
@@ -565,7 +571,7 @@ void write_minidump(EXCEPTION_POINTERS* ep) {
 
 // The one report writer every fatal path (SEH, std::terminate, SIGABRT,
 // pure-virtual) funnels through. `ep` is non-null only on the SEH path.
-// Everything here uses stack/static buffers and raw Win32 calls — no
+// Everything here uses stack/static buffers and raw Win32 calls: no
 // std::string, no iostream, no heap allocation of our own.
 void write_crash_report(const char* reason, EXCEPTION_POINTERS* ep) {
     if (!g_installed) return;      // never configured; nothing to write to

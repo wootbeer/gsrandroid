@@ -1,5 +1,6 @@
-// Random Equipment (first Random Weapons), The Broken Seal's places (rules: shared_game/
-// random_weapons.h and random_weapons_plan.h, one copy with The Lost Age).
+// Random Equipment (first Random Weapons), The Broken Seal's places (rules:
+// shared_game/random_weapons.h and random_weapons_plan.h, one copy with The
+// Lost Age).
 //
 // Measured, verified ROMs (FACTS.md "Random Weapons", 5 November 2026):
 // - Item records 0x0807B6A8 + id * 0x2C, ids 0..268 (269 and up are enemy text);
@@ -37,8 +38,9 @@ inline const Game& game() {
 // Character record: HP +0x38 (max +0x34), PP +0x3A (max +0x36).
 inline Config current() { return random_weapons::current(game()); }
 inline void store(const Config& c) { random_weapons::store(game(), c); }
-inline void frame() { random_weapons::frame(game()); }
-inline void apply_new_game() { random_weapons::apply_new_game(game(), 0x38u, 0x34u, 0x3Au, 0x36u); }
+inline void rebuild_equipped_stats() {
+    random_weapons::rebuild_equipped_stats(game(), 0x38u, 0x34u, 0x3Au, 0x36u);
+}
 inline bool text_character(std::uint32_t text_id, std::uint32_t* character) {
     return random_weapons::text_character(game(), text_id, character);
 }

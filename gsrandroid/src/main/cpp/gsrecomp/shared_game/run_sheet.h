@@ -1,7 +1,5 @@
-// F1 > Game for a randomizer run, both games (Jimmy, 6 November 2026;
-// docs/NEXT_PRIORITY_MODES.md section 5): the run's seed (run_code.h), to
-// share, and the spoiler sheet, hidden until Show is pressed: each hero's
-// Psynergy by level and what every weapon and armour piece became.
+// F1 > Game shows the run code. Press Show to reveal Psynergy by hero
+// and level, plus the randomized equipment.
 //
 // The sheet is written on the emulation thread whenever the loaded file's
 // run changes (the plans read the bus and the ROM image) and read by the F1
@@ -17,6 +15,7 @@
 
 #include "challenge_mode.h"
 #include "gs_text_encode.h"
+#include "random_djinn.h"
 #include "random_psynergy.h"
 #include "random_weapons.h"
 #include "run_code.h"
@@ -40,6 +39,9 @@ struct Game {
     std::span<const char* const> hero_names;  // when a record has no name yet
     // A game's Random Treasure lines (none: the game has no Random Treasure).
     void (*treasure)(const random_psynergy::Config&, std::vector<Section>&, const ItemName&) = nullptr;
+    std::uint32_t class_name_text = 0;  // class names: text line base + class index
+    const random_djinn::Game* djinn = nullptr;  // Random Djinn (none: not in this game)
+    std::uint32_t djinn_name_text = 0;  // Djinni names: base + element * 20 + index
 };
 
 // The run a file's bytes describe: one seed (both blocks hold the same one)
@@ -48,17 +50,25 @@ inline run_code::Run run_of(const random_psynergy::Config& p, const random_weapo
     namespace rc = run_code;
     rc::Run r;
     r.seed = p.seed ? p.seed : e.seed;
+    r.pooled_loot = p.pooled_loot;
+    r.regional_artifacts = p.regional_artifacts;
     if (p.psynergy) r.choices |= rc::kPsynergy;
     if (p.psynergy && p.fair_psynergy) r.choices |= rc::kFairPsynergy;
-    if (p.treasure && p.fair_items) r.choices |= rc::kFairItems;
+    if (p.psynergy && p.enemy_skills) r.choices |= rc::kEnemySkills;
+    if (p.psynergy && p.by_class) r.choices |= rc::kByClass;
+    if (p.djinn) r.choices |= rc::kDjinn;
+    if (p.fair_items && (p.treasure || (p.pooled_loot && (p.weapon_finds || p.armour_finds))))
+        r.choices |= rc::kFairItems;
     if (p.treasure && p.fair_shops) r.choices |= rc::kFairShops;
     if (p.coins && p.fair_coins) r.choices |= rc::kFairCoins;
     if (p.treasure) r.choices |= rc::kItems;
     if (p.treasure && p.bargains) r.choices |= rc::kBargains;
     if (p.coins) r.choices |= rc::kCoins;
-    // Weapons and Armor: the finds (The Broken Seal) or the stat shuffle;
-    // Stats: the stat shuffle with finds. A stat shuffle without finds is
-    // The Lost Age's Weapons (or a Broken Seal run's, Stats on).
+    // Weapons and Armor are ticked when that kind of equipment is randomized,
+    // either by Random Weapons / Armor finds or by the equipment stat shuffle.
+    // Stats is ticked whenever the stat shuffle runs. A stat shuffle without
+    // finds is what The Lost Age calls Weapons, and a Broken Seal run with
+    // Stats on.
     if (p.weapon_finds || (e.seed && e.weapons)) r.choices |= rc::kWeapons;
     if (p.armour_finds || (e.seed && e.armour)) r.choices |= rc::kArmor;
     if (e.seed && (e.weapons || e.armour)) r.choices |= rc::kStats;
@@ -132,16 +142,16 @@ inline Sheet write(gba::GbaBus& b, const Game& g, const random_psynergy::Config&
 
     if (p.psynergy) {
         const random_psynergy::Plan plan =
-            random_psynergy::make_plan(*g.psynergy, p.seed, challenge, p.fair_psynergy);
-        for (int hero = 0; hero < g.psynergy->heroes; ++hero) {
-            if (challenge.size > 0 && !gsr::challenge::picked(challenge, static_cast<std::uint8_t>(hero)))
-                continue;
+            random_psynergy::make_plan(*g.psynergy, p.seed, challenge, p.fair_psynergy, p.enemy_skills,
+                                       p.by_class);
+        // A section "Psynergy: <whose>", a row per level.
+        const auto add_section = [&](const std::string& whose,
+                                     const std::vector<random_psynergy::Grant>& grants) {
             Section s;
-            s.title = std::string(gbarecomp::ui_text("Psynergy")) + ": " +
-                      hero_name(b, g, static_cast<unsigned>(hero));
+            s.title = std::string(gbarecomp::ui_text("Psynergy")) + ": " + whose;
             std::string row;
             int level = -1;
-            for (const auto& grant : plan.grants[static_cast<std::size_t>(hero)]) {
+            for (const auto& grant : grants) {
                 if (grant.level != level) {
                     if (!row.empty()) s.lines.push_back(row);
                     level = grant.level;
@@ -153,10 +163,34 @@ inline Sheet write(gba::GbaBus& b, const Game& g, const random_psynergy::Config&
             }
             if (!row.empty()) s.lines.push_back(row);
             sheet.sections.push_back(std::move(s));
+        };
+        for (int hero = 0; hero < g.psynergy->heroes; ++hero) {
+            if (challenge.size > 0 && !gsr::challenge::picked(challenge, static_cast<std::uint8_t>(hero)))
+                continue;
+            const auto& grants = plan.grants[static_cast<std::size_t>(hero)];
+            if (plan.by_class && grants.empty()) continue;
+            add_section(hero_name(b, g, static_cast<unsigned>(hero)), grants);
+        }
+        // By class: each class's list, a section per class with one.
+        for (std::size_t c = 0; plan.by_class && c < plan.classes.size(); ++c) {
+            if (!plan.classes[c].empty())
+                add_section(line(g.class_name_text + static_cast<std::uint32_t>(c)), plan.classes[c]);
         }
     }
+    if (p.djinn && g.djinn) {
+        // Where each Djinni is found: the spot's own Djinni, then what it gives.
+        const random_djinn::Game& dg = *g.djinn;
+        const std::vector<int> target = random_djinn::plan(dg, p.seed);
+        const auto name = [&](random_djinn::Djinni d) {
+            return line(g.djinn_name_text + d.element * 20u + d.index);
+        };
+        Section s{gbarecomp::ui_text("Djinn"), {}};
+        for (int i = 0; i < dg.count; ++i)
+            s.lines.push_back(name(dg.djinn[i]) + " -> " + name(dg.djinn[target[static_cast<std::size_t>(i)]]));
+        sheet.sections.push_back(std::move(s));
+    }
     if (e.seed) {
-        const random_weapons::Plan plan = random_weapons::plan_of(e);
+        const auto& plan = random_weapons::applied_plan();
         Section weapons{gbarecomp::ui_text("Weapons"), {}}, armour{gbarecomp::ui_text("Armor"), {}};
         for (const auto& w : plan.weapons) {
             if (w.donor == 0) continue;
@@ -178,7 +212,8 @@ inline Sheet write(gba::GbaBus& b, const Game& g, const random_psynergy::Config&
         if (!weapons.lines.empty()) sheet.sections.push_back(std::move(weapons));
         if (!armour.lines.empty()) sheet.sections.push_back(std::move(armour));
     }
-    if ((p.treasure || p.coins) && g.treasure) g.treasure(p, sheet.sections, item);
+    if ((p.treasure || p.coins || p.weapon_finds || p.armour_finds) && g.treasure)
+        g.treasure(p, sheet.sections, item);
     return sheet;
 }
 
