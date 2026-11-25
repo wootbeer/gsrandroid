@@ -626,7 +626,8 @@ final class GsrMenu {
 
 	// ---- Saves: the games' own saves (import, export, backup) ------------------------------------------------
 
-	static final int REQUEST_EXPORT = 4721, REQUEST_IMPORT = 4722, REQUEST_BACKUP_ALL = 4723;
+	static final int REQUEST_EXPORT = 4721, REQUEST_IMPORT = 4722, REQUEST_BACKUP_ALL = 4723,
+			REQUEST_GSRECOMP = 4724;
 	private GsrSaves saves;
 
 	private GsrSaves saves() {
@@ -652,7 +653,7 @@ final class GsrMenu {
 				android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
 				i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
 				i.setType("application/octet-stream");
-				i.putExtra(android.content.Intent.EXTRA_TITLE, GsrSaves.saveName(unit()));
+				i.putExtra(android.content.Intent.EXTRA_TITLE, GsrSaves.exportName(unit()));
 				startForResult(i, REQUEST_EXPORT);
 			}
 		});
@@ -715,6 +716,15 @@ final class GsrMenu {
 		});
 		info("Copies all your saves (both games, every language) into a new folder in the place you pick (for example Downloads, or a "
 				+ "cloud drive), so they survive uninstalling the app. Save states are not included.", DIM, 13);
+
+		section("Move to GSRecomp");
+		action("Copy saves for GSRecomp...", "", new Runnable() {
+			@Override public void run() {
+				startForResult(new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_GSRECOMP);
+			}
+		});
+		info("Makes a \"Saves for GSRecomp\" folder with all your saves, already named the way GSRecomp wants. "
+				+ "Copy the files in it into GSRecomp's Saves folder. Save states don't carry over.", DIM, 13);
 		section("");
 		backRow();
 		focusFirst();
@@ -774,7 +784,8 @@ final class GsrMenu {
 
 	/** From the activity's onActivityResult; true if it was one of the Saves page's requests. */
 	boolean onActivityResult(int requestCode, int resultCode, android.content.Intent data) {
-		if (requestCode != REQUEST_EXPORT && requestCode != REQUEST_IMPORT && requestCode != REQUEST_BACKUP_ALL) return false;
+		if (requestCode != REQUEST_EXPORT && requestCode != REQUEST_IMPORT && requestCode != REQUEST_BACKUP_ALL
+				&& requestCode != REQUEST_GSRECOMP) return false;
 		android.net.Uri uri = resultCode == Activity.RESULT_OK && data != null ? data.getData() : null;
 		if (uri == null) return true;
 		try {
@@ -784,6 +795,11 @@ final class GsrMenu {
 			} else if (requestCode == REQUEST_IMPORT) {
 				saves().importFrom(unit(), uri);
 				closeGame("Save imported.");
+			} else if (requestCode == REQUEST_GSRECOMP) {
+				int n = saves().backupAllTo(uri, "Saves for GSRecomp");
+				Toast.makeText(activity, n == 0 ? "There are no saves yet"
+						: "Copied " + n + (n == 1 ? " save" : " saves") + ". Put the files in GSRecomp's Saves folder.",
+						Toast.LENGTH_LONG).show();
 			} else {
 				int n = saves().backupAllTo(uri);
 				Toast.makeText(activity, n == 0 ? "There are no saves yet" : "Backed up " + n + (n == 1 ? " save" : " saves"),
