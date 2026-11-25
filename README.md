@@ -1,7 +1,7 @@
 Golden Sun Recompiled for Android
 =====================
 
-NOTICE: Main development being halted. Due to GSRecomp releasing an official Android build. I have an added a feature to my app to export your saves so you can continue your adventure with GSRecomp if you desire. I do think this fork still has some usage especially on certain devices. I will no longer be updating it to match GSRecomp for the most part, or adding features. However, I will still fix app specific bugs for the time-being, as well as anything major that prevents anyone from finishing their game if they don't wish to export.
+NOTICE: Main development being halted. Due to GSRecomp releasing an official Android build. I have added a feature to my app to export your saves so you can continue your adventure with GSRecomp if you desire. I do think this fork still has some usage especially on certain devices. I will no longer be updating it to match GSRecomp for the most part, or adding features. However, I will still fix app specific bugs for the time-being, as well as anything major that prevents anyone from finishing their game if they don't wish to export.
 
 Based on [Golden Sun Recompiled](https://github.com/Shmargus/GSRecomp). ty. Brought to Android with my Descore framework.  
 
