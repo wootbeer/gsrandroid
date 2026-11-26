@@ -8576,3 +8576,25 @@ start = 0x03000744
 end = 0x0300078c
 mode = "arm"
 note = "Measured Germany counterpart; English evidence: computed jump at 0x03000740 into the 8x ldm/stm copy loop (bx pc stub 0x03000730)"
+
+# GSR-ANDROID: the English resume points the Android player cannot self-heal (see config/tla/main.toml), at this
+# ROM's addresses: the sound engine (0x081C...) and the IWRAM image source (0x0800...) do not move; the
+# 0x0801xxxx code is 0x2C later, as every TLA_ROM address there (tla_rom_addresses.inc). Without them the New
+# Game questions could stop taking keys (issue #11, Spanish).
+[[resume_range]]
+start = 0x081C0ABC
+end = 0x081C0AD8
+mode = "thumb"
+note = "GSR-ANDROID: English host 0x081C0ABC..0x081C0AD8 (same address); resume 0x081C0AD2"
+
+[[resume_range]]
+start = 0x0801595C
+end = 0x08015984
+mode = "thumb"
+note = "GSR-ANDROID: English host 0x08015930..0x08015958 + 0x2C; resume 0x0801597C"
+
+[[resume_range]]
+start = 0x08000654
+end = 0x08000670
+mode = "thumb"
+note = "GSR-ANDROID: English host 0x08000654..0x08000670 (same address); resume 0x0800066E"
