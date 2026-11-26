@@ -87,17 +87,17 @@ final class GsrSession {
 		final File own = gameFile(false, "golden_sun.sav");
 		final boolean haveOwn = own.isFile() && own.length() > 0;
 		final String[] items = haveOwn
-				? new String[] { "Golden Sun save in this app", "Choose a .sav file..." }
-				: new String[] { "Choose a .sav file..." };
+				? new String[] { GsrLang.t("Golden Sun save in this app"), GsrLang.t("Choose a .sav file...") }
+				: new String[] { GsrLang.t("Choose a .sav file...") };
 		new AlertDialog.Builder(activity)
-				.setTitle("Load a Golden Sun save")
+				.setTitle(GsrLang.t("Load a Golden Sun save"))
 				.setItems(items, new DialogInterface.OnClickListener() {
 					@Override public void onClick(DialogInterface d, int which) {
 						if (haveOwn && which == 0) answer(own.getAbsolutePath());
 						else browse();
 					}
 				})
-				.setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+				.setNegativeButton(GsrLang.t("Cancel"), new DialogInterface.OnClickListener() {
 					@Override public void onClick(DialogInterface d, int which) { answer(""); }
 				})
 				.setOnCancelListener(new DialogInterface.OnCancelListener() {
@@ -113,7 +113,7 @@ final class GsrSession {
 		try {
 			activity.startActivityForResult(pick, REQUEST_PICK_SAVE);
 		} catch (RuntimeException e) {
-			Toast.makeText(activity, "No file browser on this device", Toast.LENGTH_LONG).show();
+			Toast.makeText(activity, GsrLang.t("No file browser on this device"), Toast.LENGTH_LONG).show();
 			answer("");
 		}
 	}
@@ -134,7 +134,7 @@ final class GsrSession {
 				os.write(buf, 0, n);
 			}
 		} catch (Exception e) {
-			Toast.makeText(activity, "Could not read that file: " + e.getMessage(), Toast.LENGTH_LONG).show();
+			Toast.makeText(activity, GsrLang.f("Could not read that file: %s", e.getMessage()), Toast.LENGTH_LONG).show();
 			out.delete();
 			answer("");
 			return;
@@ -157,7 +157,7 @@ final class GsrSession {
 		try (OutputStream os = new FileOutputStream(marker)) {
 			os.write(Integer.toString(slot).getBytes("US-ASCII"));
 		} catch (Exception e) {
-			Toast.makeText(activity, "Could not start The Lost Age: " + e.getMessage(), Toast.LENGTH_LONG).show();
+			Toast.makeText(activity, GsrLang.f("Could not start The Lost Age: %s", e.getMessage()), Toast.LENGTH_LONG).show();
 			return;
 		}
 		Intent target = new Intent(activity, GsrGameActivity.class);

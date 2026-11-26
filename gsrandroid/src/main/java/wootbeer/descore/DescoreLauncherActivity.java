@@ -58,6 +58,20 @@ public abstract class DescoreLauncherActivity extends Activity {
 	private static final String PREFS = "descore_launcher", KEY_LAST_UNIT = "last_unit", KEY_AUTO_LAST = "auto_last";
 
 	private File rootDir;
+
+	/** A text this screen shows, in the app's language: a subclass translates (default: as written). */
+	protected String text(String english) {
+		return english;
+	}
+
+	/** A game's name as shown here (default: the configured title). */
+	protected String unitTitle(DescoreGameConfig.Unit unit) {
+		return unit.title;
+	}
+
+	private String fmt(String english, Object... args) {
+		return String.format(Locale.ROOT, text(english), args);
+	}
 	private float buttonSizeBias;
 
 	@Override
@@ -194,13 +208,13 @@ public abstract class DescoreLauncherActivity extends Activity {
 
 	private void showDataPicker(String errorMessage) {
 		LinearLayout layout = newScreen(Gravity.CENTER);
-		addText(layout, getConfig().title + " game data needed", Color.WHITE, 22, 0);
-		addText(layout, getConfig().pickerHint, Color.LTGRAY, 0, 16);
+		addText(layout, fmt("%s game data needed", getConfig().title), Color.WHITE, 22, 0);
+		addText(layout, text(getConfig().pickerHint), Color.LTGRAY, 0, 16);
 		if (errorMessage != null) {
 			addText(layout, errorMessage, Color.rgb(255, 120, 120), 0, 16);
 		}
 		Button choose = new Button(this);
-		choose.setText(getConfig().pickSingleFile ? "Choose File" : "Choose Folder");
+		choose.setText(text(getConfig().pickSingleFile ? "Choose File" : "Choose Folder"));
 		choose.setOnClickListener(new View.OnClickListener() {
 			@Override
 			public void onClick(View v) {
@@ -215,7 +229,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 	private void showCopyingProgress() {
 		LinearLayout layout = newScreen(Gravity.CENTER);
 		layout.addView(new ProgressBar(this));
-		addText(layout, "Copying game data...", Color.WHITE, 0, 16);
+		addText(layout, text("Copying game data..."), Color.WHITE, 0, 16);
 		setContentView(layout);
 	}
 
@@ -227,7 +241,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 		}
 
 		Button addMore = new Button(this);
-		addMore.setText("Add More Game Data");
+		addMore.setText(text("Add More Game Data"));
 		addMore.setOnClickListener(new View.OnClickListener() {
 			@Override
 			public void onClick(View v) {
@@ -241,11 +255,10 @@ public abstract class DescoreLauncherActivity extends Activity {
 			if (isUnitReady(unit)) {
 				List<String> optional = presentOptional(unit);
 				String extra = optional.isEmpty() ? ""
-						: " (" + optional.size() + " of " + unit.optionalFiles.length
-						+ " optional files found)";
-				addText(layout, unit.title + extra, Color.WHITE, 0, 12);
+						: fmt(" (%d of %d optional files found)", optional.size(), unit.optionalFiles.length);
+				addText(layout, unitTitle(unit) + extra, Color.WHITE, 0, 12);
 				Button play = new Button(this);
-				play.setText("Play " + unit.title);
+				play.setText(fmt("Play %s", unitTitle(unit)));
 				play.setOnClickListener(new View.OnClickListener() {
 					@Override
 					public void onClick(View v) {
@@ -254,7 +267,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 				});
 				layout.addView(play, buttonParams(buttonWidth));
 			} else if (!unit.hideWhenMissing) {
-				addText(layout, unit.title + " -- missing " + join(missingFiles(unit)),
+				addText(layout, fmt("%s -- missing %s", unitTitle(unit), join(missingFiles(unit))),
 						Color.GRAY, 0, 12);
 			}
 		}
@@ -267,7 +280,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 			// it back).
 			final android.content.SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 			android.widget.CheckBox auto = new android.widget.CheckBox(this);
-			auto.setText("Start my last game straight away");
+			auto.setText(text("Start my last game straight away"));
 			auto.setTextColor(Color.LTGRAY);
 			auto.setChecked(prefs.getBoolean(KEY_AUTO_LAST, false));
 			auto.setOnCheckedChangeListener(new android.widget.CompoundButton.OnCheckedChangeListener() {
@@ -305,7 +318,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 
 	private void openFolderPicker() {
 		if (Build.VERSION.SDK_INT < 21) {
-			showDataPicker("This Android version can't select external files.");
+			showDataPicker(text("This Android version can't select external files."));
 			return;
 		}
 		if (getConfig().pickSingleFile) {
@@ -343,7 +356,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 							showUnitSelect(result);
 						} else {
 							showDataPicker(result != null ? result
-									: "Didn't find any of the game's files in that folder.");
+									: text("Didn't find any of the game's files in that folder."));
 						}
 					}
 				});
@@ -359,7 +372,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 			scanTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri), 0, found, budget);
 		} catch (IOException e) {
 			Log.i(TAG, "doCopyData: failed to list picked folder: " + e.getMessage());
-			return "Couldn't read that folder: " + e.getMessage();
+			return fmt("Couldn't read that folder: %s", e.getMessage());
 		}
 		Log.i(TAG, "doCopyData: scan found " + found.size() + " distinct file names");
 		return copyFound(found);
@@ -379,7 +392,7 @@ public abstract class DescoreLauncherActivity extends Activity {
 			}
 		}
 		if (name == null) name = docUri.getLastPathSegment();
-		if (name == null) return "Couldn't read that file.";
+		if (name == null) return text("Couldn't read that file.");
 		found.put(name.toLowerCase(Locale.US), docUri);
 		return copyFound(found);
 	}
@@ -414,11 +427,11 @@ public abstract class DescoreLauncherActivity extends Activity {
 				}
 			}
 			if (sawAny) {
-				summary.add(copied + " file" + (copied == 1 ? "" : "s") + " for " + unit.title);
+				summary.add(copied == 1 ? fmt("1 file for %s", unitTitle(unit)) : fmt("%d files for %s", copied, unitTitle(unit)));
 			}
 		}
 		if (summary.isEmpty()) return null;
-		return "Copied " + join(summary) + ".";
+		return fmt("Copied %s.", join(summary));
 	}
 
 	/** True when the unit has no content check, or the file has the expected bytes at the expected offset. */

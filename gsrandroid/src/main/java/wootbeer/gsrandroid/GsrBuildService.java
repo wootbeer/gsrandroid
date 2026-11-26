@@ -93,7 +93,7 @@ public class GsrBuildService extends Service {
 		Notification.Builder b;
 		if (Build.VERSION.SDK_INT >= 26) {
 			if (nm != null) {
-				nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Game setup",
+				nm.createNotificationChannel(new NotificationChannel(CHANNEL, GsrLang.t("Game setup"),
 						NotificationManager.IMPORTANCE_LOW));
 			}
 			b = new Notification.Builder(this, CHANNEL);
@@ -101,7 +101,7 @@ public class GsrBuildService extends Service {
 			b = new Notification.Builder(this);
 		}
 		b.setContentTitle("Golden Sun Recompiled")
-				.setContentText("Preparing the game from your ROM (first run only)")
+				.setContentText(GsrLang.t("Preparing the game from your ROM (first run only)"))
 				.setSmallIcon(android.R.drawable.stat_sys_download)
 				.setOngoing(true);
 		return b.build();

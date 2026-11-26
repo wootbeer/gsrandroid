@@ -30,10 +30,10 @@ final class GsrTouchEditor {
 		root = new FrameLayout(activity);
 		LinearLayout row = new LinearLayout(activity);
 		row.setOrientation(LinearLayout.HORIZONTAL);
-		row.addView(button("Reset", new View.OnClickListener() {
+		row.addView(button(GsrLang.t("Reset"), new View.OnClickListener() {
 			@Override public void onClick(View v) { GsrNative.resetTouchLayout(); }
 		}));
-		row.addView(button("Done", new View.OnClickListener() {
+		row.addView(button(GsrLang.t("Done"), new View.OnClickListener() {
 			@Override public void onClick(View v) { finish(); }
 		}));
 		FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,

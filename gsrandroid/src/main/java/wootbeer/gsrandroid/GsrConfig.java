@@ -43,7 +43,7 @@ final class GsrConfig {
 		return (tla ? "tla" : "game") + (lang == 0 ? "" : "_" + LANG_CODES[lang]);
 	}
 	static String title(boolean tla, int lang) {
-		return (tla ? "Golden Sun: The Lost Age" : "Golden Sun") + (lang == 0 ? "" : " (" + LANG_NAMES[lang] + ")");
+		return GsrLang.t(tla ? "Golden Sun: The Lost Age" : "Golden Sun") + (lang == 0 ? "" : " (" + GsrLang.t(LANG_NAMES[lang]) + ")");
 	}
 
 	/** The unit this game screen plays. */
