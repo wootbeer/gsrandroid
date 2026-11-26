@@ -68,6 +68,7 @@ Each patch is marked `GSR_ANDROID` or guarded by a `GSR_ANDROID_*` define.
 | `engine/src/runtime/host_window_android.cpp` (ours) | `present_native` / `native_renderer_enabled` back the High-res rendering option |
 | `tbs/src/runner_main.cpp` | `GSR_ANDROID_ENGINE`: `gpu_field_enabled()` reads the Renderer setting live; `gpu_field_present_override` is wrapped to report whether the GPU drew the frame; init result reported |
 | `player_builder/builder_main.cpp` | `GSR_ANDROID_INPROCESS`: in-process translator entry, and the `spawn` helper -- a single-threaded process started first thing in `main` that forks every translator (forking from the multithreaded builder could freeze a translator at 59%) and runs the watchdog; the revision lists are included from `tbs/` and `tla/`; the on-device compile (`gsr_android_compile_and_link`) replaces `compile_and_link` |
+| `tla/config/{es,it,fr,de}/main.toml` (+ assets) | `GSR-ANDROID` the same three `[[resume_range]]` entries at each ROM's addresses (sound engine and 0x0800 code unmoved, 0x0801xxxx code +0x2C; Spanish checked byte for byte) |
 | `engine/src/runtime/overlay_compile.cpp` | `GSR-ANDROID`: no `posix_spawn` before API 28 (and no compiler to run on the device), so `run_process` reports failure there |
 | `engine/src/runtime/crash_handler.cpp` | Android crash handling (bionic has no `backtrace()`) |
 | `tcc/tccelf.c` (line ~3920) | on-device linking change (LGPL: keep notice) |
