@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.7.1. (11-25-2026)]
+
+### Added
+- Spanish for the app's own menus and screens: Settings > Language (Default follows the phone, English, Español)  
+
+### Fixed
+- The Lost Age (Spanish, Italian, French, German): the controls could stop working on the new-game questions (#11)  
+
+### Changed
+- The game code is rebuilt once on first start after updating  
+
 ## [0.7. (11-25-2026)]
 
 ### Added
