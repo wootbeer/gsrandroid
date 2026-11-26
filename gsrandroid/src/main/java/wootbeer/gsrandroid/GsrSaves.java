@@ -82,7 +82,7 @@ final class GsrSaves {
 		byte[] buf = new byte[65536];
 		for (int n; (n = in.read(buf)) > 0; ) {
 			out.write(buf, 0, n);
-			if (out.size() > limit) throw new IOException("the file is too large to be a save");
+			if (out.size() > limit) throw new IOException(GsrLang.t("the file is too large to be a save"));
 		}
 		return out.toByteArray();
 	}
@@ -112,14 +112,14 @@ final class GsrSaves {
 			for (int i = FLASH_BYTES; i < data.length && unused; i++) unused = data[i] == first && (first == 0 || first == (byte) 0xFF);
 			if (unused) flash = Arrays.copyOf(data, FLASH_BYTES);
 		}
-		if (flash == null) throw new IOException("this is not a Golden Sun save (" + data.length + " bytes; a save is 64 KB)");
+		if (flash == null) throw new IOException(GsrLang.f("this is not a Golden Sun save (%d bytes; a save is 64 KB)", data.length));
 		if (!checkGame) return flash;
 		int gs = blocks(flash, 0x1000, 0x1000 - 8), lost = blocks(flash, 0x3000, 0x3000);
-		if (gs == 0 && lost == 0) throw new IOException("there is no saved game in this file");
+		if (gs == 0 && lost == 0) throw new IOException(GsrLang.t("there is no saved game in this file"));
 		boolean isTla = lost > gs;
 		if (isTla != tla) {
-			throw new IOException("this is a " + (isTla ? "Lost Age" : "Golden Sun") + " save. Open "
-					+ (isTla ? "The Lost Age" : "Golden Sun") + " to import it there");
+			throw new IOException(GsrLang.t(isTla ? "this is a Lost Age save. Open The Lost Age to import it there"
+					: "this is a Golden Sun save. Open Golden Sun to import it there"));
 		}
 		return flash;
 	}
@@ -147,7 +147,7 @@ final class GsrSaves {
 	void exportTo(int unit, Uri uri) throws IOException {
 		byte[] data = readFile(saveFile(unit));
 		try (OutputStream os = activity.getContentResolver().openOutputStream(uri, "wt")) {
-			if (os == null) throw new IOException("could not write there");
+			if (os == null) throw new IOException(GsrLang.t("could not write there"));
 			os.write(data);
 		}
 	}
@@ -156,7 +156,7 @@ final class GsrSaves {
 	void importFrom(int unit, Uri uri) throws IOException {
 		byte[] data;
 		try (InputStream in = activity.getContentResolver().openInputStream(uri)) {
-			if (in == null) throw new IOException("could not read that file");
+			if (in == null) throw new IOException(GsrLang.t("could not read that file"));
 			data = checkSave(readAll(in, 4 * FLASH_BYTES), GsrConfig.isTla(unit));
 		}
 		backupCurrent(unit);
@@ -194,15 +194,15 @@ final class GsrSaves {
 		ContentResolver cr = activity.getContentResolver();
 		Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
 		Uri folder = DocumentsContract.createDocument(cr, parent, DocumentsContract.Document.MIME_TYPE_DIR, folderName);
-		if (folder == null) throw new IOException("could not make a folder there");
+		if (folder == null) throw new IOException(GsrLang.t("could not make a folder there"));
 		int n = 0;
 		for (int unit = 1; unit <= 2 * GsrConfig.LANG_CODES.length; unit++) {
 			File f = saveFile(unit);
 			if (!f.isFile() || f.length() == 0) continue;
 			Uri doc = DocumentsContract.createDocument(cr, folder, "application/octet-stream", exportName(unit));
-			if (doc == null) throw new IOException("could not write " + exportName(unit));
+			if (doc == null) throw new IOException(GsrLang.f("could not write %s", exportName(unit)));
 			try (OutputStream os = cr.openOutputStream(doc, "w")) {
-				if (os == null) throw new IOException("could not write " + exportName(unit));
+				if (os == null) throw new IOException(GsrLang.f("could not write %s", exportName(unit)));
 				os.write(readFile(f));
 			}
 			n++;

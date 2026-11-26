@@ -61,6 +61,7 @@ final class GsrMenu {
 
 	GsrMenu(Activity activity) {
 		this.activity = activity;
+		GsrLang.init(activity);
 		this.density = activity.getResources().getDisplayMetrics().density;
 	}
 
@@ -123,7 +124,7 @@ final class GsrMenu {
 		TextView hint = new TextView(activity);
 		hint.setTextColor(DIM);
 		hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
-		hint.setText("D-pad: move    Left/Right: change    A: select    B or Back: back    R3: close");
+		hint.setText(GsrLang.t("D-pad: move    Left/Right: change    A: select    B or Back: back    R3: close"));
 		hint.setPadding(dp(4), dp(6), 0, 0);
 		panel.addView(hint);
 
@@ -179,14 +180,14 @@ final class GsrMenu {
 
 	private void clear(String heading, int pageNo) {
 		page = pageNo;
-		title.setText(heading);
+		title.setText(GsrLang.t(heading));
 		list.removeAllViews();
 		scroll.scrollTo(0, 0);
 	}
 
 	private void section(String text) {
 		TextView t = new TextView(activity);
-		t.setText(text.toUpperCase());
+		t.setText(GsrLang.t(text).toUpperCase());
 		t.setTextColor(ACCENT);
 		t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
 		t.setTypeface(Typeface.DEFAULT_BOLD);
@@ -200,7 +201,7 @@ final class GsrMenu {
 
 		Row(String label) {
 			super(activity);
-			this.label = label;
+			this.label = GsrLang.t(label);
 			setFocusable(true);
 			setClickable(true);
 			noFocusHighlight(this);
@@ -248,7 +249,7 @@ final class GsrMenu {
 				}
 				return best;
 			}
-			@Override String value() { return labels[index()]; }
+			@Override String value() { return GsrLang.t(labels[index()]); }
 			@Override void step(int dir) {
 				int i = (index() + dir + values.length) % values.length;
 				GsrNative.setSetting(setting, values[i]);
@@ -268,7 +269,7 @@ final class GsrMenu {
 	/** An Off/On switch of the game's own options (upstream's F1 Game page), saved with the game. */
 	private Row gameOption(String label, final String key, final int fallback) {
 		Row r = new Row(label) {
-			@Override String value() { return OFF_ON[GsrNative.gameOption(key, fallback) != 0 ? 1 : 0]; }
+			@Override String value() { return GsrLang.t(OFF_ON[GsrNative.gameOption(key, fallback) != 0 ? 1 : 0]); }
 			@Override void step(int dir) {
 				GsrNative.setGameOption(key, GsrNative.gameOption(key, fallback) != 0 ? 0 : 1);
 				refresh();
@@ -283,7 +284,7 @@ final class GsrMenu {
 	/** Landscape (the default) or Portrait with the touch controls below the picture. The menu reopens upright. */
 	private Row orientation() {
 		Row r = new Row("Orientation") {
-			@Override String value() { return ORIENTATION[GsrDisplay.portrait(activity) ? 1 : 0]; }
+			@Override String value() { return GsrLang.t(ORIENTATION[GsrDisplay.portrait(activity) ? 1 : 0]); }
 			@Override void step(int dir) {
 				GsrDisplay.setPortrait(activity, !GsrDisplay.portrait(activity));
 				refresh();
@@ -303,9 +304,9 @@ final class GsrMenu {
 		Row r = new Row("Frame interpolation") {
 			private boolean capable() { return GsrDisplay.maxRefresh(activity) >= 100f; }
 			@Override String value() {
-				if (!capable()) return "Not available (needs a 120 Hz display)";
-				if (GsrNative.getSetting(GsrNative.INTERP) == 0) return "Off";
-				return GsrNative.getSetting(GsrNative.VIEW_MODE) == 0 ? "On (120 Hz)" : "On (Native view only)";
+				if (!capable()) return GsrLang.t("Not available (needs a 120 Hz display)");
+				if (GsrNative.getSetting(GsrNative.INTERP) == 0) return GsrLang.t("Off");
+				return GsrLang.t(GsrNative.getSetting(GsrNative.VIEW_MODE) == 0 ? "On (120 Hz)" : "On (Native view only)");
 			}
 			@Override void step(int dir) {
 				if (!capable()) return;
@@ -333,10 +334,10 @@ final class GsrMenu {
 						&& GsrNative.getSetting(GsrNative.INTERP) == 0;
 			}
 			@Override String value() {
-				if (GsrNative.getSetting(GsrNative.NATIVE_RENDER) == 0) return "Off";
-				if (GsrNative.getSetting(GsrNative.VIEW_MODE) != 0) return "On (Native view only)";
-				if (GsrNative.getSetting(GsrNative.INTERP) != 0) return "On (off while frame interpolation is on)";
-				return "On";
+				if (GsrNative.getSetting(GsrNative.NATIVE_RENDER) == 0) return GsrLang.t("Off");
+				if (GsrNative.getSetting(GsrNative.VIEW_MODE) != 0) return GsrLang.t("On (Native view only)");
+				if (GsrNative.getSetting(GsrNative.INTERP) != 0) return GsrLang.t("On (off while frame interpolation is on)");
+				return GsrLang.t("On");
 			}
 			@Override void step(int dir) {
 				GsrNative.setSetting(GsrNative.NATIVE_RENDER, GsrNative.getSetting(GsrNative.NATIVE_RENDER) == 0 ? 1 : 0);
@@ -358,10 +359,10 @@ final class GsrMenu {
 		Row r = new Row("Renderer") {
 			private boolean gpuOff() { return GsrNative.gpuStatus() == 2; }
 			@Override String value() {
-				if (gpuOff()) return "CPU (GPU not available)";
+				if (gpuOff()) return GsrLang.t("CPU (GPU not available)");
 				int cur = GsrNative.getSetting(GsrNative.RENDERER);
 				String now = GsrNative.gpuActive() == 1 ? "GPU" : "CPU";
-				return cur == 0 ? "Auto (" + now + ")" : RENDERER[cur];
+				return cur == 0 ? GsrLang.f("Auto (%s)", now) : GsrLang.t(RENDERER[cur]);
 			}
 			@Override void step(int dir) {
 				if (gpuOff()) return;
@@ -378,9 +379,25 @@ final class GsrMenu {
 		return r;
 	}
 
+	/** Language of these menus and the app's other screens: Default (the phone's), English, Español. */
+	private Row language() {
+		Row r = new Row("Language") {
+			@Override String value() {
+				int s = GsrLang.setting();
+				return s == 0 ? GsrLang.t("Default") : GsrLang.CHOICES[s];
+			}
+			@Override void step(int dir) {
+				GsrLang.set((GsrLang.setting() + dir + 3) % 3);
+				showMain();  // the whole page again in the new language
+			}
+		};
+		r.refresh();
+		return r;
+	}
+
 	private Row action(String label, final String value, final Runnable run) {
 		Row r = new Row(label) {
-			@Override String value() { return value; }
+			@Override String value() { return GsrLang.t(value); }
 			@Override void step(int dir) { if (dir > 0) run.run(); }
 		};
 		r.refresh();
@@ -391,6 +408,9 @@ final class GsrMenu {
 
 	private void showMain() {
 		clear("Settings", 0);
+
+		section("Language");
+		language();
 
 		section("Display");
 		choice("Screen view", GsrNative.VIEW_MODE, VIEW);
@@ -428,7 +448,7 @@ final class GsrMenu {
 		action("Reset gamepad buttons", "", new Runnable() {
 			@Override public void run() {
 				GsrNative.resetBinds();
-				Toast.makeText(activity, "Gamepad buttons reset", Toast.LENGTH_SHORT).show();
+				Toast.makeText(activity, GsrLang.t("Gamepad buttons reset"), Toast.LENGTH_SHORT).show();
 			}
 		});
 		int[] sizes = new int[9];
@@ -506,7 +526,7 @@ final class GsrMenu {
 
 	private TextView info(String text, int color, float sp) {
 		TextView t = new TextView(activity);
-		t.setText(text);
+		t.setText(GsrLang.t(text));
 		t.setTextColor(color);
 		t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp);
 		t.setPadding(dp(6), dp(8), dp(6), dp(2));
@@ -521,7 +541,7 @@ final class GsrMenu {
 					activity.startActivity(new android.content.Intent(android.content.Intent.ACTION_VIEW,
 							android.net.Uri.parse(url)));
 				} catch (RuntimeException e) {
-					Toast.makeText(activity, "No app can open " + url, Toast.LENGTH_SHORT).show();
+					Toast.makeText(activity, GsrLang.f("No app can open %s", url), Toast.LENGTH_SHORT).show();
 				}
 			}
 		});
@@ -570,7 +590,7 @@ final class GsrMenu {
 
 	private String stateLabel(int slot) {
 		java.io.File f = stateFile(slot);
-		if (!f.isFile()) return "empty";
+		if (!f.isFile()) return GsrLang.t("empty");
 		return java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT)
 				.format(new java.util.Date(f.lastModified()));
 	}
@@ -580,15 +600,15 @@ final class GsrMenu {
 		clear("Save states", 4);
 		for (int i = 1; i <= STATE_SLOTS; i++) {
 			final int slot = i;
-			section("Slot " + slot + "  (" + stateLabel(slot) + ")");
-			action("Save to slot " + slot, "", new Runnable() {
+			section(GsrLang.f("Slot %d  (%s)", slot, stateLabel(slot)));
+			action(GsrLang.f("Save to slot %d", slot), "", new Runnable() {
 				@Override public void run() {
 					if (stateFile(slot).isFile()) {
 						new AlertDialog.Builder(activity)
-								.setTitle("Overwrite slot " + slot + "?")
-								.setMessage("The state saved there is replaced.")
-								.setNegativeButton("Cancel", null)
-								.setPositiveButton("Save", new DialogInterface.OnClickListener() {
+								.setTitle(GsrLang.f("Overwrite slot %d?", slot))
+								.setMessage(GsrLang.t("The state saved there is replaced."))
+								.setNegativeButton(GsrLang.t("Cancel"), null)
+								.setPositiveButton(GsrLang.t("Save"), new DialogInterface.OnClickListener() {
 									@Override public void onClick(DialogInterface d, int w) { saveState(slot); }
 								})
 								.show();
@@ -597,14 +617,14 @@ final class GsrMenu {
 					}
 				}
 			});
-			Row load = action("Load slot " + slot, "", new Runnable() {
+			Row load = action(GsrLang.f("Load slot %d", slot), "", new Runnable() {
 				@Override public void run() {
 					if (!stateFile(slot).isFile()) return;
 					new AlertDialog.Builder(activity)
-							.setTitle("Load slot " + slot + "?")
-							.setMessage("Progress since your last save is lost.")
-							.setNegativeButton("Cancel", null)
-							.setPositiveButton("Load", new DialogInterface.OnClickListener() {
+							.setTitle(GsrLang.f("Load slot %d?", slot))
+							.setMessage(GsrLang.t("Progress since your last save is lost."))
+							.setNegativeButton(GsrLang.t("Cancel"), null)
+							.setPositiveButton(GsrLang.t("Load"), new DialogInterface.OnClickListener() {
 								@Override public void onClick(DialogInterface d, int w) {
 									GsrNative.requestState(slot, false);
 									// The engine takes the request while the menu still holds the game paused.
@@ -646,7 +666,7 @@ final class GsrMenu {
 		clear("Saves", 5);
 		final java.io.File cur = saves().saveFile(unit());
 		final boolean have = cur.isFile() && cur.length() > 0;
-		section(gameTitle() + " save  (" + (have ? "saved " + when(cur) : "none yet") + ")");
+		section(GsrLang.f("%s save  (%s)", gameTitle(), have ? GsrLang.f("saved %s", when(cur)) : GsrLang.t("none yet")));
 		Row export = action("Export save...", "", new Runnable() {
 			@Override public void run() {
 				if (!have) return;
@@ -661,12 +681,12 @@ final class GsrMenu {
 		action("Import save...", "", new Runnable() {
 			@Override public void run() {
 				new AlertDialog.Builder(activity)
-						.setTitle("Import a " + gameTitle() + " save?")
-						.setMessage("Pick a .sav file from a GBA emulator, a flash cart or an export. It replaces the "
+						.setTitle(GsrLang.f("Import a %s save?", gameTitle()))
+						.setMessage(GsrLang.t("Pick a .sav file from a GBA emulator, a flash cart or an export. It replaces the "
 								+ "save in this app; the current one is kept as a backup first.\n\n"
-								+ "The game closes afterwards. Open it again to play with the imported save.")
-						.setNegativeButton("Cancel", null)
-						.setPositiveButton("Choose file", new DialogInterface.OnClickListener() {
+								+ "The game closes afterwards. Open it again to play with the imported save."))
+						.setNegativeButton(GsrLang.t("Cancel"), null)
+						.setPositiveButton(GsrLang.t("Choose file"), new DialogInterface.OnClickListener() {
 							@Override public void onClick(DialogInterface d, int w) {
 								android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
 								i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
@@ -682,18 +702,17 @@ final class GsrMenu {
 			action("Copy the USA/Europe save", "", new Runnable() {
 				@Override public void run() {
 					new AlertDialog.Builder(activity)
-							.setTitle("Copy the USA/Europe save?")
-							.setMessage("Your " + GsrConfig.title(tla(), 0) + " (USA/Europe) save, from "
-									+ when(english) + ", replaces the save here. The current one is kept as a "
-									+ "backup.\n\nThe game closes afterwards. Open it again to play.")
-							.setNegativeButton("Cancel", null)
-							.setPositiveButton("Copy", new DialogInterface.OnClickListener() {
+							.setTitle(GsrLang.t("Copy the USA/Europe save?"))
+							.setMessage(GsrLang.f("Your %s (USA/Europe) save, from %s, replaces the save here. The current one is kept as a "
+									+ "backup.\n\nThe game closes afterwards. Open it again to play.", GsrConfig.title(tla(), 0), when(english)))
+							.setNegativeButton(GsrLang.t("Cancel"), null)
+							.setPositiveButton(GsrLang.t("Copy"), new DialogInterface.OnClickListener() {
 								@Override public void onClick(DialogInterface d, int w) {
 									try {
 										saves().copyFromEnglish(unit());
-										closeGame("Save copied.");
+										closeGame(GsrLang.t("Save copied."));
 									} catch (java.io.IOException e) {
-										Toast.makeText(activity, "Could not copy: " + e.getMessage(), Toast.LENGTH_LONG).show();
+										Toast.makeText(activity, GsrLang.f("Could not copy: %s", e.getMessage()), Toast.LENGTH_LONG).show();
 									}
 								}
 							})
@@ -734,36 +753,36 @@ final class GsrMenu {
 		try {
 			activity.startActivityForResult(i, code);
 		} catch (RuntimeException e) {
-			Toast.makeText(activity, "No file browser on this device", Toast.LENGTH_LONG).show();
+			Toast.makeText(activity, GsrLang.t("No file browser on this device"), Toast.LENGTH_LONG).show();
 		}
 	}
 
 	private void chooseBackup(final java.io.File[] old) {
 		String[] names = new String[old.length];
-		for (int i = 0; i < old.length; i++) names[i] = "Replaced " + when(old[i]);
+		for (int i = 0; i < old.length; i++) names[i] = GsrLang.f("Replaced %s", when(old[i]));
 		new AlertDialog.Builder(activity)
-				.setTitle("Restore which save?")
+				.setTitle(GsrLang.t("Restore which save?"))
 				.setItems(names, new DialogInterface.OnClickListener() {
 					@Override public void onClick(DialogInterface d, final int which) {
 						new AlertDialog.Builder(activity)
-								.setTitle("Restore this save?")
-								.setMessage("The current save is kept as a backup. The game closes afterwards; "
-										+ "open it again to play.")
-								.setNegativeButton("Cancel", null)
-								.setPositiveButton("Restore", new DialogInterface.OnClickListener() {
+								.setTitle(GsrLang.t("Restore this save?"))
+								.setMessage(GsrLang.t("The current save is kept as a backup. The game closes afterwards; "
+										+ "open it again to play."))
+								.setNegativeButton(GsrLang.t("Cancel"), null)
+								.setPositiveButton(GsrLang.t("Restore"), new DialogInterface.OnClickListener() {
 									@Override public void onClick(DialogInterface d2, int w) {
 										try {
 											saves().restore(unit(), old[which]);
-											closeGame("Save restored.");
+											closeGame(GsrLang.t("Save restored."));
 										} catch (java.io.IOException e) {
-											Toast.makeText(activity, "Could not restore: " + e.getMessage(), Toast.LENGTH_LONG).show();
+											Toast.makeText(activity, GsrLang.f("Could not restore: %s", e.getMessage()), Toast.LENGTH_LONG).show();
 										}
 									}
 								})
 								.show();
 					}
 				})
-				.setNegativeButton("Cancel", null)
+				.setNegativeButton(GsrLang.t("Cancel"), null)
 				.show();
 	}
 
@@ -771,9 +790,9 @@ final class GsrMenu {
 	private void closeGame(String what) {
 		new AlertDialog.Builder(activity)
 				.setTitle(what)
-				.setMessage("The game closes now. Open it again to play.")
+				.setMessage(GsrLang.t("The game closes now. Open it again to play."))
 				.setCancelable(false)
-				.setPositiveButton("OK", new DialogInterface.OnClickListener() {
+				.setPositiveButton(GsrLang.t("OK"), new DialogInterface.OnClickListener() {
 					@Override public void onClick(DialogInterface d, int w) {
 						activity.finishAffinity();
 						Process.killProcess(Process.myPid());
@@ -791,22 +810,24 @@ final class GsrMenu {
 		try {
 			if (requestCode == REQUEST_EXPORT) {
 				saves().exportTo(unit(), uri);
-				Toast.makeText(activity, "Save exported", Toast.LENGTH_SHORT).show();
+				Toast.makeText(activity, GsrLang.t("Save exported"), Toast.LENGTH_SHORT).show();
 			} else if (requestCode == REQUEST_IMPORT) {
 				saves().importFrom(unit(), uri);
-				closeGame("Save imported.");
+				closeGame(GsrLang.t("Save imported."));
 			} else if (requestCode == REQUEST_GSRECOMP) {
 				int n = saves().backupAllTo(uri, "Saves for GSRecomp");
-				Toast.makeText(activity, n == 0 ? "There are no saves yet"
-						: "Copied " + n + (n == 1 ? " save" : " saves") + ". Put the files in GSRecomp's Saves folder.",
+				Toast.makeText(activity, n == 0 ? GsrLang.t("There are no saves yet")
+						: n == 1 ? GsrLang.t("Copied 1 save. Put the file in GSRecomp's Saves folder.")
+						: GsrLang.f("Copied %d saves. Put the files in GSRecomp's Saves folder.", n),
 						Toast.LENGTH_LONG).show();
 			} else {
 				int n = saves().backupAllTo(uri);
-				Toast.makeText(activity, n == 0 ? "There are no saves yet" : "Backed up " + n + (n == 1 ? " save" : " saves"),
+				Toast.makeText(activity, n == 0 ? GsrLang.t("There are no saves yet")
+						: n == 1 ? GsrLang.t("Backed up 1 save") : GsrLang.f("Backed up %d saves", n),
 						Toast.LENGTH_LONG).show();
 			}
 		} catch (Exception e) {
-			Toast.makeText(activity, "Could not do that: " + e.getMessage(), Toast.LENGTH_LONG).show();
+			Toast.makeText(activity, GsrLang.f("Could not do that: %s", e.getMessage()), Toast.LENGTH_LONG).show();
 		}
 		if (open && page == 5) showSaves();
 		return true;
@@ -820,7 +841,7 @@ final class GsrMenu {
 			@Override public void run() {
 				final boolean saved = stateFile(slot).isFile() && stateFile(slot).lastModified() != before;
 				if (open && page == 4) showStates();
-				Toast.makeText(activity, saved ? "Saved to slot " + slot : "Saving to slot " + slot + "...",
+				Toast.makeText(activity, saved ? GsrLang.f("Saved to slot %d", slot) : GsrLang.f("Saving to slot %d...", slot),
 						Toast.LENGTH_SHORT).show();
 			}
 		}, 500);
@@ -833,18 +854,18 @@ final class GsrMenu {
 	 */
 	private void confirmChangeRom() {
 		new AlertDialog.Builder(activity)
-				.setTitle("Change ROM?")
-				.setMessage("This removes the stored ROM and closes the game. Your save is kept.\n\n"
-						+ "Open the app again to pick a new ROM file.")
-				.setNegativeButton("Cancel", null)
-				.setPositiveButton("Change ROM", new DialogInterface.OnClickListener() {
+				.setTitle(GsrLang.t("Change ROM?"))
+				.setMessage(GsrLang.t("This removes the stored ROM and closes the game. Your save is kept.\n\n"
+						+ "Open the app again to pick a new ROM file."))
+				.setNegativeButton(GsrLang.t("Cancel"), null)
+				.setPositiveButton(GsrLang.t("Change ROM"), new DialogInterface.OnClickListener() {
 					@Override public void onClick(DialogInterface d, int which) {
 						java.io.File rom = new java.io.File(activity.getFilesDir(), gameDir() + romName());
 						if (rom.exists() && !rom.delete()) {
-							Toast.makeText(activity, "Could not remove the ROM", Toast.LENGTH_LONG).show();
+							Toast.makeText(activity, GsrLang.t("Could not remove the ROM"), Toast.LENGTH_LONG).show();
 							return;
 						}
-						Toast.makeText(activity, "ROM removed. Open the app again to pick one.", Toast.LENGTH_LONG).show();
+						Toast.makeText(activity, GsrLang.t("ROM removed. Open the app again to pick one."), Toast.LENGTH_LONG).show();
 						activity.finishAffinity();
 						Process.killProcess(Process.myPid());
 					}
@@ -882,7 +903,7 @@ final class GsrMenu {
 	}
 
 	private static String keyName(int code) {
-		if (code == 0) return "not set";
+		if (code == 0) return GsrLang.t("not set");
 		String n = KeyEvent.keyCodeToString(code);
 		if (n.startsWith("KEYCODE_")) n = n.substring(8);
 		if (n.startsWith("BUTTON_")) n = n.substring(7);
@@ -892,7 +913,7 @@ final class GsrMenu {
 	private void showButtons() {
 		clear("Gamepad buttons", 1);
 		TextView note = new TextView(activity);
-		note.setText("Pick a row, then press the button you want. These only change the game; in menus A always selects and B always goes back.");
+		note.setText(GsrLang.t("Pick a row, then press the button you want. These only change the game; in menus A always selects and B always goes back."));
 		note.setTextColor(DIM);
 		note.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
 		note.setPadding(dp(6), 0, dp(6), dp(6));
@@ -900,7 +921,7 @@ final class GsrMenu {
 		for (int a = 0; a < GsrNative.ACTIONS.length; a++) {
 			for (int s = 0; s < 2; s++) {
 				final int action = a, slot = s;
-				final String name = GsrNative.ACTIONS[a] + (s == 1 ? " (second button)" : "");
+				final String name = s == 1 ? GsrLang.f("%s (second button)", GsrLang.t(GsrNative.ACTIONS[a])) : GsrLang.t(GsrNative.ACTIONS[a]);
 				Row r = new Row(name) {
 					@Override String value() { return keyName(GsrNative.getBind(action, slot)); }
 					@Override void step(int dir) { if (dir > 0) capture(action, slot, name, this); }
@@ -921,15 +942,15 @@ final class GsrMenu {
 
 	private void capture(final int action, final int slot, String name, final Row row) {
 		final AlertDialog d = new AlertDialog.Builder(activity)
-				.setTitle("Press a button for " + name)
-				.setMessage("Press the gamepad button to use. Back cancels.")
-				.setNegativeButton("Clear", new DialogInterface.OnClickListener() {
+				.setTitle(GsrLang.f("Press a button for %s", name))
+				.setMessage(GsrLang.t("Press the gamepad button to use. Back cancels."))
+				.setNegativeButton(GsrLang.t("Clear"), new DialogInterface.OnClickListener() {
 					@Override public void onClick(DialogInterface dd, int which) {
 						GsrNative.setBind(action, slot, 0);
 						showButtons();
 					}
 				})
-				.setPositiveButton("Cancel", null)
+				.setPositiveButton(GsrLang.t("Cancel"), null)
 				.create();
 		d.setOnKeyListener(new DialogInterface.OnKeyListener() {
 			@Override

@@ -145,38 +145,38 @@ final class GsrBuildOverlay {
 
 		if ("rom_missing".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
-			set(title, "No usable ROM found");
-			set(detail, "Restart the app and pick your " + gameName() + " (USA or Europe) .gba file.");
+			set(title, GsrLang.t("No usable ROM found"));
+			set(detail, GsrLang.f("Restart the app and pick your %s (USA or Europe) .gba file.", gameName()));
 		} else if ("rom_wrong".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
-			set(title, "This is not the supported ROM");
-			set(detail, gameName() + " (USA or Europe) is required. Press Back to open the menu and choose Change ROM.");
+			set(title, GsrLang.t("This is not the supported ROM"));
+			set(detail, GsrLang.f("%s (USA or Europe) is required. Press Back to open the menu and choose Change ROM.", gameName()));
 		} else if ("failed".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
-			set(title, "Building the game failed");
+			set(title, GsrLang.t("Building the game failed"));
 			set(error, i[2]);
-			set(detail, "Log: " + i[6]);
-			set(note, "Close and reopen the app to try again.");
+			set(detail, GsrLang.f("Log: %s", i[6]));
+			set(note, GsrLang.t("Close and reopen the app to try again."));
 		} else if ("engine_error".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
-			set(title, "The game engine could not start");
+			set(title, GsrLang.t("The game engine could not start"));
 			set(error, i[2]);
 		} else if ("engine_stopped".equals(phase)) {
 			title.setTextColor(Color.rgb(255, 120, 120));
-			set(title, "The game engine stopped (code " + i[7] + ")");
-			set(detail, "Close and reopen the app. If this keeps happening, the log in the app folder says why.");
+			set(title, GsrLang.f("The game engine stopped (code %s)", i[7]));
+			set(detail, GsrLang.t("Close and reopen the app. If this keeps happening, the log in the app folder says why."));
 		} else if ("ready".equals(phase)) {
 			title.setTextColor(Color.WHITE);
-			set(title, "Starting the game");
-			set(detail, (cached ? "Loaded from the saved build" : "Built") + " in " + clock(elapsed) + ".");
+			set(title, GsrLang.t("Starting the game"));
+			set(detail, GsrLang.f(cached ? "Loaded from the saved build in %s." : "Built in %s.", clock(elapsed)));
 		} else { // building / waiting
 			title.setTextColor(Color.WHITE);
-			set(title, cached ? "Loading " + gameName() : "Preparing " + gameName() + " for this device");
-			set(detail, i[1]);
+			set(title, GsrLang.f(cached ? "Loading %s" : "Preparing %s for this device", gameName()));
+			set(detail, GsrLang.stage(i[1]));
 			bar.setProgress(progress);
 			bar.setVisibility(View.VISIBLE);
 			set(percent, (progress / 10) + "%    " + clock(elapsed));
-			if (!cached) set(note, "This only happens once. It can take 10 minutes or more. Keep the device awake.");
+			if (!cached) set(note, GsrLang.t("This only happens once. It can take 10 minutes or more. Keep the device awake."));
 		}
 	}
 }
